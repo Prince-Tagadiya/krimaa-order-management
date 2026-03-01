@@ -90,9 +90,12 @@ function addAccount(accountName) {
   var sheet = ss.getSheetByName('Accounts');
   
   var data = sheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (data[i][0].toString().trim().toLowerCase() === accountName.trim().toLowerCase()) {
-      return {success: false, message: 'Account already exists'};
+  if (data.length > 0) {
+    var startIdx = (data[0][0] === 'Account Name') ? 1 : 0;
+    for (var i = startIdx; i < data.length; i++) {
+      if (data[i][0].toString().trim().toLowerCase() === accountName.trim().toLowerCase()) {
+        return {success: false, message: 'Account already exists'};
+      }
     }
   }
   
@@ -109,8 +112,11 @@ function getAccounts() {
   
   var data = sheet.getDataRange().getValues();
   var accounts = [];
-  for (var i = 1; i < data.length; i++) {
-    if (data[i][0]) accounts.push(data[i][0]);
+  if (data.length > 0) {
+    var startIdx = (data[0][0] === 'Account Name') ? 1 : 0;
+    for (var i = startIdx; i < data.length; i++) {
+      if (data[i][0]) accounts.push(data[i][0]);
+    }
   }
   return {success: true, data: accounts};
 }
@@ -148,9 +154,18 @@ function getDashboardData() {
   
   if (!sheet) return {success: true, data: []};
   var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return {success: true, data: []};
   
-  var data = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+  // Smart Header Detection
+  var startRow = 1;
+  if (lastRow >= 1) {
+    var firstCell = sheet.getRange(1, 1).getValue().toString();
+    if (firstCell === "Date" || firstCell === "Date / તારીખ") {
+      startRow = 2;
+    }
+  }
+
+  if (lastRow < startRow) return {success: true, data: []};
+  var data = sheet.getRange(startRow, 1, lastRow - (startRow - 1), 5).getValues();
   var records = [];
   
   for (var i = 0; i < data.length; i++) {
