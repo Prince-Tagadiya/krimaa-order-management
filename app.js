@@ -18,8 +18,9 @@ function initApp() {
     checkAuth();
     attachEventListeners();
     
-    // Set today's date in order input
-    const today = new Date().toISOString().split('T')[0];
+    // Set today's date in order input based on local Indian Standart Time (or browser's local time)
+    const now = new Date();
+    const today = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     document.getElementById('order-date').value = today;
     
     // Set current month label
