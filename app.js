@@ -23,9 +23,24 @@ function initApp() {
     const today = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     document.getElementById('order-date').value = today;
     
-    // Set current month label
-    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    document.getElementById('current-month-label').textContent = monthNames[new Date().getMonth()] + " " + new Date().getFullYear();
+    // Attach Dashboard Listeners
+    document.getElementById('dash-filter-type').addEventListener('change', (e) => {
+        const val = e.target.value;
+        const dateInput = document.getElementById('dash-filter-date');
+        
+        if (val === 'custom_date') {
+            dateInput.classList.remove('hidden');
+            // Default select today if empty
+            if(!dateInput.value) dateInput.value = today;
+        } else {
+            dateInput.classList.add('hidden');
+        }
+        renderDashboard();
+    });
+
+    document.getElementById('dash-filter-date').addEventListener('change', () => {
+        renderDashboard();
+    });
 }
 
 function checkAuth() {
@@ -390,14 +405,51 @@ function checkExistingOrdersForDate() {
 }
 
 function renderDashboard() {
-    // Current Month Filter Logic (Filter dashboardData to current month)
-    const currentMonthStr = new Date().toISOString().substring(0, 7); // yyyy-MM
+    // Dashboard Filter Logic
+    const filterType = document.getElementById('dash-filter-type').value;
+    const filterDate = document.getElementById('dash-filter-date').value;
     
-    let monthData = AppState.dashboardData.filter(d => {
-        // Date from Google Script usually "yyyy-MM-dd"
+    const now = new Date();
+    const todayStr = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    const currentMonthStr = todayStr.substring(0, 7); // yyyy-MM
+    
+    let filteredData = AppState.dashboardData.filter(d => {
         if (!d.date) return false;
-        return d.date.startsWith(currentMonthStr);
+        
+        if (filterType === 'today') {
+            return d.date === todayStr;
+        } else if (filterType === 'this_month') {
+            return d.date.startsWith(currentMonthStr);
+        } else if (filterType === 'custom_date') {
+            return d.date === filterDate;
+        } else {
+            // all_time
+            return true;
+        }
     });
+
+    // Update title
+    let titleTxt = "Overview / ઝાંખી";
+    if (filterType === 'today') {
+        const [yyyy, mm, dd] = todayStr.split('-');
+        titleTxt = `Today's Overview (${dd}/${mm}/${yyyy}) / આજની ઝાંખી`;
+    }
+    else if (filterType === 'this_month') {
+        titleTxt = "Current Month Overview / ચાલુ મહિનાની ઝાંખી";
+    }
+    else if (filterType === 'all_time') {
+        titleTxt = "All Time Overview / ઓલ ટાઇમ ઝાંખી";
+    }
+    else if (filterType === 'custom_date') {
+        if (filterDate) {
+            const [yyyy, mm, dd] = filterDate.split('-');
+            titleTxt = `Overview (${dd}/${mm}/${yyyy}) / ઝાંખી`;
+        } else {
+            titleTxt = "Select Date / તારીખ પસંદ કરો";
+        }
+    }
+    
+    document.getElementById('dash-title-txt').textContent = titleTxt;
 
     // Calculate totals
     let totalMeesho = 0;
@@ -408,7 +460,7 @@ function renderDashboard() {
     const accTotals = {};
     AppState.accounts.forEach(a => accTotals[a] = { meesho:0, flipkart:0, total:0 });
 
-    monthData.forEach(row => {
+    filteredData.forEach(row => {
         const m = parseInt(row.meesho) || 0;
         const f = parseInt(row.flipkart) || 0;
         const t = parseInt(row.total) || 0;
@@ -450,9 +502,9 @@ function renderDashboard() {
     // Update Recent Records (Last 5 daily entries)
     const recentBody = document.getElementById('dash-recent-records');
     
-    // Group raw data by date
+    // Group raw data by date (filtered)
     const dateGroups = {};
-    AppState.dashboardData.forEach(r => {
+    filteredData.forEach(r => {
         if (!dateGroups[r.date]) dateGroups[r.date] = 0;
         dateGroups[r.date] += parseInt(r.total) || 0;
     });

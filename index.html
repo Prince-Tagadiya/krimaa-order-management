@@ -73,9 +73,17 @@
 
                 <!-- Dashboard Section -->
                 <section id="dashboard" class="content-section active">
-                    <div class="dashboard-controls flex-between mb-2">
-                        <h3>Current Month Overview / ચાલુ મહિનાની ઝાંખી</h3>
-                        <div class="month-filter" id="current-month-label">Loading... / લોડ થઈ રહ્યું છે...</div>
+                    <div class="dashboard-controls flex-between mb-2" style="flex-wrap: wrap; gap: 10px;">
+                        <h3 id="dash-title-txt">Current Month Overview / ચાલુ મહિનાની ઝાંખી</h3>
+                        <div class="filter-controls" style="display: flex; gap: 10px; align-items: center; max-width: 100%; overflow-x: auto;">
+                            <select id="dash-filter-type" class="date-input" style="padding: 0.5rem; min-width: max-content;">
+                                <option value="today">Today / આજે</option>
+                                <option value="this_month" selected>This Month / આ મહિનો</option>
+                                <option value="all_time">All Time / દરેક સમય</option>
+                                <option value="custom_date">Custom Date / કસ્ટમ તારીખ</option>
+                            </select>
+                            <input type="date" id="dash-filter-date" class="date-input hidden" style="padding: 0.5rem;">
+                        </div>
                     </div>
                     
                     <div class="kpi-cards">
