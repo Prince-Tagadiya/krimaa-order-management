@@ -151,6 +151,19 @@
                         </div>
                         <p class="text-muted mb-2">Fill the orders for all active accounts to submit today's record. / આજના રેકોર્ડને સબમિટ કરવા માટે તમામ સક્રિય એકાઉન્ટ્સ માટે ઓર્ડર ભરો.</p>
 
+                        <!-- Already Submitted Alert -->
+                        <div id="already-submitted-alert" class="alert alert-success hidden mb-2" style="cursor: pointer;">
+                            <div class="flex-between">
+                                <div>
+                                    <strong style="font-size: 1.1rem;"><i class='bx bx-check-circle'></i> Orders Already Submitted / ઓર્ડર સબમિટ થઈ ગયા છે</strong>
+                                    <p class="mt-1" style="font-size: 0.95rem; opacity: 0.9;">Total <span id="submitted-grand-total" style="font-weight:bold;">0</span> orders added for this date. / આ તારીખ માટે કુલ ઓર્ડર ઉમેરવાય ગયા છે.</p>
+                                </div>
+                                <div style="text-align: right; min-width: max-content;">
+                                    <span class="btn btn-outline" style="background: white;">Tap to view details <i class='bx bx-right-arrow-alt'></i></span>
+                                </div>
+                            </div>
+                        </div>
+
                         <div id="order-form-container">
                             <div class="table-responsive mb-2">
                                 <table class="table order-entry-table">
@@ -165,6 +178,14 @@
                                     <tbody id="daily-order-tbody">
                                         <!-- populated dynamically -->
                                     </tbody>
+                                    <tfoot>
+                                        <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold; border-top: 2px solid var(--border-color);">
+                                            <td>Grand Total / એકંદર કુલ</td>
+                                            <td id="table-grand-meesho" style="text-align: right; font-size: 1.1rem;">0</td>
+                                            <td id="table-grand-flipkart" style="text-align: right; font-size: 1.1rem;">0</td>
+                                            <td id="table-grand-total" style="text-align: right; font-size: 1.2rem; color: var(--primary);">0</td>
+                                        </tr>
+                                    </tfoot>
                                 </table>
                             </div>
                             <button id="submit-orders-btn" class="btn btn-primary w-100 btn-lg">Submit All Orders / બધા ઓર્ડર સબમિટ કરો</button>
@@ -205,6 +226,44 @@
 
             </div>
         </main>
+    </div>
+
+    <!-- Order Details Modal -->
+    <div id="order-details-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>
+                    <h3 style="margin-bottom: 0.2rem;">Date Details / તારીખની વિગતો</h3>
+                    <p id="modal-date" class="text-muted" style="margin: 0;"></p>
+                </div>
+                <span id="close-modal-btn" class="close-modal">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Account / એકાઉન્ટ</th>
+                                <th style="text-align: right;">Meesho</th>
+                                <th style="text-align: right;">Flipkart</th>
+                                <th style="text-align: right;">Total / કુલ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="modal-details-tbody">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                        <tfoot>
+                            <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold;">
+                                <td>Grand Total / એકંદર કુલ</td>
+                                <td id="modal-grand-meesho" style="text-align: right;">0</td>
+                                <td id="modal-grand-flipkart" style="text-align: right;">0</td>
+                                <td id="modal-grand-total" style="text-align: right; color: var(--primary);">0</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Application Script -->

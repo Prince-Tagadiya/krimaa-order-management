@@ -1,8 +1,8 @@
 const API_URL = "https://script.google.com/macros/s/AKfycbwj9oL5WWKMGzSGYv3llJTjbPcHg8z2DvCdtquDIvmMAlsEt01mDvd0_IFdzSRVvPgT/exec"; 
 
 // Simple hardcoded auth according to requirements
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "admin123";
+const ADMIN_USER = "Krimaa";
+const ADMIN_PASS = "Kirmaa4484";
 
 const AppState = {
     accounts: [],
@@ -170,6 +170,26 @@ function attachEventListeners() {
             hideLoader();
         }
     });
+
+    // Date change listener
+    document.getElementById('order-date').addEventListener('change', () => {
+        checkExistingOrdersForDate();
+    });
+
+    // Alert click to open modal
+    document.getElementById('already-submitted-alert').addEventListener('click', () => {
+        document.getElementById('order-details-modal').classList.add('show');
+    });
+
+    // Modal Close
+    document.getElementById('close-modal-btn').addEventListener('click', () => {
+        document.getElementById('order-details-modal').classList.remove('show');
+    });
+    document.getElementById('order-details-modal').addEventListener('click', (e) => {
+        if(e.target.id === 'order-details-modal') {
+            document.getElementById('order-details-modal').classList.remove('show');
+        }
+    });
 }
 
 function navigateTo(sectionId) {
@@ -201,6 +221,7 @@ function navigateTo(sectionId) {
     // Section specific logic
     if (sectionId === 'daily-order') {
         renderOrderEntryTable();
+        checkExistingOrdersForDate();
     } else if (sectionId === 'dashboard') {
         renderDashboard();
     } else if (sectionId === 'add-account') {
@@ -292,8 +313,79 @@ function renderOrderEntryTable() {
             const flipkart = parseInt(flipkartStr) || 0;
             
             document.getElementById(`total-${idx}`).textContent = (meesho + flipkart);
+            calculateGrandTotals();
         });
     });
+    
+    // Reset grand totals visibly
+    calculateGrandTotals();
+}
+
+function calculateGrandTotals() {
+    let grandMeesho = 0;
+    let grandFlipkart = 0;
+    
+    document.querySelectorAll('.inp-meesho').forEach(inp => grandMeesho += (parseInt(inp.value) || 0));
+    document.querySelectorAll('.inp-flipkart').forEach(inp => grandFlipkart += (parseInt(inp.value) || 0));
+    
+    document.getElementById('table-grand-meesho').textContent = grandMeesho;
+    document.getElementById('table-grand-flipkart').textContent = grandFlipkart;
+    document.getElementById('table-grand-total').textContent = (grandMeesho + grandFlipkart);
+}
+
+function checkExistingOrdersForDate() {
+    const alert = document.getElementById('already-submitted-alert');
+    const formContainer = document.getElementById('order-form-container');
+    const dateInput = document.getElementById('order-date').value;
+    
+    if (!dateInput || !AppState.dashboardData) return;
+    
+    const existingOrders = AppState.dashboardData.filter(d => d.date === dateInput);
+    
+    if (existingOrders.length > 0) {
+        // Already submitted
+        alert.classList.remove('hidden');
+        formContainer.classList.add('hidden');
+        
+        let grandMeesho = 0;
+        let grandFlipkart = 0;
+        let grandTotal = 0;
+        
+        const modalBody = document.getElementById('modal-details-tbody');
+        modalBody.innerHTML = existingOrders.map(o => {
+            const m = parseInt(o.meesho) || 0;
+            const f = parseInt(o.flipkart) || 0;
+            const t = parseInt(o.total) || 0;
+            grandMeesho += m;
+            grandFlipkart += f;
+            grandTotal += t;
+            
+            return `<tr>
+                <td>${o.accountName}</td>
+                <td style="text-align: right;">${m}</td>
+                <td style="text-align: right;">${f}</td>
+                <td style="text-align: right; font-weight: 600;">${t}</td>
+            </tr>`;
+        }).join('');
+        
+        document.getElementById('submitted-grand-total').textContent = grandTotal;
+        
+        // Convert to readable format like DD/MM/YYYY
+        const [yyyy, mm, dd] = dateInput.split('-');
+        document.getElementById('modal-date').textContent = `${dd}/${mm}/${yyyy}`;
+        
+        document.getElementById('modal-grand-meesho').textContent = grandMeesho;
+        document.getElementById('modal-grand-flipkart').textContent = grandFlipkart;
+        document.getElementById('modal-grand-total').textContent = grandTotal;
+        
+    } else {
+        // Not submitted
+        alert.classList.add('hidden');
+        formContainer.classList.remove('hidden');
+        document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
+        document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
+        calculateGrandTotals();
+    }
 }
 
 function renderDashboard() {
