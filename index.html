@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Krimaa App</title>
+    <!-- Google Fonts for modern look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Boxicons for icons -->
+    <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">Message</div>
+
+    <!-- Login Screen -->
+    <div id="login-screen" class="screen flex-center">
+        <div class="login-card">
+            <div class="login-header">
+                <h2>Krimaa Admin</h2>
+                <p>Sign in to manage daily orders</p>
+            </div>
+            <form id="login-form">
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="username" placeholder="Enter username" required>
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="password" placeholder="Enter password" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Login to Dashboard</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main App Wrap (Sidebar + Content) -->
+    <div id="app-screen" class="screen hidden">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <i class='bx bx-cube'></i>
+                <span>Krimaa</span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#" class="nav-btn active" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
+                <li><a href="#" class="nav-btn" data-target="daily-order"><i class='bx bx-edit'></i> Daily Order</a></li>
+                <li><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-user-plus'></i> Add Account</a></li>
+            </ul>
+            <div class="sidebar-footer">
+                <a href="#" id="logout-btn" class="nav-btn"><i class='bx bx-log-out'></i> Logout</a>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Topbar for mobile -->
+            <header class="topbar">
+                <button id="menu-toggle"><i class='bx bx-menu'></i></button>
+                <h2 id="page-title">Dashboard</h2>
+            </header>
+
+            <!-- Loading overlay -->
+            <div id="global-loader" class="loader-overlay hidden">
+                <div class="spinner"></div>
+            </div>
+
+            <!-- Sections -->
+            <div class="sections-container">
+
+                <!-- Dashboard Section -->
+                <section id="dashboard" class="content-section active">
+                    <div class="dashboard-controls flex-between mb-2">
+                        <h3>Current Month Overview</h3>
+                        <div class="month-filter" id="current-month-label">Loading...</div>
+                    </div>
+                    
+                    <div class="kpi-cards">
+                        <div class="card kpi-card">
+                            <i class='bx bx-shopping-bag kpi-icon meesho'></i>
+                            <div class="kpi-info">
+                                <p>Total Meesho</p>
+                                <h3 id="dash-meesho-total">0</h3>
+                            </div>
+                        </div>
+                        <div class="card kpi-card">
+                            <i class='bx bx-cart kpi-icon flipkart'></i>
+                            <div class="kpi-info">
+                                <p>Total Flipkart</p>
+                                <h3 id="dash-flipkart-total">0</h3>
+                            </div>
+                        </div>
+                        <div class="card kpi-card">
+                            <i class='bx bx-bar-chart-alt-2 kpi-icon total'></i>
+                            <div class="kpi-info">
+                                <p>Overall Total</p>
+                                <h3 id="dash-overall-total">0</h3>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid-2-col mt-2">
+                        <div class="card">
+                            <h4 class="card-title mb-1">Account-wise Totals</h4>
+                            <div class="table-responsive">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Account</th>
+                                            <th>Meesho</th>
+                                            <th>Flipkart</th>
+                                            <th>Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="dash-account-totals">
+                                        <!-- populated dynamically -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <h4 class="card-title mb-1">Recent Daily Records</h4>
+                            <div class="table-responsive">
+                                <table class="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Account</th>
+                                            <th>Total Orders</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="dash-recent-records">
+                                        <!-- populated dynamically -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Daily Order Section -->
+                <section id="daily-order" class="content-section">
+                    <div class="card max-w-800 mx-auto">
+                        <div class="card-header flex-between">
+                            <h3 class="card-title">Enter Daily Orders</h3>
+                            <input type="date" id="order-date" class="date-input" readonly>
+                        </div>
+                        <p class="text-muted mb-2">Fill the orders for all active accounts to submit today's record.</p>
+
+                        <div id="order-form-container">
+                            <div class="table-responsive mb-2">
+                                <table class="table order-entry-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Account Name</th>
+                                            <th width="120">Meesho</th>
+                                            <th width="120">Flipkart</th>
+                                            <th width="120">Total</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="daily-order-tbody">
+                                        <!-- populated dynamically -->
+                                    </tbody>
+                                </table>
+                            </div>
+                            <button id="submit-orders-btn" class="btn btn-primary w-100 btn-lg">Submit All Orders</button>
+                        </div>
+                        
+                        <div id="no-accounts-msg" class="hidden text-center p-3 text-muted">
+                            <i class='bx bx-user-x bx-md'></i>
+                            <p>No accounts found. Please add accounts first.</p>
+                            <button class="btn btn-outline mt-1" onclick="window.app.navigateTo('add-account')">Go to Add Account</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Add Account Section -->
+                <section id="add-account" class="content-section">
+                    <div class="card max-w-500 mx-auto">
+                        <div class="card-header">
+                            <h3 class="card-title">Add New Account</h3>
+                        </div>
+                        <p class="text-muted mb-2">Add vendor or business accounts to track their orders.</p>
+                        
+                        <form id="add-account-form">
+                            <div class="input-group">
+                                <label>Account Name</label>
+                                <input type="text" id="new-account-name" placeholder="e.g. Anandi Fashion" required>
+                            </div>
+                            <button type="submit" id="add-account-btn" class="btn btn-primary w-100">Add Account</button>
+                        </form>
+
+                        <hr class="my-2">
+                        
+                        <h4 class="mb-1">Active Accounts</h4>
+                        <div class="account-list" id="active-account-list">
+                            <!-- populated dynamically -->
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Application Script -->
+    <script src="app.js"></script>
+</body>
+</html>
