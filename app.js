@@ -345,7 +345,7 @@ function checkExistingOrdersForDate() {
     if (existingOrders.length > 0) {
         // Already submitted
         alert.classList.remove('hidden');
-        formContainer.classList.add('hidden');
+        formContainer.classList.remove('hidden');
         
         let grandMeesho = 0;
         let grandFlipkart = 0;

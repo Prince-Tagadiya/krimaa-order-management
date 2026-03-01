@@ -122,20 +122,6 @@ function submitOrders(dateStr, orders) {
   var sheet = ss.getSheetByName('Orders');
   var data = sheet.getDataRange().getValues();
   
-  // Prevent duplicate submissions for the same date
-  for (var i = 1; i < data.length; i++) {
-    var rowDate = data[i][0];
-    if (rowDate) {
-      var formattedRowDate = rowDate;
-      if (rowDate instanceof Date) {
-        formattedRowDate = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
-      }
-      if (formattedRowDate === dateStr) {
-        return {success: false, message: 'Orders for date ' + dateStr + ' have already been submitted'};
-      }
-    }
-  }
-  
   if (!orders || orders.length === 0) {
     return {success: false, message: 'No orders provided'};
   }
