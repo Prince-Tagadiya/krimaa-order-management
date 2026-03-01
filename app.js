@@ -48,9 +48,9 @@ function attachEventListeners() {
         if (user === ADMIN_USER && pass === ADMIN_PASS) {
             localStorage.setItem('isLogged', 'true');
             checkAuth();
-            showToast("Login Successful", "success");
+            showToast("Login Successful / લોગિન સફળ", "success");
         } else {
-            showToast("Invalid Credentials", "error");
+            showToast("Invalid Credentials / અમાન્ય ઓળખપત્રો", "error");
         }
     });
 
@@ -97,7 +97,7 @@ function attachEventListeners() {
         const tempHtml = `
             <div id="${tempId}" class="account-item" style="opacity: 0.6; border: 1px dashed var(--primary);">
                 <i class='bx bx-loader-alt bx-spin'></i>
-                <span>${accountName} <small class="text-muted">(Syncing to Google Sheets...)</small></span>
+                <span>${accountName} <small class="text-muted">(Syncing... / ગુગલ શીટ્સ સાથે સિંક થઈ રહ્યું છે...)</small></span>
             </div>
         `;
         if (container.querySelector('p')) container.innerHTML = '';
@@ -106,7 +106,7 @@ function attachEventListeners() {
         try {
             const res = await apiRequest({ action: 'addAccount', accountName });
             if (res.success) {
-                showToast("Account saved in Excel correctly!", "success");
+                showToast("Account saved correctly! / એક્સેલમાં એકાઉન્ટ સેવ થયું!", "success");
                 await fetchAccounts();
                 renderAccountsList();
             } else {
@@ -114,7 +114,7 @@ function attachEventListeners() {
                 document.getElementById(tempId).remove();
             }
         } catch (err) {
-            showToast("Network Error saving to Excel!", "error");
+            showToast("Network Error! / નેટવર્ક ભૂલ!", "error");
             document.getElementById(tempId).remove();
         } finally {
             btn.disabled = false;
@@ -124,7 +124,7 @@ function attachEventListeners() {
     // Submit Orders
     document.getElementById('submit-orders-btn').addEventListener('click', async () => {
         const date = document.getElementById('order-date').value;
-        if(!date) return showToast("Please select a date", "error");
+        if(!date) return showToast("Please select a date / કૃપા કરીને તારીખ પસંદ કરો", "error");
 
         const orders = [];
         let hasData = false;
@@ -141,18 +141,18 @@ function attachEventListeners() {
         });
 
         if (!hasData) {
-            return showToast("Please enter at least one order value!", "error");
+            return showToast("Please enter at least one order value! / ઓછામાં ઓછું 1 ઓર્ડર મૂલ્ય દાખલ કરો!", "error");
         }
 
         const btn = document.getElementById('submit-orders-btn');
         btn.disabled = true;
-        btn.textContent = "Submitting...";
+        btn.textContent = "Submitting... / સબમિટ થઈ રહ્યું છે...";
         showLoader();
 
         try {
             const res = await apiRequest({ action: 'submitOrders', date, orders });
             if (res.success) {
-                showToast("Orders safely saved in Excel without corruption!", "success");
+                showToast("Orders saved! / ઓર્ડર એક્સેલમાં સાચવવામાં આવ્યા!", "success");
                 // Clear inputs
                 document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
                 document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
@@ -163,10 +163,10 @@ function attachEventListeners() {
                 showToast(res.message, "error");
             }
         } catch (err) {
-            showToast("Network Error!", "error");
+            showToast("Network Error! / નેટવર્ક ભૂલ!", "error");
         } finally {
             btn.disabled = false;
-            btn.textContent = "Submit All Orders";
+            btn.textContent = "Submit All Orders / બધા ઓર્ડર સબમિટ કરો";
             hideLoader();
         }
     });
@@ -188,9 +188,9 @@ function navigateTo(sectionId) {
 
     // Update Title
     const titles = {
-        'dashboard': 'Dashboard',
-        'daily-order': 'Daily Order Entry',
-        'add-account': 'Manage Accounts'
+        'dashboard': 'Dashboard / ડેશબોર્ડ',
+        'daily-order': 'Daily Order Entry / દૈનિક ઓર્ડર દાખલ કરો',
+        'add-account': 'Manage Accounts / એકાઉન્ટ મેનેજ કરો'
     };
     document.getElementById('page-title').textContent = titles[sectionId];
 
@@ -219,7 +219,7 @@ async function loadInitialData() {
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
         renderDashboard();
     } catch (err) {
-        showToast("Error loading data from Google Sheets", "error");
+        showToast("Error loading data / ડેટા લોડ કરવામાં ભૂલ", "error");
     } finally {
         hideLoader();
     }
@@ -246,7 +246,7 @@ async function fetchDashboardData() {
 function renderAccountsList() {
     const container = document.getElementById('active-account-list');
     if (AppState.accounts.length === 0) {
-        container.innerHTML = '<p class="text-muted">No accounts added yet.</p>';
+        container.innerHTML = '<p class="text-muted">No accounts added yet. / હજી સુધી કોઈ એકાઉન્ટ ઉમેરવામાં આવ્યું નથી.</p>';
         return;
     }
     
@@ -370,13 +370,13 @@ function renderDashboard() {
     recentBody.innerHTML = sortedDates.map(date => `
         <tr>
             <td>${date}</td>
-            <td>All Accounts</td>
+            <td>All Accounts / બધા એકાઉન્ટ્સ</td>
             <td style="font-weight: 600;">${dateGroups[date]}</td>
         </tr>
     `).join('');
     
     if (sortedDates.length === 0) {
-        recentBody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No records found.</td></tr>';
+        recentBody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No records found. / કોઈ રેકોર્ડ મળ્યો નથી.</td></tr>';
     }
 }
 
