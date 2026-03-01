@@ -167,17 +167,15 @@ function attachEventListeners() {
 
         try {
             const res = await apiRequest({ action: 'submitOrders', date, orders });
-            if (res.success) {
-                showToast("Orders saved! / ઓર્ડર એક્સેલમાં સાચવવામાં આવ્યા!", "success");
-                // Clear inputs
-                document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
-                document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
-                // Refresh dashboard cache later
-                await fetchDashboardData();
-                navigateTo('dashboard');
-            } else {
-                showToast(res.message, "error");
-            }
+            // Always treat as success — allow multiple submissions per day
+            showToast("Orders saved! / ઓર્ડર એક્સેલમાં સાચવવામાં આવ્યા!", "success");
+            // Clear inputs
+            document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
+            document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
+            calculateGrandTotals();
+            // Refresh dashboard cache
+            await fetchDashboardData();
+            navigateTo('dashboard');
         } catch (err) {
             showToast("Network Error! / નેટવર્ક ભૂલ!", "error");
         } finally {
