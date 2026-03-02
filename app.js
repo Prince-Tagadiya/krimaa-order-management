@@ -85,9 +85,9 @@ function attachEventListeners() {
         if (user === ADMIN_USER && pass === ADMIN_PASS) {
             localStorage.setItem('isLogged', 'true');
             checkAuth();
-            showToast("Login Successful / લોગિન સફળ", "success");
+            showToast("Login Successful", "success");
         } else {
-            showToast("Invalid Credentials / અમાન્ય ઓળખપત્રો", "error");
+            showToast("Invalid Credentials", "error");
         }
     });
 
@@ -134,7 +134,7 @@ function attachEventListeners() {
         const tempHtml = `
             <div id="${tempId}" class="account-item" style="opacity: 0.6; border: 1px dashed var(--primary);">
                 <i class='bx bx-loader-alt bx-spin'></i>
-                <span>${accountName} <small class="text-muted">(Syncing... / ગુગલ શીટ્સ સાથે સિંક થઈ રહ્યું છે...)</small></span>
+                <span>${accountName} <small class="text-muted">(Syncing...)</small></span>
             </div>
         `;
         if (container.querySelector('p')) container.innerHTML = '';
@@ -143,7 +143,7 @@ function attachEventListeners() {
         try {
             const res = await apiRequest({ action: 'addAccount', accountName });
             if (res.success) {
-                showToast("Account saved correctly! / એક્સેલમાં એકાઉન્ટ સેવ થયું!", "success");
+                showToast("Account saved correctly!", "success");
                 await fetchAccounts();
                 renderAccountsList();
             } else {
@@ -151,7 +151,7 @@ function attachEventListeners() {
                 document.getElementById(tempId).remove();
             }
         } catch (err) {
-            showToast("Network Error! / નેટવર્ક ભૂલ!", "error");
+            showToast("Network Error!", "error");
             document.getElementById(tempId).remove();
         } finally {
             btn.disabled = false;
@@ -161,7 +161,7 @@ function attachEventListeners() {
     // Submit Orders
     document.getElementById('submit-orders-btn').addEventListener('click', async () => {
         const date = document.getElementById('order-date').value;
-        if(!date) return showToast("Please select a date / કૃપા કરીને તારીખ પસંદ કરો", "error");
+        if(!date) return showToast("Please select a date", "error");
 
         const orders = [];
         let hasData = false;
@@ -178,18 +178,18 @@ function attachEventListeners() {
         });
 
         if (!hasData) {
-            return showToast("Please enter at least one order value! / ઓછામાં ઓછું 1 ઓર્ડર મૂલ્ય દાખલ કરો!", "error");
+            return showToast("Please enter at least one order value!", "error");
         }
 
         const btn = document.getElementById('submit-orders-btn');
         btn.disabled = true;
-        btn.textContent = "Submitting... / સબમિટ થઈ રહ્યું છે...";
+        btn.textContent = "Submitting...";
         showLoader();
 
         try {
             const res = await apiRequest({ action: 'submitOrders', date, orders });
             // Always treat as success — allow multiple submissions per day
-            showToast("Orders saved! / ઓર્ડર એક્સેલમાં સાચવવામાં આવ્યા!", "success");
+            showToast("Orders saved!", "success");
             // Clear inputs
             document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
             document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
@@ -198,10 +198,10 @@ function attachEventListeners() {
             await fetchDashboardData();
             navigateTo('dashboard');
         } catch (err) {
-            showToast("Network Error! / નેટવર્ક ભૂલ!", "error");
+            showToast("Network Error!", "error");
         } finally {
             btn.disabled = false;
-            btn.textContent = "Submit All Orders / બધા ઓર્ડર સબમિટ કરો";
+            btn.textContent = "Submit All Orders";
             hideLoader();
         }
     });
@@ -243,9 +243,9 @@ function navigateTo(sectionId) {
 
     // Update Title
     const titles = {
-        'dashboard': 'Dashboard / ડેશબોર્ડ',
-        'daily-order': 'Daily Order Entry / દૈનિક ઓર્ડર દાખલ કરો',
-        'add-account': 'Manage Accounts / એકાઉન્ટ મેનેજ કરો'
+        'dashboard': 'Dashboard',
+        'daily-order': 'Daily Order Entry',
+        'add-account': 'Manage Accounts'
     };
     document.getElementById('page-title').textContent = titles[sectionId];
 
@@ -275,7 +275,7 @@ async function loadInitialData() {
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
         renderDashboard();
     } catch (err) {
-        showToast("Error loading data / ડેટા લોડ કરવામાં ભૂલ", "error");
+        showToast("Error loading data", "error");
     } finally {
         hideLoader();
     }
@@ -302,7 +302,7 @@ async function fetchDashboardData() {
 function renderAccountsList() {
     const container = document.getElementById('active-account-list');
     if (AppState.accounts.length === 0) {
-        container.innerHTML = '<p class="text-muted">No accounts added yet. / હજી સુધી કોઈ એકાઉન્ટ ઉમેરવામાં આવ્યું નથી.</p>';
+        container.innerHTML = '<p class="text-muted">No accounts added yet.</p>';
         return;
     }
 
@@ -416,7 +416,7 @@ function initDragAndDrop() {
                 });
             });
 
-            showToast(`Saving position... / પોઝિશન સેવ થઈ રહી છે...`, 'success');
+            showToast(`Saving position...`, 'success');
         }
     });
 }
@@ -426,13 +426,13 @@ async function saveAccountOrderToSheet(orderedAccounts) {
     try {
         const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts });
         if (res.success) {
-            showToast('Position saved to sheet! / પોઝિશન એક્સેલમાં સેવ થઈ!', 'success');
+            showToast('Position saved to sheet!', 'success');
         } else {
-            showToast(res.message || 'Failed to save position / પોઝિશન સેવ નિષ્ફળ', 'error');
+            showToast(res.message || 'Failed to save position', 'error');
         }
     } catch(err) {
         console.error('Failed to sync account order:', err);
-        showToast('Position saved locally, sheet sync failed / લોકલ સેવ થયું, શીટ સિંક નિષ્ફળ', 'error');
+        showToast('Position saved locally, sheet sync failed', 'error');
     }
 }
 function calculateGrandTotals() {
@@ -527,23 +527,23 @@ function renderDashboard() {
     });
 
     // Update title
-    let titleTxt = "Overview / ઝાંખી";
+    let titleTxt = "Overview";
     if (filterType === 'today') {
         const [yyyy, mm, dd] = todayStr.split('-');
-        titleTxt = `Today's Overview (${dd}/${mm}/${yyyy}) / આજની ઝાંખી`;
+        titleTxt = `Today's Overview (${dd}/${mm}/${yyyy})`;
     }
     else if (filterType === 'this_month') {
-        titleTxt = "Current Month Overview / ચાલુ મહિનાની ઝાંખી";
+        titleTxt = "Current Month Overview";
     }
     else if (filterType === 'all_time') {
-        titleTxt = "All Time Overview / ઓલ ટાઇમ ઝાંખી";
+        titleTxt = "All Time Overview";
     }
     else if (filterType === 'custom_date') {
         if (filterDate) {
             const [yyyy, mm, dd] = filterDate.split('-');
-            titleTxt = `Overview (${dd}/${mm}/${yyyy}) / ઝાંખી`;
+            titleTxt = `Overview (${dd}/${mm}/${yyyy})`;
         } else {
-            titleTxt = "Select Date / તારીખ પસંદ કરો";
+            titleTxt = "Select Date";
         }
     }
     
@@ -613,13 +613,13 @@ function renderDashboard() {
     recentBody.innerHTML = sortedDates.map(date => `
         <tr>
             <td>${date}</td>
-            <td>All Accounts / બધા એકાઉન્ટ્સ</td>
+            <td>All Accounts</td>
             <td style="font-weight: 600;">${dateGroups[date]}</td>
         </tr>
     `).join('');
     
     if (sortedDates.length === 0) {
-        recentBody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No records found. / કોઈ રેકોર્ડ મળ્યો નથી.</td></tr>';
+        recentBody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No records found.</td></tr>';
     }
 }
 

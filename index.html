@@ -20,19 +20,19 @@
     <div id="login-screen" class="screen flex-center">
         <div class="login-card">
             <div class="login-header">
-                <h2>Krimaa Admin / ક્રિમા એડમિન</h2>
-                <p>Sign in to manage daily orders / દૈનિક ઓર્ડર મેનેજ કરવા માટે સાઇન ઇન કરો</p>
+                <h2>Krimaa Admin</h2>
+                <p>Sign in to manage daily orders</p>
             </div>
             <form id="login-form">
                 <div class="input-group">
-                    <label>Username / યુઝરનેમ</label>
-                    <input type="text" id="username" placeholder="Enter username / યુઝરનેમ લખો" required>
+                    <label>Username</label>
+                    <input type="text" id="username" placeholder="Enter username" required>
                 </div>
                 <div class="input-group">
-                    <label>Password / પાસવર્ડ</label>
-                    <input type="password" id="password" placeholder="Enter password / પાસવર્ડ લખો" required>
+                    <label>Password</label>
+                    <input type="password" id="password" placeholder="Enter password" required>
                 </div>
-                <button type="submit" class="btn btn-primary w-100">Login to Dashboard / લોગિન કરો</button>
+                <button type="submit" class="btn btn-primary w-100">Login to Dashboard</button>
             </form>
         </div>
     </div>
@@ -46,12 +46,12 @@
                 <span>Krimaa</span>
             </div>
             <ul class="nav-links">
-                <li><a href="#" class="nav-btn active" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard / ડેશબોર્ડ</a></li>
-                <li><a href="#" class="nav-btn" data-target="daily-order"><i class='bx bx-edit'></i> Daily Order / દૈનિક ઓર્ડર</a></li>
-                <li><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-user-plus'></i> Add Account / એકાઉન્ટ ઉમેરો</a></li>
+                <li><a href="#" class="nav-btn active" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
+                <li><a href="#" class="nav-btn" data-target="daily-order"><i class='bx bx-edit'></i> Daily Order</a></li>
+                <li><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-user-plus'></i> Add Account</a></li>
             </ul>
             <div class="sidebar-footer">
-                <a href="#" id="logout-btn" class="nav-btn"><i class='bx bx-log-out'></i> Logout / લોગઆઉટ</a>
+                <a href="#" id="logout-btn" class="nav-btn"><i class='bx bx-log-out'></i> Logout</a>
             </div>
         </aside>
 
@@ -60,7 +60,7 @@
             <!-- Topbar for mobile -->
             <header class="topbar">
                 <button id="menu-toggle"><i class='bx bx-menu'></i></button>
-                <h2 id="page-title">Dashboard / ડેશબોર્ડ</h2>
+                <h2 id="page-title">Dashboard</h2>
             </header>
 
             <!-- Loading overlay -->
@@ -74,13 +74,13 @@
                 <!-- Dashboard Section -->
                 <section id="dashboard" class="content-section active">
                     <div class="dashboard-controls flex-between mb-2" style="flex-wrap: wrap; gap: 10px;">
-                        <h3 id="dash-title-txt">Current Month Overview / ચાલુ મહિનાની ઝાંખી</h3>
+                        <h3 id="dash-title-txt">Current Month Overview</h3>
                         <div class="filter-controls" style="display: flex; gap: 10px; align-items: center; max-width: 100%; overflow-x: auto;">
                             <select id="dash-filter-type" class="date-input" style="padding: 0.5rem; min-width: max-content;">
-                                <option value="today">Today / આજે</option>
-                                <option value="this_month" selected>This Month / આ મહિનો</option>
-                                <option value="all_time">All Time / દરેક સમય</option>
-                                <option value="custom_date">Custom Date / કસ્ટમ તારીખ</option>
+                                <option value="today">Today</option>
+                                <option value="this_month" selected>This Month</option>
+                                <option value="all_time">All Time</option>
+                                <option value="custom_date">Custom Date</option>
                             </select>
                             <input type="date" id="dash-filter-date" class="date-input hidden" style="padding: 0.5rem;">
                         </div>
@@ -90,21 +90,21 @@
                         <div class="card kpi-card">
                             <i class='bx bx-shopping-bag kpi-icon meesho'></i>
                             <div class="kpi-info">
-                                <p>Total Meesho / કુલ મીશો</p>
+                                <p>Total Meesho</p>
                                 <h3 id="dash-meesho-total">0</h3>
                             </div>
                         </div>
                         <div class="card kpi-card">
                             <i class='bx bx-cart kpi-icon flipkart'></i>
                             <div class="kpi-info">
-                                <p>Total Flipkart / કુલ ફ્લિપકાર્ટ</p>
+                                <p>Total Flipkart</p>
                                 <h3 id="dash-flipkart-total">0</h3>
                             </div>
                         </div>
                         <div class="card kpi-card">
                             <i class='bx bx-bar-chart-alt-2 kpi-icon total'></i>
                             <div class="kpi-info">
-                                <p>Overall Total / એકંદર કુલ</p>
+                                <p>Overall Total</p>
                                 <h3 id="dash-overall-total">0</h3>
                             </div>
                         </div>
@@ -112,15 +112,15 @@
 
                     <div class="grid-2-col mt-2">
                         <div class="card">
-                            <h4 class="card-title mb-1">Account-wise Totals / એકાઉન્ટ મુજબ કુલ</h4>
+                            <h4 class="card-title mb-1">Account-wise Totals</h4>
                             <div class="table-responsive">
                                 <table class="table">
                                     <thead>
                                         <tr>
-                                            <th>Account / એકાઉન્ટ</th>
-                                            <th>Meesho / મીશો</th>
-                                            <th>Flipkart / ફ્લિપકાર્ટ</th>
-                                            <th>Total / કુલ</th>
+                                            <th>Account</th>
+                                            <th>Meesho</th>
+                                            <th>Flipkart</th>
+                                            <th>Total</th>
                                         </tr>
                                     </thead>
                                     <tbody id="dash-account-totals">
@@ -131,14 +131,14 @@
                         </div>
 
                         <div class="card">
-                            <h4 class="card-title mb-1">Recent Daily Records / તાજેતરના દૈનિક રેકોર્ડ્સ</h4>
+                            <h4 class="card-title mb-1">Recent Daily Records</h4>
                             <div class="table-responsive">
                                 <table class="table">
                                     <thead>
                                         <tr>
-                                            <th>Date / તારીખ</th>
-                                            <th>Account / એકાઉન્ટ</th>
-                                            <th>Total Orders / કુલ ઓર્ડર</th>
+                                            <th>Date</th>
+                                            <th>Account</th>
+                                            <th>Total Orders</th>
                                         </tr>
                                     </thead>
                                     <tbody id="dash-recent-records">
@@ -154,17 +154,17 @@
                 <section id="daily-order" class="content-section">
                     <div class="card max-w-800 mx-auto">
                         <div class="card-header flex-between">
-                            <h3 class="card-title">Enter Daily Orders / દૈનિક ઓર્ડર દાખલ કરો</h3>
+                            <h3 class="card-title">Enter Daily Orders</h3>
                             <input type="date" id="order-date" class="date-input" readonly>
                         </div>
-                        <p class="text-muted mb-2">Fill the orders for all active accounts to submit today's record. / આજના રેકોર્ડને સબમિટ કરવા માટે તમામ સક્રિય એકાઉન્ટ્સ માટે ઓર્ડર ભરો.</p>
+                        <p class="text-muted mb-2">Fill the orders for all active accounts to submit today's record.</p>
 
                         <!-- Already Submitted Alert -->
                         <div id="already-submitted-alert" class="alert alert-success hidden mb-2" style="cursor: pointer;">
                             <div class="flex-between">
                                 <div>
-                                    <strong style="font-size: 1.1rem;"><i class='bx bx-check-circle'></i> Orders Already Submitted / ઓર્ડર સબમિટ થઈ ગયા છે</strong>
-                                    <p class="mt-1" style="font-size: 0.95rem; opacity: 0.9;">Total <span id="submitted-grand-total" style="font-weight:bold;">0</span> orders added for this date. / આ તારીખ માટે કુલ ઓર્ડર ઉમેરવાય ગયા છે.</p>
+                                    <strong style="font-size: 1.1rem;"><i class='bx bx-check-circle'></i> Orders Already Submitted</strong>
+                                    <p class="mt-1" style="font-size: 0.95rem; opacity: 0.9;">Total <span id="submitted-grand-total" style="font-weight:bold;">0</span> orders added for this date.</p>
                                 </div>
                                 <div style="text-align: right; min-width: max-content;">
                                     <span class="btn btn-outline" style="background: white;">Tap to view details <i class='bx bx-right-arrow-alt'></i></span>
@@ -179,10 +179,10 @@
                                         <tr>
                                             <th width="40"></th>
                                             <th width="30">#</th>
-                                            <th>Account Name / એકાઉન્ટનું નામ</th>
-                                            <th width="120">Meesho / મીશો</th>
-                                            <th width="120">Flipkart / ફ્લિપકાર્ટ</th>
-                                            <th width="120">Total / કુલ</th>
+                                            <th>Account Name</th>
+                                            <th width="120">Meesho</th>
+                                            <th width="120">Flipkart</th>
+                                            <th width="120">Total</th>
                                         </tr>
                                     </thead>
                                     <tbody id="daily-order-tbody">
@@ -190,7 +190,7 @@
                                     </tbody>
                                     <tfoot>
                                         <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold; border-top: 2px solid var(--border-color);">
-                                            <td colspan="3">Grand Total / એકંદર કુલ</td>
+                                            <td colspan="3">Grand Total</td>
                                             <td id="table-grand-meesho" style="text-align: right; font-size: 1.1rem;">0</td>
                                             <td id="table-grand-flipkart" style="text-align: right; font-size: 1.1rem;">0</td>
                                             <td id="table-grand-total" style="text-align: right; font-size: 1.2rem; color: var(--primary);">0</td>
@@ -198,13 +198,13 @@
                                     </tfoot>
                                 </table>
                             </div>
-                            <button id="submit-orders-btn" class="btn btn-primary w-100 btn-lg">Submit All Orders / બધા ઓર્ડર સબમિટ કરો</button>
+                            <button id="submit-orders-btn" class="btn btn-primary w-100 btn-lg">Submit All Orders</button>
                         </div>
                         
                         <div id="no-accounts-msg" class="hidden text-center p-3 text-muted">
                             <i class='bx bx-user-x bx-md'></i>
-                            <p>No accounts found. Please add accounts first. / કોઈ એકાઉન્ટ મળ્યું નથી. કૃપા કરીને પહેલા એકાઉન્ટ ઉમેરો.</p>
-                            <button class="btn btn-outline mt-1" onclick="window.app.navigateTo('add-account')">Go to Add Account / એકાઉન્ટ ઉમેરવા પર જાઓ</button>
+                            <p>No accounts found. Please add accounts first.</p>
+                            <button class="btn btn-outline mt-1" onclick="window.app.navigateTo('add-account')">Go to Add Account</button>
                         </div>
                     </div>
                 </section>
@@ -213,21 +213,21 @@
                 <section id="add-account" class="content-section">
                     <div class="card max-w-500 mx-auto">
                         <div class="card-header">
-                            <h3 class="card-title">Add New Account / નવું એકાઉન્ટ ઉમેરો</h3>
+                            <h3 class="card-title">Add New Account</h3>
                         </div>
-                        <p class="text-muted mb-2">Add vendor or business accounts to track their orders. / તેમના ઓર્ડરને ટ્રૅક કરવા માટે વિક્રેતા અથવા વ્યવસાય એકાઉન્ટ્સ ઉમેરો.</p>
+                        <p class="text-muted mb-2">Add vendor or business accounts to track their orders.</p>
                         
                         <form id="add-account-form">
                             <div class="input-group">
-                                <label>Account Name / એકાઉન્ટનું નામ</label>
-                                <input type="text" id="new-account-name" placeholder="e.g. Anandi Fashion / દા.ત. આનંદી ફેશન" required>
+                                <label>Account Name</label>
+                                <input type="text" id="new-account-name" placeholder="e.g. Anandi Fashion" required>
                             </div>
-                            <button type="submit" id="add-account-btn" class="btn btn-primary w-100">Add Account / એકાઉન્ટ ઉમેરો</button>
+                            <button type="submit" id="add-account-btn" class="btn btn-primary w-100">Add Account</button>
                         </form>
 
                         <hr class="my-2">
                         
-                        <h4 class="mb-1">Active Accounts / સક્રિય એકાઉન્ટ્સ</h4>
+                        <h4 class="mb-1">Active Accounts</h4>
                         <div class="account-list" id="active-account-list">
                             <!-- populated dynamically -->
                         </div>
@@ -243,7 +243,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <div>
-                    <h3 style="margin-bottom: 0.2rem;">Date Details / તારીખની વિગતો</h3>
+                    <h3 style="margin-bottom: 0.2rem;">Date Details</h3>
                     <p id="modal-date" class="text-muted" style="margin: 0;"></p>
                 </div>
                 <span id="close-modal-btn" class="close-modal">&times;</span>
@@ -253,10 +253,10 @@
                     <table class="table">
                         <thead>
                             <tr>
-                                <th>Account / એકાઉન્ટ</th>
+                                <th>Account</th>
                                 <th style="text-align: right;">Meesho</th>
                                 <th style="text-align: right;">Flipkart</th>
-                                <th style="text-align: right;">Total / કુલ</th>
+                                <th style="text-align: right;">Total</th>
                             </tr>
                         </thead>
                         <tbody id="modal-details-tbody">
@@ -264,7 +264,7 @@
                         </tbody>
                         <tfoot>
                             <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold;">
-                                <td>Grand Total / એકંદર કુલ</td>
+                                <td>Grand Total</td>
                                 <td id="modal-grand-meesho" style="text-align: right;">0</td>
                                 <td id="modal-grand-flipkart" style="text-align: right;">0</td>
                                 <td id="modal-grand-total" style="text-align: right; color: var(--primary);">0</td>
