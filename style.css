@@ -208,6 +208,96 @@ body {
 .account-item { padding: 0.8rem 1rem; background: #fafafa; border: 1px solid var(--border-color); border-radius: 4px; display: flex; align-items: center; gap: 0.5rem; }
 .account-item i { color: var(--primary); }
 
+/* Account Position Badge */
+.account-position-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--primary);
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+/* ===== Drag & Drop Styles ===== */
+.drag-handle {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    transition: all 0.2s ease;
+    padding: 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.drag-handle:hover {
+    color: var(--primary);
+    background: rgba(74, 108, 247, 0.1);
+    transform: scale(1.1);
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+.drag-handle-cell {
+    width: 40px;
+    text-align: center !important;
+    padding: 0.5rem !important;
+}
+
+.position-number {
+    width: 30px;
+    text-align: center !important;
+    font-weight: 700;
+    color: var(--primary);
+    font-size: 0.9rem;
+}
+
+/* Sortable ghost (placeholder) */
+.sortable-ghost {
+    background: rgba(74, 108, 247, 0.08) !important;
+    border: 2px dashed var(--primary) !important;
+    border-radius: 8px;
+    opacity: 0.6;
+}
+
+.sortable-ghost td {
+    opacity: 0.4;
+}
+
+/* Sortable chosen (item being dragged visual) */
+.sortable-chosen {
+    background: var(--bg-card) !important;
+    box-shadow: 0 8px 25px rgba(74, 108, 247, 0.2), 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+    border-radius: 8px;
+    transform: scale(1.02);
+    z-index: 100;
+}
+
+/* Sortable drag (the actual dragging element) */
+.sortable-drag {
+    opacity: 0.95 !important;
+    background: var(--bg-card) !important;
+    box-shadow: 0 12px 35px rgba(74, 108, 247, 0.25), 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+    border-radius: 8px;
+}
+
+/* Smooth row transitions during reorder */
+.order-row {
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.order-row:hover {
+    background: rgba(74, 108, 247, 0.02);
+}
+
 /* Loader */
 .loader-overlay {
     position: absolute; top: 0; left: 0; right: 0; bottom: 0;

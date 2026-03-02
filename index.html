@@ -177,6 +177,8 @@
                                 <table class="table order-entry-table">
                                     <thead>
                                         <tr>
+                                            <th width="40"></th>
+                                            <th width="30">#</th>
                                             <th>Account Name / એકાઉન્ટનું નામ</th>
                                             <th width="120">Meesho / મીશો</th>
                                             <th width="120">Flipkart / ફ્લિપકાર્ટ</th>
@@ -188,7 +190,7 @@
                                     </tbody>
                                     <tfoot>
                                         <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold; border-top: 2px solid var(--border-color);">
-                                            <td>Grand Total / એકંદર કુલ</td>
+                                            <td colspan="3">Grand Total / એકંદર કુલ</td>
                                             <td id="table-grand-meesho" style="text-align: right; font-size: 1.1rem;">0</td>
                                             <td id="table-grand-flipkart" style="text-align: right; font-size: 1.1rem;">0</td>
                                             <td id="table-grand-total" style="text-align: right; font-size: 1.2rem; color: var(--primary);">0</td>
@@ -274,6 +276,8 @@
         </div>
     </div>
 
+    <!-- SortableJS for drag-and-drop -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <!-- Application Script -->
     <script src="app.js"></script>
 </body>

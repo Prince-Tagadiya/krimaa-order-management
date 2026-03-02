@@ -10,6 +10,27 @@ const AppState = {
     currentSection: 'dashboard'
 };
 
+// ===== Account Position Management =====
+function getAccountPositions() {
+    try {
+        const saved = localStorage.getItem('accountPositions');
+        return saved ? JSON.parse(saved) : {};
+    } catch(e) { return {}; }
+}
+
+function saveAccountPositions(orderedAccounts) {
+    const positions = {};
+    orderedAccounts.forEach((acc, idx) => {
+        positions[acc] = idx;
+    });
+    localStorage.setItem('accountPositions', JSON.stringify(positions));
+}
+
+function getSortedAccounts() {
+    // Accounts are already sorted by position from the API (Google Sheets)
+    return [...AppState.accounts];
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initApp();
 });
@@ -284,9 +305,11 @@ function renderAccountsList() {
         container.innerHTML = '<p class="text-muted">No accounts added yet. / હજી સુધી કોઈ એકાઉન્ટ ઉમેરવામાં આવ્યું નથી.</p>';
         return;
     }
-    
-    container.innerHTML = AppState.accounts.map(acc => `
+
+    const sorted = getSortedAccounts();
+    container.innerHTML = sorted.map((acc, idx) => `
         <div class="account-item">
+            <span class="account-position-badge">${idx + 1}</span>
             <i class='bx bx-user'></i>
             <span>${acc}</span>
         </div>
@@ -307,8 +330,12 @@ function renderOrderEntryTable() {
     container.classList.remove('hidden');
     msg.classList.add('hidden');
 
-    tbody.innerHTML = AppState.accounts.map((acc, index) => `
+    const sorted = getSortedAccounts();
+
+    tbody.innerHTML = sorted.map((acc, index) => `
         <tr class="order-row" data-account="${acc}">
+            <td class="drag-handle-cell"><i class='bx bx-menu drag-handle'></i></td>
+            <td class="position-number">${index + 1}</td>
             <td class="font-medium">${acc}</td>
             <td><input type="number" min="0" class="inp-meesho" data-index="${index}" placeholder="0"></td>
             <td><input type="number" min="0" class="inp-flipkart" data-index="${index}" placeholder="0"></td>
@@ -333,8 +360,81 @@ function renderOrderEntryTable() {
     
     // Reset grand totals visibly
     calculateGrandTotals();
+
+    // Initialize SortableJS on the tbody
+    initDragAndDrop();
 }
 
+function initDragAndDrop() {
+    const tbody = document.getElementById('daily-order-tbody');
+    if (!tbody || typeof Sortable === 'undefined') return;
+
+    // Destroy previous instance if exists
+    if (tbody._sortableInstance) {
+        tbody._sortableInstance.destroy();
+    }
+
+    tbody._sortableInstance = Sortable.create(tbody, {
+        handle: '.drag-handle',
+        animation: 250,
+        easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        dragClass: 'sortable-drag',
+        onEnd: function(evt) {
+            // Get the new order of accounts from DOM
+            const rows = tbody.querySelectorAll('.order-row');
+            const newOrder = [];
+            rows.forEach((row, idx) => {
+                newOrder.push(row.dataset.account);
+                // Update position numbers
+                row.querySelector('.position-number').textContent = idx + 1;
+                // Update data-index on inputs
+                row.querySelector('.inp-meesho').dataset.index = idx;
+                row.querySelector('.inp-flipkart').dataset.index = idx;
+                row.querySelector('.row-total').id = `total-${idx}`;
+            });
+
+            // Save position to localStorage
+            saveAccountPositions(newOrder);
+
+            // Save position to Google Sheets (background sync)
+            saveAccountOrderToSheet(newOrder);
+
+            // Re-attach input events
+            document.querySelectorAll('.inp-meesho, .inp-flipkart').forEach(inp => {
+                const newInp = inp.cloneNode(true);
+                inp.parentNode.replaceChild(newInp, inp);
+                newInp.addEventListener('input', (e) => {
+                    const idx = e.target.dataset.index;
+                    const meeshoStr = document.querySelector(`.inp-meesho[data-index="${idx}"]`).value;
+                    const flipkartStr = document.querySelector(`.inp-flipkart[data-index="${idx}"]`).value;
+                    const meesho = parseInt(meeshoStr) || 0;
+                    const flipkart = parseInt(flipkartStr) || 0;
+                    document.getElementById(`total-${idx}`).textContent = (meesho + flipkart);
+                    calculateGrandTotals();
+                });
+            });
+
+            showToast(`Saving position... / પોઝિશન સેવ થઈ રહી છે...`, 'success');
+        }
+    });
+}
+
+// Sync account order to Google Sheets
+async function saveAccountOrderToSheet(orderedAccounts) {
+    try {
+        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts });
+        if (res.success) {
+            showToast('Position saved to sheet! / પોઝિશન એક્સેલમાં સેવ થઈ!', 'success');
+        } else {
+            showToast(res.message || 'Failed to save position / પોઝિશન સેવ નિષ્ફળ', 'error');
+        }
+    } catch(err) {
+        console.error('Failed to sync account order:', err);
+        showToast('Position saved locally, sheet sync failed / લોકલ સેવ થયું, શીટ સિંક નિષ્ફળ', 'error');
+    }
+}
 function calculateGrandTotals() {
     let grandMeesho = 0;
     let grandFlipkart = 0;
