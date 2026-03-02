@@ -7,13 +7,14 @@ const ADMIN_PASS = "Kirmaa4484";
 const AppState = {
     accounts: [],
     dashboardData: [],
-    currentSection: 'dashboard'
+    currentSection: 'dashboard',
+    currentCompany: 'company1' // Track active company
 };
 
 // ===== Account Position Management =====
 function getAccountPositions() {
     try {
-        const saved = localStorage.getItem('accountPositions');
+        const saved = localStorage.getItem(`accountPositions_${AppState.currentCompany}`);
         return saved ? JSON.parse(saved) : {};
     } catch(e) { return {}; }
 }
@@ -23,7 +24,7 @@ function saveAccountPositions(orderedAccounts) {
     orderedAccounts.forEach((acc, idx) => {
         positions[acc] = idx;
     });
-    localStorage.setItem('accountPositions', JSON.stringify(positions));
+    localStorage.setItem(`accountPositions_${AppState.currentCompany}`, JSON.stringify(positions));
 }
 
 function getSortedAccounts() {
@@ -39,10 +40,20 @@ function initApp() {
     checkAuth();
     attachEventListeners();
     
-    // Set today's date in order input based on local Indian Standart Time (or browser's local time)
+    // Set today's date in order input
     const now = new Date();
     const today = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     document.getElementById('order-date').value = today;
+    
+    // Restore last selected company from localStorage
+    const savedCompany = localStorage.getItem('selectedCompany');
+    if (savedCompany) {
+        AppState.currentCompany = savedCompany;
+        // Update buttons visually
+        document.querySelectorAll('.company-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.company === savedCompany);
+        });
+    }
     
     // Attach Dashboard Listeners
     document.getElementById('dash-filter-type').addEventListener('change', (e) => {
@@ -51,7 +62,6 @@ function initApp() {
         
         if (val === 'custom_date') {
             dateInput.classList.remove('hidden');
-            // Default select today if empty
             if(!dateInput.value) dateInput.value = today;
         } else {
             dateInput.classList.add('hidden');
@@ -62,6 +72,54 @@ function initApp() {
     document.getElementById('dash-filter-date').addEventListener('change', () => {
         renderDashboard();
     });
+
+    // Company Switcher
+    document.querySelectorAll('.company-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const companyId = btn.dataset.company;
+            if (companyId === AppState.currentCompany) return; // Already selected
+            
+            // Update UI
+            document.querySelectorAll('.company-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            // Update state
+            AppState.currentCompany = companyId;
+            localStorage.setItem('selectedCompany', companyId);
+            
+            // Reload data for the new company
+            switchCompany();
+        });
+    });
+}
+
+async function switchCompany() {
+    showLoader();
+    try {
+        // Clear current data
+        AppState.accounts = [];
+        AppState.dashboardData = [];
+        
+        // Fetch fresh data for the new company
+        await Promise.all([fetchAccounts(), fetchDashboardData()]);
+        
+        // Re-render current section
+        if (AppState.currentSection === 'dashboard') {
+            renderDashboard();
+        } else if (AppState.currentSection === 'daily-order') {
+            renderOrderEntryTable();
+            checkExistingOrdersForDate();
+        } else if (AppState.currentSection === 'add-account') {
+            renderAccountsList();
+        }
+        
+        const companyName = document.querySelector(`.company-btn[data-company="${AppState.currentCompany}"] span`).textContent;
+        showToast(`Switched to ${companyName}`, "success");
+    } catch (err) {
+        showToast("Error loading company data", "error");
+    } finally {
+        hideLoader();
+    }
 }
 
 function checkAuth() {
@@ -141,7 +199,7 @@ function attachEventListeners() {
         container.insertAdjacentHTML('afterbegin', tempHtml);
 
         try {
-            const res = await apiRequest({ action: 'addAccount', accountName });
+            const res = await apiRequest({ action: 'addAccount', accountName, companyId: AppState.currentCompany });
             if (res.success) {
                 showToast("Account saved correctly!", "success");
                 await fetchAccounts();
@@ -187,8 +245,8 @@ function attachEventListeners() {
         showLoader();
 
         try {
-            const res = await apiRequest({ action: 'submitOrders', date, orders });
-            // Always treat as success — allow multiple submissions per day
+            const res = await apiRequest({ action: 'submitOrders', date, orders, companyId: AppState.currentCompany });
+            // Always treat as success
             showToast("Orders saved!", "success");
             // Clear inputs
             document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
@@ -283,7 +341,7 @@ async function loadInitialData() {
 
 async function fetchAccounts() {
     try {
-        const res = await apiRequest({ action: 'getAccounts' });
+        const res = await apiRequest({ action: 'getAccounts', companyId: AppState.currentCompany });
         if (res.success) {
             AppState.accounts = res.data;
         }
@@ -292,7 +350,7 @@ async function fetchAccounts() {
 
 async function fetchDashboardData() {
     try {
-        const res = await apiRequest({ action: 'getDashboardData' });
+        const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany });
         if (res.success) {
             AppState.dashboardData = res.data;
         }
@@ -424,7 +482,7 @@ function initDragAndDrop() {
 // Sync account order to Google Sheets
 async function saveAccountOrderToSheet(orderedAccounts) {
     try {
-        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts });
+        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts, companyId: AppState.currentCompany });
         if (res.success) {
             showToast('Position saved to sheet!', 'success');
         } else {
