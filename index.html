@@ -4,17 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Krimaa App</title>
-    <!-- Google Fonts for modern look -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Boxicons for icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <!-- Custom CSS -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
     <!-- Toast Notification -->
-    <div id="toast" class="toast hidden">Message</div>
+    <div id="toast" class="toast hidden" style="position:fixed;top:20px;right:20px;padding:15px;border-radius:8px;z-index:9999;transition:all 0.3s ease;box-shadow:0 10px 15px -3px rgba(0,0,0,0.1);font-weight:600;display:flex;align-items:center;gap:10px;">Message</div>
 
     <!-- Login Screen -->
     <div id="login-screen" class="screen flex-center">
@@ -32,215 +29,263 @@
                     <label>Password</label>
                     <input type="password" id="password" placeholder="Enter password" required>
                 </div>
-                <button type="submit" class="btn btn-primary w-100">Login to Dashboard</button>
+                <button type="submit" class="btn btn-primary w-100 btn-lg">Login</button>
             </form>
         </div>
     </div>
 
-    <!-- Main App Wrap (Sidebar + Content) -->
+    <!-- Main App Wrap -->
     <div id="app-screen" class="screen hidden">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <i class='bx bx-cube'></i>
+                <i class='bx bxs-dashboard'></i>
                 <span>Krimaa</span>
             </div>
-            <ul class="nav-links">
-                <li><a href="#" class="nav-btn active" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
-                <li><a href="#" class="nav-btn" data-target="daily-order"><i class='bx bx-edit'></i> Daily Order</a></li>
-                <li><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-user-plus'></i> Add Account</a></li>
+            <ul class="nav-links mt-2">
+                <li id="nav-dashboard"><a href="#" class="nav-btn active" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
+                <li><a href="#" class="nav-btn" data-target="daily-order"><i class='bx bx-calendar-event'></i> Daily Order</a></li>
+                <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
             </ul>
             <div class="sidebar-footer">
-                <a href="#" id="logout-btn" class="nav-btn"><i class='bx bx-log-out'></i> Logout</a>
+                <a href="#" id="logout-btn" class="nav-btn logout-link" data-target="logout"><i class='bx bx-log-out'></i> Logout</a>
             </div>
         </aside>
 
-        <!-- Main Content Area -->
+        <!-- Main Content -->
         <main class="main-content">
-            <!-- Topbar for mobile -->
             <header class="topbar">
-                <button id="menu-toggle"><i class='bx bx-menu'></i></button>
-                <h2 id="page-title">Dashboard</h2>
-                <div class="company-switcher" id="company-switcher">
-                    <button class="company-btn active" data-company="company1">
-                        <i class='bx bx-buildings'></i>
-                        <span>Company 1</span>
-                    </button>
-                    <button class="company-btn" data-company="company2">
-                        <i class='bx bx-buildings'></i>
-                        <span>Company 2</span>
-                    </button>
+                <div class="flex items-center gap-1">
+                    <button id="menu-toggle"><i class='bx bx-menu'></i></button>
+                    <div class="company-switcher-topbar" id="company-switcher">
+                        <button type="button" class="company-btn active" data-company="company1">Company 1</button>
+                        <button type="button" class="company-btn" data-company="company2">Company 2</button>
+                    </div>
+                </div>
+                <div class="topbar-right">
+                    <div class="sidebar-user-info" id="sidebar-user-info"></div>
                 </div>
             </header>
 
-            <!-- Loading overlay -->
-            <div id="global-loader" class="loader-overlay hidden">
-                <div class="spinner"></div>
+            <div id="global-loader" class="loader-overlay hidden" style="position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.7);">
+                <div class="spinner" style="width:40px;height:40px;border:3px solid #e2e8f0;border-top-color:#135bec;border-radius:50%;animation:spin 1s infinite linear;"></div>
             </div>
+            <style>@keyframes spin{100%{transform:rotate(360deg)}}</style>
 
-            <!-- Sections -->
             <div class="sections-container">
 
-                <!-- Dashboard Section -->
-                <section id="dashboard" class="content-section active">
-                    <div class="dashboard-controls flex-between mb-2" style="flex-wrap: wrap; gap: 10px;">
-                        <h3 id="dash-title-txt">Current Month Overview</h3>
-                        <div class="filter-controls" style="display: flex; gap: 10px; align-items: center; max-width: 100%; overflow-x: auto;">
-                            <select id="dash-filter-type" class="date-input" style="padding: 0.5rem; min-width: max-content;">
-                                <option value="today">Today</option>
-                                <option value="this_month" selected>This Month</option>
-                                <option value="all_time">All Time</option>
-                                <option value="custom_date">Custom Date</option>
-                            </select>
-                            <input type="date" id="dash-filter-date" class="date-input hidden" style="padding: 0.5rem;">
+                <!-- ========== DASHBOARD ========== -->
+                <section id="dashboard" class="content-section">
+                    <div class="dash-header mb-2">
+                        <h1 class="page-title" id="page-title">Dashboard Overview</h1>
+                        <div class="filter-controls">
+                            <!-- Moved from card for better access -->
+                            <button class="btn btn-export btn-sm" id="export-csv-btn" title="Export to CSV">
+                                <i class='bx bx-download'></i> Export CSV
+                            </button>
                         </div>
                     </div>
-                    
-                    <div class="kpi-cards">
-                        <div class="card kpi-card">
-                            <i class='bx bx-shopping-bag kpi-icon meesho'></i>
-                            <div class="kpi-info">
-                                <p>Total Meesho</p>
-                                <h3 id="dash-meesho-total">0</h3>
+
+                    <!-- Today's Status Banner -->
+                    <div id="today-status-banner" class="status-banner mb-2">
+                        <!-- JS injects content here -->
+                    </div>
+
+                    <div class="dashboard-grid">
+                        <!-- LEFT COLUMN -->
+                        <div class="dash-left">
+                            
+                            <!-- KPI Cards block -->
+                            <div class="card mb-2">
+                                <div class="flex-between mb-2">
+                                    <div>
+                                        <h3 class="font-bold text-lg">Current Month Overview</h3>
+                                        <p class="text-xs text-muted" id="dash-title-txt">March 2026 Summary</p>
+                                    </div>
+                                    <div class="filter-controls">
+                                        <select id="dash-filter-type" class="date-input" style="min-width: 100px;">
+                                            <option value="this_month" selected>This Month</option>
+                                            <option value="custom_date">Custom Date</option>
+                                        </select>
+                                        <div id="custom-date-range" class="hidden" style="display:flex; gap:5px; align-items:center;">
+                                            <input type="date" id="dash-filter-from" class="date-input">
+                                            <input type="date" id="dash-filter-to" class="date-input">
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="kpi-3-col">
+                                    <!-- Company A -->
+                                    <div class="kpi-box box-a">
+                                        <div class="kpi-box-header"><span class="dot dot-a"></span> Company A</div>
+                                        <div class="kpi-box-row"><span>Meesho</span><span class="val-pill" id="dash-c1-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Flipkart</span><span class="val-pill" id="dash-c1-flipkart">0</span></div>
+                                        <div class="kpi-box-row total-row"><span>Total</span><span class="val-total text-a" id="dash-c1-total">0</span></div>
+                                    </div>
+                                    <!-- Company B -->
+                                    <div class="kpi-box box-b">
+                                        <div class="kpi-box-header"><span class="dot dot-b"></span> Company B</div>
+                                        <div class="kpi-box-row"><span>Meesho</span><span class="val-pill" id="dash-c2-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Flipkart</span><span class="val-pill" id="dash-c2-flipkart">0</span></div>
+                                        <div class="kpi-box-row total-row"><span>Total</span><span class="val-total text-b" id="dash-c2-total">0</span></div>
+                                    </div>
+                                    <!-- Combined -->
+                                    <div class="kpi-box box-combined">
+                                        <div class="kpi-box-header"><i class='bx bx-bar-chart text-muted'></i> Combined Total</div>
+                                        <div class="kpi-box-row"><span>Meesho</span><span class="val-text" id="dash-combined-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Flipkart</span><span class="val-text" id="dash-combined-flipkart">0</span></div>
+                                        <div class="kpi-box-row total-row border-top"><span>Grand Total</span><span class="val-total text-primary" id="dash-combined-total">0</span></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Company Comparison Card -->
+                            <div class="card mb-2" id="comparison-card">
+                                <h3 class="font-bold text-lg mb-2 mt-1">Company Comparison</h3>
+                                <div class="comparison-grid" id="comparison-grid">
+                                    <!-- JS injects lines -->
+                                </div>
+                            </div>
+
+                            <!-- Account-wise Totals -->
+                            <div class="card mb-2">
+                                <div class="flex-between mb-2">
+                                    <h3 class="font-bold text-lg">Account-wise Totals</h3>
+                                    <div class="flex gap-2">
+                                        <span class="badge badge-a">Company A</span>
+                                        <span class="badge badge-b">Company B</span>
+                                    </div>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table account-table">
+                                        <thead><tr><th style="width: 33%">Account Name</th><th class="text-center">Company</th><th class="text-right">Meesho</th><th class="text-right">Flipkart</th><th class="text-right text-main font-bold">Total</th></tr></thead>
+                                        <tbody id="dash-account-totals"></tbody>
+                                    </table>
+                                </div>
                             </div>
                         </div>
-                        <div class="card kpi-card">
-                            <i class='bx bx-cart kpi-icon flipkart'></i>
-                            <div class="kpi-info">
-                                <p>Total Flipkart</p>
-                                <h3 id="dash-flipkart-total">0</h3>
+
+                        <!-- RIGHT COLUMN -->
+                        <div class="dash-right">
+                            <!-- High Low -->
+                            <div class="high-low-grid mb-2" id="high-low-container">
+                                <!-- JS -->
                             </div>
-                        </div>
-                        <div class="card kpi-card">
-                            <i class='bx bx-bar-chart-alt-2 kpi-icon total'></i>
-                            <div class="kpi-info">
-                                <p>Overall Total</p>
-                                <h3 id="dash-overall-total">0</h3>
+
+                            <!-- Heatmap -->
+                            <div class="card mb-2">
+                                <div class="flex-between mb-1">
+                                    <h3 class="font-bold text-md" id="heatmap-month-label">March 2026</h3>
+                                    <span class="text-xs text-muted">Order Heatmap</span>
+                                </div>
+                                <div class="flex-center mb-2 gap-2">
+                                    <button type="button" class="btn btn-outline btn-icon-sm" id="heatmap-prev"><i class='bx bx-chevron-left'></i></button>
+                                    <button type="button" class="btn btn-outline btn-icon-sm" id="heatmap-next"><i class='bx bx-chevron-right'></i></button>
+                                </div>
+                                <div class="heatmap-weekdays">
+                                    <span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span>
+                                </div>
+                                <div class="heatmap-grid" id="heatmap-grid"></div>
+                                <div id="heatmap-details" class="date-details-box hidden">
+                                </div>
+                            </div>
+
+                            <!-- Top Accounts -->
+                            <div class="card mb-2">
+                                <div class="flex-between mb-2 pb-2" style="border-bottom: 1px solid var(--border-color);">
+                                    <h3 class="font-bold text-md flex items-center gap-2"><i class='bx bxs-trophy text-amber'></i> Account Ranking</h3>
+                                    <span class="text-xs text-muted">By Volume</span>
+                                </div>
+                                <div class="ranking-list-container custom-scrollbar pr-1" style="max-height: 400px; overflow-y: auto;">
+                                    <div class="ranking-list" id="ranking-tbody">
+                                        <!-- JS -->
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Inactive -->
+                            <div class="card mb-2" id="inactive-card-container">
+                                <div class="flex-between mb-2">
+                                    <h3 class="font-bold text-sm text-danger flex items-center gap-2"><i class='bx bxs-error-circle'></i> Inactive Accounts (<span id="inactive-count">0</span>)</h3>
+                                </div>
+                                <div class="inactive-list custom-scrollbar max-h-60 pr-1" id="inactive-alerts-container">
+                                    <!-- JS -->
+                                </div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="grid-2-col mt-2">
-                        <div class="card">
-                            <h4 class="card-title mb-1">Account-wise Totals</h4>
-                            <div class="table-responsive">
-                                <table class="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Account</th>
-                                            <th>Meesho</th>
-                                            <th>Flipkart</th>
-                                            <th>Total</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="dash-account-totals">
-                                        <!-- populated dynamically -->
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <div class="card">
-                            <h4 class="card-title mb-1">Recent Daily Records</h4>
-                            <div class="table-responsive">
-                                <table class="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Date</th>
-                                            <th>Account</th>
-                                            <th>Total Orders</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="dash-recent-records">
-                                        <!-- populated dynamically -->
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
                 </section>
 
-                <!-- Daily Order Section -->
+                <!-- ========== DAILY ORDER ========== -->
                 <section id="daily-order" class="content-section">
-                    <div class="card max-w-800 mx-auto">
-                        <div class="card-header flex-between">
-                            <h3 class="card-title">Enter Daily Orders</h3>
-                            <input type="date" id="order-date" class="date-input" readonly>
+                    <div class="card mx-auto" style="max-width: 800px;">
+                        <div class="flex-between mb-2">
+                            <div>
+                                <h3 class="font-bold text-xl">Enter Daily Orders</h3>
+                                <p class="text-sm text-primary font-bold mt-1" id="order-date-label">Loading date...</p>
+                                <p class="text-xs text-muted mt-1" id="order-company-label">Selected Company: Company 1</p>
+                            </div>
+                            <input type="date" id="order-date" class="date-input" style="font-weight: 600; padding: 0.5rem 1rem;">
                         </div>
-                        <p class="text-muted mb-2">Fill the orders for all active accounts to submit today's record.</p>
+                        <p class="text-muted text-sm mb-2">Fill the orders for all active accounts to submit this day's record.</p>
 
-                        <!-- Already Submitted Alert -->
-                        <div id="already-submitted-alert" class="alert alert-success hidden mb-2" style="cursor: pointer;">
+                        <div id="already-submitted-alert" class="hidden mb-2" style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:15px; cursor:pointer;">
                             <div class="flex-between">
                                 <div>
-                                    <strong style="font-size: 1.1rem;"><i class='bx bx-check-circle'></i> Orders Already Submitted</strong>
-                                    <p class="mt-1" style="font-size: 0.95rem; opacity: 0.9;">Total <span id="submitted-grand-total" style="font-weight:bold;">0</span> orders added for this date.</p>
+                                    <div class="font-bold text-primary flex items-center gap-2"><i class='bx bxs-check-circle'></i> Orders Already Submitted</div>
+                                    <div class="text-sm text-muted mt-1">Total <strong class="text-main" id="submitted-grand-total">0</strong> orders added for this date.</div>
                                 </div>
-                                <div style="text-align: right; min-width: max-content;">
-                                    <span class="btn btn-outline" style="background: white;">Tap to view details <i class='bx bx-right-arrow-alt'></i></span>
+                                <div>
+                                    <span class="btn btn-outline btn-sm bg-white">View Details <i class='bx bx-right-arrow-alt'></i></span>
                                 </div>
                             </div>
                         </div>
 
                         <div id="order-form-container">
-                            <div class="table-responsive mb-2">
+                            <div class="table-responsive mb-2" style="max-height: 50vh; overflow-y: auto;">
                                 <table class="table order-entry-table">
-                                    <thead>
-                                        <tr>
-                                            <th width="40"></th>
-                                            <th width="30">#</th>
-                                            <th>Account Name</th>
-                                            <th width="120">Meesho</th>
-                                            <th width="120">Flipkart</th>
-                                            <th width="120">Total</th>
-                                        </tr>
+                                    <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 10;">
+                                        <tr><th width="40"></th><th width="30" class="text-center">#</th><th>Account Name</th><th width="120" class="text-right">Meesho</th><th width="120" class="text-right">Flipkart</th><th width="120" class="text-right">Total</th></tr>
                                     </thead>
-                                    <tbody id="daily-order-tbody">
-                                        <!-- populated dynamically -->
-                                    </tbody>
-                                    <tfoot>
-                                        <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold; border-top: 2px solid var(--border-color);">
-                                            <td colspan="3">Grand Total</td>
-                                            <td id="table-grand-meesho" style="text-align: right; font-size: 1.1rem;">0</td>
-                                            <td id="table-grand-flipkart" style="text-align: right; font-size: 1.1rem;">0</td>
-                                            <td id="table-grand-total" style="text-align: right; font-size: 1.2rem; color: var(--primary);">0</td>
-                                        </tr>
-                                    </tfoot>
+                                    <tbody id="daily-order-tbody"></tbody>
                                 </table>
+                            </div>
+                            <div style="background:var(--bg-main); padding:1rem; border-radius:8px; margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center; border:1px solid var(--border-color);">
+                                <span class="font-bold text-muted text-sm uppercase">Grand Total</span>
+                                <div style="display:flex; gap:2rem;">
+                                    <div class="text-right"><span class="text-xs text-muted block">Meesho</span><strong id="table-grand-meesho" class="text-main">0</strong></div>
+                                    <div class="text-right"><span class="text-xs text-muted block">Flipkart</span><strong id="table-grand-flipkart" class="text-main">0</strong></div>
+                                    <div class="text-right"><span class="text-xs text-muted block">Total</span><strong id="table-grand-total" class="text-primary text-xl">0</strong></div>
+                                </div>
                             </div>
                             <button id="submit-orders-btn" class="btn btn-primary w-100 btn-lg">Submit All Orders</button>
                         </div>
                         
-                        <div id="no-accounts-msg" class="hidden text-center p-3 text-muted">
-                            <i class='bx bx-user-x bx-md'></i>
-                            <p>No accounts found. Please add accounts first.</p>
-                            <button class="btn btn-outline mt-1" onclick="window.app.navigateTo('add-account')">Go to Add Account</button>
+                        <div id="no-accounts-msg" class="hidden text-center p-4 text-muted">
+                            <i class='bx bx-user-x' style="font-size: 3rem; margin-bottom: 1rem; color: #cbd5e1;"></i>
+                            <p class="font-medium text-main">No accounts found.</p>
+                            <p class="text-sm mt-1 mb-2">Please add vendor accounts tracking.</p>
+                            <button class="btn btn-outline" onclick="window.app.navigateTo('add-account')">Go to Manage Accounts</button>
                         </div>
                     </div>
                 </section>
 
-                <!-- Add Account Section -->
+                <!-- ========== MANAGE ACCOUNTS ========== -->
                 <section id="add-account" class="content-section">
-                    <div class="card max-w-500 mx-auto">
-                        <div class="card-header">
-                            <h3 class="card-title">Add New Account</h3>
-                        </div>
-                        <p class="text-muted mb-2">Add vendor or business accounts to track their orders.</p>
-                        
+                    <div class="card mx-auto" style="max-width: 500px;">
+                        <h3 class="font-bold text-xl mb-1">Add New Account</h3>
+                        <p class="text-muted text-sm mb-2">Track their daily orders.</p>
                         <form id="add-account-form">
                             <div class="input-group">
                                 <label>Account Name</label>
-                                <input type="text" id="new-account-name" placeholder="e.g. Anandi Fashion" required>
+                                <input type="text" id="new-account-name" placeholder="e.g. Yagni Fashion" required>
                             </div>
                             <button type="submit" id="add-account-btn" class="btn btn-primary w-100">Add Account</button>
                         </form>
-
-                        <hr class="my-2">
-                        
-                        <h4 class="mb-1">Active Accounts</h4>
-                        <div class="account-list" id="active-account-list">
-                            <!-- populated dynamically -->
-                        </div>
+                        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 2rem 0;">
+                        <h4 class="font-bold text-md mb-2">Active Accounts</h4>
+                        <div class="account-list" id="active-account-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
                     </div>
                 </section>
 
@@ -249,46 +294,67 @@
     </div>
 
     <!-- Order Details Modal -->
-    <div id="order-details-modal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div>
-                    <h3 style="margin-bottom: 0.2rem;">Date Details</h3>
-                    <p id="modal-date" class="text-muted" style="margin: 0;"></p>
-                </div>
-                <span id="close-modal-btn" class="close-modal">&times;</span>
+    <div id="order-details-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:90%;max-width:600px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);transform:translateY(20px);transition:all 0.2s;max-height:90vh;display:flex;flex-direction:column;">
+            <div class="flex-between mb-2">
+                <div><h3 class="font-bold text-lg">Date Details</h3><p id="modal-date" class="text-xs text-muted"></p></div>
+                <button id="close-modal-btn" class="btn-icon"><i class='bx bx-x'></i></button>
             </div>
-            <div class="modal-body">
-                <div class="table-responsive">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Account</th>
-                                <th style="text-align: right;">Meesho</th>
-                                <th style="text-align: right;">Flipkart</th>
-                                <th style="text-align: right;">Total</th>
-                            </tr>
-                        </thead>
-                        <tbody id="modal-details-tbody">
-                            <!-- Populated dynamically -->
-                        </tbody>
-                        <tfoot>
-                            <tr style="background: rgba(74, 108, 247, 0.05); font-weight: bold;">
-                                <td>Grand Total</td>
-                                <td id="modal-grand-meesho" style="text-align: right;">0</td>
-                                <td id="modal-grand-flipkart" style="text-align: right;">0</td>
-                                <td id="modal-grand-total" style="text-align: right; color: var(--primary);">0</td>
-                            </tr>
-                        </tfoot>
-                    </table>
+            <div style="overflow-y:auto;">
+                <table class="table" style="width:100%;">
+                    <thead><tr><th class="text-left">Account</th><th class="text-right">Meesho</th><th class="text-right">Flipkart</th><th class="text-right">Total</th></tr></thead>
+                    <tbody id="modal-details-tbody"></tbody>
+                    <tfoot>
+                        <tr style="background:#f8fafc;">
+                            <td class="font-bold text-sm">Grand Total</td>
+                            <td id="modal-grand-meesho" class="text-right font-bold text-sm">0</td>
+                            <td id="modal-grand-flipkart" class="text-right font-bold text-sm">0</td>
+                            <td id="modal-grand-total" class="text-right font-bold text-primary text-md">0</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <style>
+        .modal.show { opacity:1 !important; pointer-events:auto !important; }
+        .modal.show .modal-content { transform:translateY(0) !important; }
+    </style>
+
+    <!-- Edit Account Modal -->
+    <div id="edit-account-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:90%;max-width:400px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
+            <div class="flex-between mb-2">
+                <h3 class="font-bold text-lg">Edit Account</h3>
+                <button id="close-edit-modal-btn" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <form id="edit-account-form">
+                <div class="input-group">
+                    <label>Account Name</label>
+                    <input type="text" id="edit-account-name" required>
+                    <input type="hidden" id="edit-account-old-name">
                 </div>
+                <button type="submit" class="btn btn-primary w-100">Save Changes</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirm Modal -->
+    <div id="delete-account-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content text-center" style="background:white;width:90%;max-width:400px;border-radius:12px;padding:30px 20px;">
+            <i class='bx bxs-error-circle text-danger' style="font-size: 4rem; margin-bottom: 1rem;"></i>
+            <h3 class="font-bold text-xl mb-1">Delete Account?</h3>
+            <p class="text-sm text-muted mb-2">Are you sure you want to delete <strong class="text-main" id="delete-account-name-display"></strong></p>
+            <input type="hidden" id="delete-account-name">
+            <div class="flex gap-2 w-100" style="display:flex; gap:10px;">
+                <button class="btn btn-outline w-100" id="cancel-delete-btn" style="flex:1;">Cancel</button>
+                <button class="btn btn-danger w-100" id="confirm-delete-btn" style="flex:1;">Delete</button>
             </div>
         </div>
     </div>
 
-    <!-- SortableJS for drag-and-drop -->
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
-    <!-- Application Script -->
     <script src="app.js"></script>
 </body>
 </html>

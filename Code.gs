@@ -1,4 +1,4 @@
-// KRIMAA ORDER MANAGEMENT v3.0 - MULTI-COMPANY SUPPORT
+// KRIMAA ORDER MANAGEMENT v4.0 - MULTI-COMPANY + EDIT/DELETE ACCOUNTS
 var SCRIPT_NAME = "Order Management API";
 
 // Company configuration - define your companies here
@@ -7,8 +7,26 @@ var COMPANIES = {
   'company2': { name: 'Company 2', accountsSheet: 'Accounts_C2', ordersSheet: 'Orders_C2' }
 };
 
+function normalizeCompanyId(companyId) {
+  var raw = (companyId || 'company1').toString().trim().toLowerCase();
+  var alias = {
+    'company 1': 'company1',
+    'comp 1': 'company1',
+    'c1': 'company1',
+    '1': 'company1',
+    'company 2': 'company2',
+    'comp 2': 'company2',
+    'c2': 'company2',
+    '2': 'company2'
+  };
+  var normalized = alias[raw] || raw;
+  if (!COMPANIES[normalized]) return 'company1';
+  return normalized;
+}
+
 // Function to automatically create the required Google Sheets if missing
 function setupSheets(companyId) {
+  companyId = normalizeCompanyId(companyId);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var company = COMPANIES[companyId];
   if (!company) {
@@ -103,10 +121,15 @@ function doPost(e) {
     }
     
     var action = data ? data.action : null;
-    var companyId = data ? (data.companyId || 'company1') : 'company1';
+    var companyId = normalizeCompanyId(data ? data.companyId : 'company1');
+    setupSheets(companyId);
     
     if (action === 'addAccount') {
       return output.setContent(JSON.stringify(addAccount(data.accountName, companyId)));
+    } else if (action === 'editAccount') {
+      return output.setContent(JSON.stringify(editAccount(data.oldName, data.newName, companyId)));
+    } else if (action === 'deleteAccount') {
+      return output.setContent(JSON.stringify(deleteAccount(data.accountName, companyId)));
     } else if (action === 'submitOrders') {
       return output.setContent(JSON.stringify(submitOrders(data.date, data.orders, companyId)));
     } else if (action === 'getAccounts') {
@@ -132,7 +155,7 @@ function doGet(e) {
   
   try {
     var action = e.parameter.action;
-    var companyId = e.parameter.companyId || 'company1';
+    var companyId = normalizeCompanyId(e.parameter.companyId || 'company1');
     
     setupSheets(companyId);
     
@@ -161,6 +184,7 @@ function getCompaniesInfo() {
 
 // Logic to add a new account to the sheet
 function addAccount(accountName, companyId) {
+  companyId = normalizeCompanyId(companyId);
   if (!accountName || accountName.trim() === '') {
     return {success: false, message: 'Account name cannot be empty'};
   }
@@ -185,8 +209,109 @@ function addAccount(accountName, companyId) {
   return {success: true, message: 'Account added successfully'};
 }
 
+// Logic to edit an existing account name
+function editAccount(oldName, newName, companyId) {
+  companyId = normalizeCompanyId(companyId);
+  if (!oldName || !newName || newName.trim() === '') {
+    return {success: false, message: 'Account name cannot be empty'};
+  }
+  
+  oldName = oldName.trim();
+  newName = newName.trim();
+  
+  if (oldName.toLowerCase() === newName.toLowerCase()) {
+    // Same name but possibly different case, allow it
+  }
+  
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets(companyId);
+  var company = COMPANIES[companyId] || COMPANIES['company1'];
+  
+  // Update in Accounts sheet
+  var accountsSheet = ss.getSheetByName(company.accountsSheet);
+  var accData = accountsSheet.getDataRange().getValues();
+  var startIdx = (accData[0][0] === 'Account Name') ? 1 : 0;
+  
+  // Check if new name already exists (different from old)
+  if (oldName.toLowerCase() !== newName.toLowerCase()) {
+    for (var i = startIdx; i < accData.length; i++) {
+      if (accData[i][0].toString().trim().toLowerCase() === newName.toLowerCase()) {
+        return {success: false, message: 'Account name already exists'};
+      }
+    }
+  }
+  
+  var accountFound = false;
+  for (var i = startIdx; i < accData.length; i++) {
+    if (accData[i][0].toString().trim() === oldName) {
+      accountsSheet.getRange(i + 1, 1).setValue(newName);
+      accountFound = true;
+      break;
+    }
+  }
+  
+  if (!accountFound) {
+    return {success: false, message: 'Account not found'};
+  }
+  
+  // Also update account name in Orders sheet
+  var ordersSheet = ss.getSheetByName(company.ordersSheet);
+  if (ordersSheet) {
+    var ordData = ordersSheet.getDataRange().getValues();
+    var ordStartIdx = 0;
+    if (ordData.length > 0 && (ordData[0][0] === 'Date' || ordData[0][0] === 'Date / તારીખ')) {
+      ordStartIdx = 1;
+    }
+    
+    for (var j = ordStartIdx; j < ordData.length; j++) {
+      if (ordData[j][1] && ordData[j][1].toString().trim() === oldName) {
+        ordersSheet.getRange(j + 1, 2).setValue(newName);
+      }
+    }
+  }
+  
+  return {success: true, message: 'Account updated successfully'};
+}
+
+// Logic to delete an account
+function deleteAccount(accountName, companyId) {
+  companyId = normalizeCompanyId(companyId);
+  if (!accountName || accountName.trim() === '') {
+    return {success: false, message: 'Account name cannot be empty'};
+  }
+  
+  accountName = accountName.trim();
+  
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets(companyId);
+  var company = COMPANIES[companyId] || COMPANIES['company1'];
+  
+  // Delete from Accounts sheet
+  var accountsSheet = ss.getSheetByName(company.accountsSheet);
+  var accData = accountsSheet.getDataRange().getValues();
+  var startIdx = (accData[0][0] === 'Account Name') ? 1 : 0;
+  
+  var rowToDelete = -1;
+  for (var i = startIdx; i < accData.length; i++) {
+    if (accData[i][0].toString().trim() === accountName) {
+      rowToDelete = i + 1; // 1-indexed for sheet
+      break;
+    }
+  }
+  
+  if (rowToDelete === -1) {
+    return {success: false, message: 'Account not found'};
+  }
+  
+  accountsSheet.deleteRow(rowToDelete);
+  
+  return {success: true, message: 'Account deleted successfully'};
+}
+
 // Logic to get all accounts from the sheet (sorted by Position column)
 function getAccounts(companyId) {
+  companyId = normalizeCompanyId(companyId);
+  setupSheets(companyId);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var company = COMPANIES[companyId] || COMPANIES['company1'];
   var sheet = ss.getSheetByName(company.accountsSheet);
@@ -214,6 +339,7 @@ function getAccounts(companyId) {
 
 // Logic to update account order/position in the sheet
 function updateAccountOrder(orderedAccounts, companyId) {
+  companyId = normalizeCompanyId(companyId);
   if (!orderedAccounts || orderedAccounts.length === 0) {
     return {success: false, message: 'No accounts provided'};
   }
@@ -239,6 +365,7 @@ function updateAccountOrder(orderedAccounts, companyId) {
 
 // Logic to submit daily orders
 function submitOrders(dateStr, orders, companyId) {
+  companyId = normalizeCompanyId(companyId);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   setupSheets(companyId);
   var company = COMPANIES[companyId] || COMPANIES['company1'];
@@ -265,6 +392,8 @@ function submitOrders(dateStr, orders, companyId) {
 
 // Logic to load all order data for the dashboard
 function getDashboardData(companyId) {
+  companyId = normalizeCompanyId(companyId);
+  setupSheets(companyId);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var company = COMPANIES[companyId] || COMPANIES['company1'];
   var sheet = ss.getSheetByName(company.ordersSheet);
