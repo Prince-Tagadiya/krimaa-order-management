@@ -170,9 +170,6 @@ function initApp() {
     attachEventListeners();
     initSyncIndicator();
 
-    // Backup button
-    const backupBtn = document.getElementById('backup-btn');
-    if (backupBtn) backupBtn.addEventListener('click', backupToSheets);
 
     const today = getTodayISODate();
     setOrderDateDefaults(true);
@@ -1548,8 +1545,6 @@ async function _doFirebaseSeed() {
 
 // ===== BACKUP TO SHEETS =====
 async function backupToSheets() {
-    const btn = document.getElementById('backup-btn');
-    if (btn) { btn.disabled = true; btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Backing up…"; }
     showToast('Starting backup to Google Sheets…', 'info');
     
     try {
@@ -1604,7 +1599,7 @@ async function backupToSheets() {
         console.error('Backup error:', e);
         showToast('Backup failed: ' + e.message, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.innerHTML = "<i class='bx bx-cloud-upload'></i> Backup to Sheets"; }
+        // no-op
     }
 }
 
@@ -2566,5 +2561,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const backupExportBtn = document.getElementById('money-backup-export-btn');
     if (backupExportBtn) {
         backupExportBtn.addEventListener('click', exportMoneyBackupToExcel);
+    }
+    
+    const backupDeleteBtn = document.getElementById('money-backup-delete-btn');
+    if (backupDeleteBtn) {
+        backupDeleteBtn.addEventListener('click', async () => {
+            const backupId = AppState.selectedMoneyBackupId;
+            if (!backupId) {
+                showToast('Please select a backup to delete', 'error');
+                return;
+            }
+            if (confirm('Are you sure you want to permanently delete this backup?')) {
+                showToast('Deleting backup...', 'info');
+                try {
+                    const res = await FirebaseService.deleteMoneyBackup(backupId);
+                    if (res.success) {
+                        AppState.moneyBackups = AppState.moneyBackups.filter(b => b.id !== backupId);
+                        AppState.selectedMoneyBackupId = '';
+                        await loadMoneyBackups(true); // force reload from server
+                        renderMoneyBackupPage();
+                        showToast('Backup deleted successfully', 'success');
+                    } else {
+                        showToast(res.message || 'Failed to delete backup', 'error');
+                    }
+                } catch (e) {
+                    showToast('Error deleting backup: ' + e.message, 'error');
+                }
+            }
+        });
     }
 });

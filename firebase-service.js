@@ -453,11 +453,18 @@ const FirebaseService = (() => {
 
     function getPendingCount() { return _pendingWrites.size; }
 
+    async function deleteMoneyBackup(backupId) {
+        init();
+        if (!backupId) return { success: false, message: 'No backup ID provided' };
+        await db.collection('money_backups').doc(backupId).delete();
+        return { success: true, message: 'Money backup deleted successfully' };
+    }
+
     // ───── PUBLIC API ─────
     return {
         init, getDb,
         // Accounts
-        getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney, createMoneyBackup, getMoneyBackups,
+        getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney, createMoneyBackup, getMoneyBackups, deleteMoneyBackup,
         // Orders
         getOrders, submitOrders, updateOrder,
         // Remarks
