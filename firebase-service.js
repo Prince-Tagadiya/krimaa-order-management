@@ -281,15 +281,13 @@ const FirebaseService = (() => {
     async function getOrders(companyId, monthStr) {
         init();
         let query = db.collection('orders').where('companyId', '==', companyId);
-        if (monthStr) {
-            // Filter to a specific month e.g. "2026-03"
-            query = query.where('date', '>=', monthStr + '-01')
-                         .where('date', '<=', monthStr + '-31');
-        }
         const snap = await query.get();
         const records = [];
         snap.forEach(doc => {
             const d = doc.data();
+            // Filter in memory: checks if date exists and starts with monthStr (e.g. "2026-03")
+            if (monthStr && d.date && !d.date.startsWith(monthStr)) return;
+            
             records.push({
                 date: d.date,
                 accountName: d.accountName,
