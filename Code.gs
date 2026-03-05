@@ -7,6 +7,7 @@ var COMPANIES = {
   'company2': { name: 'Company 2', accountsSheet: 'Accounts_C2', ordersSheet: 'Orders_C2' }
 };
 var REMARKS_SHEET = 'Remarks';
+var MONEY_BACKUP_SHEET = 'Money_Backups';
 var _sheetsInitialised = {};
 
 function normalizeCompanyId(companyId) {
@@ -42,6 +43,7 @@ function setupSheets(companyId) {
   }
   setupSheetsForCompany(ss, company);
   setupRemarksSheet(ss);
+  setupMoneyBackupSheet(ss);
   _sheetsInitialised[companyId] = true;
 }
 
@@ -51,6 +53,16 @@ function setupRemarksSheet(ss) {
     sheet = ss.insertSheet(REMARKS_SHEET);
     sheet.appendRow(['Date', 'Remark', 'Updated']);
     sheet.getRange('A1:C1').setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+}
+
+function setupMoneyBackupSheet(ss) {
+  var sheet = ss.getSheetByName(MONEY_BACKUP_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(MONEY_BACKUP_SHEET);
+    sheet.appendRow(['Backup Date', 'Company Id', 'Company Name', 'Account Name', 'Money', 'Expense', 'Balance', 'Reason', 'Saved At']);
+    sheet.getRange('A1:I1').setFontWeight('bold');
     sheet.setFrozenRows(1);
   }
 }
@@ -151,7 +163,9 @@ function doPost(e) {
     } else if (action === 'getAccounts') {
       return output.setContent(JSON.stringify(getAccounts(companyId)));
     } else if (action === 'getDashboardData') {
-      return output.setContent(JSON.stringify(getDashboardData(companyId)));
+      return output.setContent(JSON.stringify(getDashboardData(companyId, data.month)));
+    } else if (action === 'getAvailableOrderMonths') {
+      return output.setContent(JSON.stringify(getAvailableOrderMonths(companyId)));
     } else if (action === 'updateAccountOrder') {
       return output.setContent(JSON.stringify(updateAccountOrder(data.orderedAccounts, companyId)));
     } else if (action === 'getCompanies') {
@@ -163,13 +177,54 @@ function doPost(e) {
     } else if (action === 'updateOrder') {
       return output.setContent(JSON.stringify(updateSingleOrder(data.date, data.accountName, data.field, data.value, companyId)));
     } else if (action === 'bulkBackup') {
-      return output.setContent(JSON.stringify(bulkBackup(data.orders, data.accounts, companyId)));
+      return output.setContent(JSON.stringify(bulkBackup(data.orders, data.accounts, companyId, data.append, data.clearMonth)));
+    } else if (action === 'saveMoneyBackup') {
+      return output.setContent(JSON.stringify(saveMoneyBackup(data.date, data.rows, data.reason)));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid action: ' + action}));
   } catch(error) {
     return output.setContent(JSON.stringify({success: false, message: error.toString()}));
   }
+}
+
+function saveMoneyBackup(backupDate, rows, reason) {
+  setupSheets('company1');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(MONEY_BACKUP_SHEET);
+  if (!sheet) {
+    setupMoneyBackupSheet(ss);
+    sheet = ss.getSheetByName(MONEY_BACKUP_SHEET);
+  }
+
+  if (!rows || !rows.length) {
+    return { success: false, message: 'No backup rows provided' };
+  }
+
+  var nowTs = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
+  var safeDate = backupDate || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  var safeReason = reason || 'manual';
+
+  var values = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i] || {};
+    var money = parseInt(row.money, 10) || 0;
+    var expense = parseInt(row.expense, 10) || 0;
+    values.push([
+      safeDate,
+      row.companyId || '',
+      row.companyName || '',
+      row.accountName || '',
+      money,
+      expense,
+      money - expense,
+      safeReason,
+      nowTs
+    ]);
+  }
+
+  sheet.getRange(sheet.getLastRow() + 1, 1, values.length, values[0].length).setValues(values);
+  return { success: true, message: 'Money backup saved to sheet', rows: values.length, sheet: MONEY_BACKUP_SHEET };
 }
 
 // Handle all GET requests
@@ -186,11 +241,15 @@ function doGet(e) {
     if (action === 'getAccounts') {
       return output.setContent(JSON.stringify(getAccounts(companyId)));
     } else if (action === 'getDashboardData') {
-      return output.setContent(JSON.stringify(getDashboardData(companyId)));
+      return output.setContent(JSON.stringify(getDashboardData(companyId, e.parameter.month)));
+    } else if (action === 'getAvailableOrderMonths') {
+      return output.setContent(JSON.stringify(getAvailableOrderMonths(companyId)));
     } else if (action === 'getCompanies') {
       return output.setContent(JSON.stringify(getCompaniesInfo()));
     } else if (action === 'getRemarks') {
       return output.setContent(JSON.stringify(getRemarks()));
+    } else if (action === 'getAvailableOrderMonths') {
+      return output.setContent(JSON.stringify(getAvailableOrderMonths(companyId)));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid GET action'}));
@@ -416,8 +475,8 @@ function submitOrders(dateStr, orders, companyId) {
   return {success: true, message: 'Orders submitted successfully'};
 }
 
-// Logic to load all order data for the dashboard
-function getDashboardData(companyId) {
+// Logic to load order data for the dashboard, optionally filtered by month (YYYY-MM)
+function getDashboardData(companyId, monthFilter) {
   companyId = normalizeCompanyId(companyId);
   setupSheets(companyId);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -453,7 +512,40 @@ function getDashboardData(companyId) {
       total: data[i][4]
     });
   }
+  
+  if (monthFilter && monthFilter.length === 7) {
+    records = records.filter(function(r) {
+      return r.date.substring(0, 7) === monthFilter;
+    });
+  }
+  
   return {success: true, data: records};
+}
+
+function getAvailableOrderMonths(companyId) {
+  companyId = normalizeCompanyId(companyId);
+  setupSheets(companyId);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var company = COMPANIES[companyId] || COMPANIES['company1'];
+  var sheet = ss.getSheetByName(company.ordersSheet);
+  if (!sheet) return {success: true, data: []};
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return {success: true, data: []};
+  
+  var data = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var months = new Set();
+  for (var i = 0; i < data.length; i++) {
+    var rawDate = data[i][0];
+    if (rawDate instanceof Date) {
+      months.add(Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "yyyy-MM"));
+    } else if (typeof rawDate === 'string' && rawDate.length >= 7) {
+      months.add(rawDate.substring(0, 7));
+    }
+  }
+  
+  var sorted = Array.from(months).sort().reverse();
+  return {success: true, data: sorted};
 }
 
 // ===== REMARKS =====
@@ -538,7 +630,7 @@ function updateSingleOrder(dateStr, accountName, field, value, companyId) {
 }
 
 // ===== BULK BACKUP (receives Firebase data and writes to Sheets) =====
-function bulkBackup(orders, accounts, companyId) {
+function bulkBackup(orders, accounts, companyId, appendOnly, clearMonth) {
   companyId = normalizeCompanyId(companyId);
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   setupSheets(companyId);
@@ -547,11 +639,31 @@ function bulkBackup(orders, accounts, companyId) {
   // --- Backup Orders ---
   if (orders && orders.length > 0) {
     var ordersSheet = ss.getSheetByName(company.ordersSheet);
-    // Clear existing data (keep header)
-    var lastRow = ordersSheet.getLastRow();
-    if (lastRow > 1) {
-      ordersSheet.getRange(2, 1, lastRow - 1, 5).clearContent();
+    
+    // Clear logic
+    if (clearMonth && clearMonth.length === 7) {
+      // Delete rows for specific month
+      var data = ordersSheet.getDataRange().getValues();
+      for (var i = data.length - 1; i >= 1; i--) {
+        var rowDate = data[i][0];
+        var rowMonth = "";
+        if (rowDate instanceof Date) {
+          rowMonth = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "yyyy-MM");
+        } else if (typeof rowDate === 'string' && rowDate.length >= 7) {
+          rowMonth = rowDate.substring(0, 7);
+        }
+        if (rowMonth === clearMonth) {
+          ordersSheet.deleteRow(i + 1);
+        }
+      }
+    } else if (!appendOnly) {
+      // Full clear
+      var lastRow = ordersSheet.getLastRow();
+      if (lastRow > 1) {
+        ordersSheet.getRange(2, 1, lastRow - 1, 5).clearContent();
+      }
     }
+    
     // Write new data
     var rows = [];
     for (var i = 0; i < orders.length; i++) {
@@ -565,7 +677,8 @@ function bulkBackup(orders, accounts, companyId) {
       ]);
     }
     if (rows.length > 0) {
-      ordersSheet.getRange(2, 1, rows.length, 5).setValues(rows);
+      var startRow = ordersSheet.getLastRow() + 1;
+      ordersSheet.getRange(startRow, 1, rows.length, 5).setValues(rows);
     }
   }
   

@@ -16,6 +16,10 @@ const AppState = {
     company2Details: [],
     company1Data: [],
     company2Data: [],
+    availableSheetMonths: [],
+    sheetArchiveCache: {},
+    moneyBackups: [],
+    selectedMoneyBackupId: '',
     currentSection: 'data-sheet',
     currentCompany: 'company1',
     currentUser: null, // { username, role, displayName }
@@ -257,7 +261,7 @@ async function switchCompany(previousCompany = '') {
         AppState.dashboardData = [];
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
         try {
-            await fetchAllCompaniesData();
+            await fetchAllCompaniesData({ refreshArchiveMonths: true });
         } catch (e) {
             console.warn('Non-blocking: failed to refresh all-company dashboard data', e);
         }
@@ -270,6 +274,7 @@ async function switchCompany(previousCompany = '') {
         }
         else if (AppState.currentSection === 'add-account') renderAccountsList();
         else if (AppState.currentSection === 'money-management') renderMoneyManagement();
+        else if (AppState.currentSection === 'money-backup') renderMoneyBackupPage();
         else if (AppState.currentSection === 'data-sheet') { 
             // Also switch data sheet filter and force re-render
             const cmFilter = document.getElementById('sheet-company-filter');
@@ -328,11 +333,13 @@ function applyRolePermissions() {
         document.getElementById('nav-data-sheet').style.display = 'none';
         document.getElementById('nav-manage-accounts').style.display = 'none';
         document.getElementById('nav-money-management').style.display = 'none';
+        document.getElementById('nav-money-backup').style.display = 'none';
     } else {
         document.getElementById('nav-dashboard').style.display = '';
         document.getElementById('nav-data-sheet').style.display = '';
         document.getElementById('nav-manage-accounts').style.display = '';
         document.getElementById('nav-money-management').style.display = '';
+        document.getElementById('nav-money-backup').style.display = '';
     }
 }
 
@@ -501,7 +508,7 @@ function attachEventListeners() {
 function navigateTo(sectionId) {
     
     // Permission check for order role
-    if (AppState.currentUser?.role === 'order' && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'data-sheet' || sectionId === 'money-management')) {
+    if (AppState.currentUser?.role === 'order' && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'data-sheet' || sectionId === 'money-management' || sectionId === 'money-backup')) {
         showToast("Access denied", "error"); return;
     }
     
@@ -514,6 +521,7 @@ function navigateTo(sectionId) {
         'daily-order': 'Daily Order Entry',
         'add-account': 'Manage Accounts',
         'money-management': 'Money Management',
+        'money-backup': 'Money Backup History',
         'data-sheet': 'Data Sheet'
     };
     document.getElementById('page-title').textContent = titles[sectionId];
@@ -529,9 +537,10 @@ function navigateTo(sectionId) {
     else if (sectionId === 'dashboard') renderDashboard();
     else if (sectionId === 'add-account') renderAccountsList();
     else if (sectionId === 'money-management') renderMoneyManagement();
+    else if (sectionId === 'money-backup') renderMoneyBackupPage();
     else if (sectionId === 'data-sheet') { 
         document.getElementById('sheet-company-filter').value = AppState.currentCompany;
-        populateSheetMonthFilter(); 
+        loadAvailableSheetMonths().then(() => populateSheetMonthFilter());
         renderDataSheet(); 
     }
 }
@@ -546,7 +555,7 @@ async function loadInitialData() {
         
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
         try {
-            await fetchAllCompaniesData();
+            await fetchAllCompaniesData({ refreshArchiveMonths: true });
         } catch (e) {
             console.warn('Non-blocking: failed to preload all-company dashboard data', e);
         }
@@ -557,6 +566,7 @@ async function loadInitialData() {
         if (AppState.currentUser?.role === 'order') {
             navigateTo('daily-order');
         } else {
+            loadAvailableSheetMonths();
             navigateTo('data-sheet');
         }
     } catch (err) { console.error(err); showToast("Error loading data: " + err.message, "error"); }
@@ -580,7 +590,8 @@ async function fetchAccounts() {
 
 async function fetchDashboardData() {
     try {
-        const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany });
+        const currentMonth = getTodayISODate().substring(0, 7);
+        const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany, month: currentMonth });
         if (res && res.success === false) throw new Error(res.message || 'Unable to fetch dashboard data');
         if (Array.isArray(res?.data)) AppState.dashboardData = res.data;
         else if (Array.isArray(res)) AppState.dashboardData = res; // compatibility with legacy shape
@@ -591,7 +602,8 @@ async function fetchDashboardData() {
     }
 }
 
-async function fetchAllCompaniesData() {
+async function fetchAllCompaniesData(options = {}) {
+    const refreshArchiveMonths = !!options.refreshArchiveMonths;
     const toList = (res) => {
         if (!res || (res && res.success === false)) return null;
         if (Array.isArray(res?.data)) return res.data;
@@ -599,11 +611,12 @@ async function fetchAllCompaniesData() {
         return [];
     };
 
+    const currentMonth = getTodayISODate().substring(0, 7);
     const [c1Acc, c2Acc, c1Data, c2Data] = await Promise.all([
         apiRequest({ action: 'getAccounts', companyId: 'company1' }).catch(() => null),
         apiRequest({ action: 'getAccounts', companyId: 'company2' }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(() => null)
+        apiRequest({ action: 'getDashboardData', companyId: 'company1', month: currentMonth }).catch(() => null),
+        apiRequest({ action: 'getDashboardData', companyId: 'company2', month: currentMonth }).catch(() => null)
     ]);
 
     const c1Accounts = toList(c1Acc);
@@ -617,6 +630,14 @@ async function fetchAllCompaniesData() {
     if (c2Acc && c2Acc.details) AppState.company2Details = c2Acc.details;
     if (c1Rows !== null) AppState.company1Data = c1Rows;
     if (c2Rows !== null) AppState.company2Data = c2Rows;
+
+    if (refreshArchiveMonths) {
+        try {
+            await loadAvailableSheetMonths(true);
+        } catch (e) {
+            console.warn('Could not load archive month list from sheets', e);
+        }
+    }
 }
 
 // ===== RENDER FUNCTIONS =====
@@ -1414,7 +1435,7 @@ async function apiRequest(payload) {
     try {
         switch (action) {
             case 'getAccounts': return await FirebaseService.getAccounts(companyId);
-            case 'getDashboardData': return await FirebaseService.getOrders(companyId);
+            case 'getDashboardData': return await FirebaseService.getOrders(companyId, payload.month);
             case 'submitOrders': return await FirebaseService.submitOrders(payload.date, payload.orders, companyId);
             case 'addAccount': return await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
             case 'editAccount': return await FirebaseService.editAccount(payload.oldName, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
@@ -1426,6 +1447,8 @@ async function apiRequest(payload) {
             case 'getCompanies': return { success: true, data: [{id: 'company1', name: 'Company 1'}, {id: 'company2', name: 'Company 2'}] };
             case 'updateMoney': return await FirebaseService.updateMoney(payload.accountName, companyId, payload.money, payload.expense, payload.date);
             case 'resetAllMoney': return await FirebaseService.resetAllMoney(payload.date);
+            case 'createMoneyBackup': return await FirebaseService.createMoneyBackup(payload.date, payload.rows, payload.reason);
+            case 'getMoneyBackups': return await FirebaseService.getMoneyBackups();
             default: throw new Error('Unknown action: ' + action);
         }
     } catch (err) {
@@ -1536,24 +1559,35 @@ async function backupToSheets() {
         
         const allData = await FirebaseService.getAllDataForBackup();
         
-        // Send Company 1 orders to Sheets
-        if (allData.company1.orders.length > 0) {
-            await sheetsApiRequest({
-                action: 'bulkBackup',
-                companyId: 'company1',
-                orders: allData.company1.orders,
-                accounts: allData.company1.accounts.map(a => a.name)
+        const syncCompanyData = async (companyId) => {
+            const orders = allData[companyId].orders || [];
+            if (orders.length === 0) return;
+
+            // Group by month to avoid overwriting the whole sheet
+            const monthlyGroups = {};
+            orders.forEach(o => {
+                const m = (o.date || '').substring(0, 7);
+                if (m) {
+                    if (!monthlyGroups[m]) monthlyGroups[m] = [];
+                    monthlyGroups[m].push(o);
+                }
             });
-        }
-        // Send Company 2 orders to Sheets
-        if (allData.company2.orders.length > 0) {
-            await sheetsApiRequest({
-                action: 'bulkBackup',
-                companyId: 'company2',
-                orders: allData.company2.orders,
-                accounts: allData.company2.accounts.map(a => a.name)
-            });
-        }
+
+            for (const [month, monthOrders] of Object.entries(monthlyGroups)) {
+                await sheetsApiRequest({
+                    action: 'bulkBackup',
+                    companyId,
+                    orders: monthOrders,
+                    accounts: (allData[companyId].accounts || []).map(a => a.name),
+                    append: true,
+                    clearMonth: month
+                });
+            }
+        };
+
+        await syncCompanyData('company1');
+        await syncCompanyData('company2');
+
         // Save remarks
         for (const [date, remark] of Object.entries(allData.remarks || {})) {
             await sheetsApiRequest({ action: 'saveRemark', date, remark });
@@ -1708,6 +1742,9 @@ function updateOrderDateLabel() {
 }
 
 // ===== UI Helpers =====
+function showProgressToast(message) {
+    showToast(message, "info");
+}
 function showToast(message, type = "success") {
     const toast = document.getElementById('toast');
     if (!toast) return;
@@ -1856,34 +1893,52 @@ function openReorderColumnsModal() {
     });
 }
 
+async function loadAvailableSheetMonths(force = false) {
+    if (!force && AppState.availableSheetMonths.length > 0) return AppState.availableSheetMonths;
+    try {
+        const res1 = await sheetsApiRequest({ action: 'getAvailableOrderMonths', companyId: 'company1' });
+        const res2 = await sheetsApiRequest({ action: 'getAvailableOrderMonths', companyId: 'company2' });
+        const combined = new Set([...(res1.data || []), ...(res2.data || [])]);
+        AppState.availableSheetMonths = Array.from(combined).sort().reverse();
+        return AppState.availableSheetMonths;
+    } catch (e) {
+        console.warn('Failed to load available months from sheets:', e);
+        return [];
+    }
+}
+
 function populateSheetMonthFilter() {
     const monthFilter = document.getElementById('sheet-month-filter');
     if (!monthFilter) return;
     
-    const allData = [...AppState.company1Data, ...AppState.company2Data];
+    const currentMonth = getTodayISODate().substring(0, 7);
     const months = new Set();
+    months.add(currentMonth); // Always have current month
+
+    // Add local data months
+    const allData = [...AppState.company1Data, ...AppState.company2Data];
     allData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (d) months.add(d.substring(0, 7));
     });
+
+    // Add archive months from AppState
+    (AppState.availableSheetMonths || []).forEach(m => months.add(m));
     
     const sortedMonths = [...months].sort().reverse();
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const currentMonth = getTodayISODate().substring(0, 7);
     
     // Remember current selection
     const prevVal = monthFilter.value;
     
-    let html = '<option value="all">All Months</option>';
+    let html = '<option value="all">All Months (Firebase)</option>';
     sortedMonths.forEach(m => {
         const [y, mo] = m.split('-');
-        const label = `${monthNames[parseInt(mo)-1]} ${y}`;
+        const isCurrent = m === currentMonth;
+        const label = `${monthNames[parseInt(mo)-1]} ${y}${isCurrent ? ' (Current)' : ''}`;
         const sel = (prevVal && prevVal === m) ? 'selected' : (!prevVal && m === currentMonth ? 'selected' : '');
         html += `<option value="${m}" ${sel}>${label}</option>`;
     });
-    if (sortedMonths.length === 0) {
-        html += `<option value="${currentMonth}" selected>${monthNames[new Date().getMonth()]} ${new Date().getFullYear()}</option>`;
-    }
     monthFilter.innerHTML = html;
 }
 
@@ -1914,11 +1969,48 @@ async function renderDataSheet() {
     }
     
     // Filter by month
+    const currentMonth = getTodayISODate().substring(0, 7);
     if (monthFilter && monthFilter !== 'all') {
-        rawData = rawData.filter(r => {
-            const d = normalizeToISODate(r.date);
-            return d && d.startsWith(monthFilter);
-        });
+        const isArchive = monthFilter !== currentMonth;
+        
+        if (isArchive) {
+            // Check cache
+            const cacheKey = `${companyFilter}_${monthFilter}`;
+            if (AppState.sheetArchiveCache[cacheKey]) {
+                rawData = AppState.sheetArchiveCache[cacheKey];
+            } else {
+                showProgressToast(`Loading ${monthFilter} from archives…`);
+                try {
+                    const res = await sheetsApiRequest({ 
+                        action: 'getDashboardData', 
+                        companyId: companyFilter === 'all' ? 'company1' : companyFilter, 
+                        month: monthFilter 
+                    });
+                    
+                    if (companyFilter === 'all') {
+                        // If all companies selected, we need to fetch C2 as well if we only did C1
+                        const res2 = await sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2', month: monthFilter });
+                        rawData = [...(res.data || []), ...(res2.data || [])];
+                    } else {
+                        rawData = res.data || [];
+                    }
+                    
+                    AppState.sheetArchiveCache[cacheKey] = rawData;
+                    hideLoader();
+                    // Re-render now that we have data
+                    renderDataSheet(); 
+                    return;
+                } catch (e) {
+                    showToast('Failed to load archived month', 'error');
+                }
+            }
+        } else {
+            // Current month from Firebase (already in rawData)
+            rawData = rawData.filter(r => {
+                const d = normalizeToISODate(r.date);
+                return d && d.startsWith(monthFilter);
+            });
+        }
     }
     
     // Collect unique dates, newest first
@@ -1928,9 +2020,9 @@ async function renderDataSheet() {
         if (d) dateSet.add(d);
     });
     
-    // Always include today's date in the data sheet if it matches the current month filter
+    // Always include today's date in the data sheet if it matches the current month filter (and not viewing archive)
     const todayStr = getTodayISODate();
-    if (!monthFilter || monthFilter === 'all' || todayStr.startsWith(monthFilter)) {
+    if (monthFilter === currentMonth || monthFilter === 'all') {
         dateSet.add(todayStr);
     }
     
@@ -2162,9 +2254,7 @@ async function renderMoneyManagement() {
             companyId: 'company1',
             money: parseInt(details.money) || 0,
             expense: parseInt(details.expense) || 0,
-            moneyDate: details.moneyDate || '',
-            mobile: details.mobile || '',
-            rechargeDate: details.rechargeDate || ''
+            moneyDate: details.moneyDate || ''
         });
     });
     AppState.company2Accounts.forEach(accName => {
@@ -2175,9 +2265,7 @@ async function renderMoneyManagement() {
             companyId: 'company2',
             money: parseInt(details.money) || 0,
             expense: parseInt(details.expense) || 0,
-            moneyDate: details.moneyDate || '',
-            mobile: details.mobile || '',
-            rechargeDate: details.rechargeDate || ''
+            moneyDate: details.moneyDate || ''
         });
     });
     
@@ -2196,26 +2284,17 @@ async function renderMoneyManagement() {
         return;
     }
     
-    tbody.innerHTML = mgmtAccounts.map((acc, idx) => {
-        const rechargeTxt = getRechargeText(acc.rechargeDate);
-        const metaHtml = `
-            <div class="account-meta money-account-meta">
-                <span><i class='bx bx-phone'></i> Mobile: ${acc.mobile || 'Not added'}</span>
-                <span><i class='bx bx-calendar'></i> Recharge: ${rechargeTxt}</span>
-                ${acc.moneyDate ? `<span><i class='bx bx-time-five'></i> Updated: ${formatISODateForDisplay(acc.moneyDate)}</span>` : ''}
-            </div>
-        `;
-        return `
+    tbody.innerHTML = mgmtAccounts.map((acc, idx) => `
         <tr class="money-row" data-account="${acc.name.replace(/"/g, '&quot;')}" data-company-id="${acc.companyId}">
             <td class="drag-handle-cell"><i class='bx bx-menu money-drag-handle' style="cursor: grab; color: #a0aec0;"></i></td>
             <td class="position-number">${idx + 1}</td>
             <td><span class="badge ${acc.companyId === 'company1' ? 'badge-a' : 'badge-b'}">${acc.company}</span></td>
-            <td class="font-medium">${acc.name}${metaHtml}</td>
+            <td class="font-medium">${acc.name}</td>
             <td><input type="number" class="inp-money sheet-cell-input" min="0" value="${acc.money || ''}" data-index="${idx}" placeholder="0"></td>
             <td><input type="number" class="inp-expense sheet-cell-input" min="0" value="${acc.expense || ''}" data-index="${idx}" placeholder="0"></td>
             <td><span class="row-total font-bold" id="money-total-${idx}">${acc.money - acc.expense}</span></td>
         </tr>
-    `}).join('');
+    `).join('');
     
     const updateGrandTotals = () => {
         let totalMoney = 0;
@@ -2285,8 +2364,146 @@ async function renderMoneyManagement() {
     });
 }
 
+function buildCurrentMoneySnapshotRows() {
+    const rows = [];
+
+    const addCompanyRows = (companyId, companyName, accounts, detailsList) => {
+        (accounts || []).forEach(accountName => {
+            const details = (detailsList || []).find(d => d.name === accountName) || {};
+            const money = parseInt(details.money) || 0;
+            const expense = parseInt(details.expense) || 0;
+            rows.push({
+                companyId,
+                companyName,
+                accountName,
+                money,
+                expense,
+                balance: money - expense
+            });
+        });
+    };
+
+    addCompanyRows('company1', getCompanyDisplayName('company1'), AppState.company1Accounts, AppState.company1Details);
+    addCompanyRows('company2', getCompanyDisplayName('company2'), AppState.company2Accounts, AppState.company2Details);
+
+    return rows;
+}
+
+async function loadMoneyBackups(force = false) {
+    if (!force && Array.isArray(AppState.moneyBackups) && AppState.moneyBackups.length > 0) {
+        return AppState.moneyBackups;
+    }
+
+    const res = await apiRequest({ action: 'getMoneyBackups' });
+    AppState.moneyBackups = Array.isArray(res?.data) ? res.data : [];
+    if (!AppState.selectedMoneyBackupId && AppState.moneyBackups.length > 0) {
+        AppState.selectedMoneyBackupId = AppState.moneyBackups[0].id;
+    }
+    return AppState.moneyBackups;
+}
+
+function getSelectedMoneyBackup() {
+    if (!Array.isArray(AppState.moneyBackups) || AppState.moneyBackups.length === 0) return null;
+    const selected = AppState.moneyBackups.find(b => b.id === AppState.selectedMoneyBackupId);
+    return selected || AppState.moneyBackups[0];
+}
+
+async function renderMoneyBackupPage(forceReload = false) {
+    const select = document.getElementById('money-backup-select');
+    const tbody = document.getElementById('money-backup-tbody');
+    const empty = document.getElementById('money-backup-empty');
+    if (!select || !tbody || !empty) return;
+
+    try {
+        await loadMoneyBackups(forceReload);
+    } catch (e) {
+        showToast('Failed to load money backups', 'error');
+        return;
+    }
+
+    if (!Array.isArray(AppState.moneyBackups) || AppState.moneyBackups.length === 0) {
+        select.innerHTML = '<option value="">No Backup Found</option>';
+        tbody.innerHTML = '';
+        empty.classList.remove('hidden');
+        document.getElementById('money-backup-total-money').textContent = '0';
+        document.getElementById('money-backup-total-expense').textContent = '0';
+        document.getElementById('money-backup-total-balance').textContent = '0';
+        return;
+    }
+
+    select.innerHTML = AppState.moneyBackups.map(backup => {
+        const created = backup.createdAt?.toDate ? backup.createdAt.toDate().toLocaleString() : '';
+        const label = created ? `${backup.backupDate} (${created})` : backup.backupDate;
+        const selected = backup.id === AppState.selectedMoneyBackupId ? 'selected' : '';
+        return `<option value="${backup.id}" ${selected}>${label}</option>`;
+    }).join('');
+
+    const activeBackup = getSelectedMoneyBackup();
+    const rows = Array.isArray(activeBackup?.rows) ? activeBackup.rows : [];
+
+    tbody.innerHTML = rows.map(r => `
+        <tr>
+            <td>${activeBackup.backupDate || '-'}</td>
+            <td>${r.companyName || r.companyId || '-'}</td>
+            <td class="font-medium">${r.accountName || '-'}</td>
+            <td class="text-right">${parseInt(r.money) || 0}</td>
+            <td class="text-right">${parseInt(r.expense) || 0}</td>
+            <td class="text-right font-bold">${parseInt(r.balance) || 0}</td>
+        </tr>
+    `).join('');
+
+    let totalMoney = 0;
+    let totalExpense = 0;
+    rows.forEach(r => {
+        totalMoney += parseInt(r.money) || 0;
+        totalExpense += parseInt(r.expense) || 0;
+    });
+
+    document.getElementById('money-backup-total-money').textContent = totalMoney;
+    document.getElementById('money-backup-total-expense').textContent = totalExpense;
+    document.getElementById('money-backup-total-balance').textContent = totalMoney - totalExpense;
+    empty.classList.toggle('hidden', rows.length > 0);
+}
+
+function exportMoneyBackupToExcel() {
+    const backup = getSelectedMoneyBackup();
+    if (!backup || !Array.isArray(backup.rows) || backup.rows.length === 0) {
+        showToast('No backup rows to export', 'error');
+        return;
+    }
+
+    const rows = [['Backup Date', 'Company', 'Account Name', 'Money', 'Expense', 'Balance']];
+    backup.rows.forEach(r => {
+        rows.push([
+            backup.backupDate || '',
+            r.companyName || r.companyId || '',
+            r.accountName || '',
+            parseInt(r.money) || 0,
+            parseInt(r.expense) || 0,
+            parseInt(r.balance) || 0
+        ]);
+    });
+
+    const tsv = rows.map(row => row.map(cell => String(cell).replace(/\t/g, ' ')).join('\t')).join('\n');
+    const blob = new Blob([tsv], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `money_backup_${backup.backupDate || getTodayISODate()}.xls`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast('Money backup exported', 'success');
+}
+
 // Reset ALL money data
 document.addEventListener('DOMContentLoaded', () => {
+    const openBackupBtn = document.getElementById('money-backup-open-btn');
+    if (openBackupBtn) {
+        openBackupBtn.addEventListener('click', () => navigateTo('money-backup'));
+    }
+
     const resetBtn = document.getElementById('money-reset-btn');
     if (resetBtn) {
         resetBtn.addEventListener('click', async () => {
@@ -2294,15 +2511,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('Resetting data...', 'info');
                 const date = document.getElementById('money-date').value || getTodayISODate();
                 try {
+                    const snapshotRows = buildCurrentMoneySnapshotRows();
+                    const backupRes = await apiRequest({
+                        action: 'createMoneyBackup',
+                        date,
+                        rows: snapshotRows,
+                        reason: 'pre_reset'
+                    });
+                    if (backupRes?.success === false) {
+                        throw new Error(backupRes.message || 'Backup failed');
+                    }
+
+                    // Also store the same backup in Google Sheets (Money_Backups tab).
+                    try {
+                        await sheetsApiRequest({
+                            action: 'saveMoneyBackup',
+                            date,
+                            rows: snapshotRows,
+                            reason: 'pre_reset'
+                        });
+                    } catch (sheetErr) {
+                        console.warn('Money backup sheet write failed (non-blocking):', sheetErr);
+                    }
+
                     await apiRequest({ action: 'resetAllMoney', date });
                     // clear local stores
                     ['company1Details', 'company2Details'].forEach(detKey => {
                         (AppState[detKey] || []).forEach(d => { d.money = 0; d.expense = 0; d.moneyDate = date; });
                     });
+                    AppState.moneyBackups = [];
+                    await loadMoneyBackups(true);
                     renderMoneyManagement();
-                    showToast('All data reset successfully', 'success');
+                    showToast('All data reset successfully. Backup saved.', 'success');
                 } catch(e) {
-                    showToast('Failed to reset', 'error');
+                    showToast(`Failed to reset: ${e.message || 'Unknown error'}`, 'error');
                 }
             }
         });
@@ -2314,5 +2556,23 @@ document.addEventListener('DOMContentLoaded', () => {
             FirebaseService.flushWrites();
             showToast('Changes saved', 'success');
         });
+    }
+
+    const backupSelect = document.getElementById('money-backup-select');
+    if (backupSelect) {
+        backupSelect.addEventListener('change', () => {
+            AppState.selectedMoneyBackupId = backupSelect.value;
+            renderMoneyBackupPage();
+        });
+    }
+
+    const backupRefreshBtn = document.getElementById('money-backup-refresh-btn');
+    if (backupRefreshBtn) {
+        backupRefreshBtn.addEventListener('click', () => renderMoneyBackupPage(true));
+    }
+
+    const backupExportBtn = document.getElementById('money-backup-export-btn');
+    if (backupExportBtn) {
+        backupExportBtn.addEventListener('click', exportMoneyBackupToExcel);
     }
 });

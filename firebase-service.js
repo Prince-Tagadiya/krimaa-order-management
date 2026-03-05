@@ -43,6 +43,12 @@ const FirebaseService = (() => {
         }
     }
 
+    function buildMoneyRecordDocId(date, companyId, accountName) {
+        return [date, companyId, accountName]
+            .map(v => encodeURIComponent(String(v || '').trim()))
+            .join('_');
+    }
+
     // ───── ACCOUNTS ─────
     async function getAccounts(companyId) {
         init();
@@ -169,7 +175,8 @@ const FirebaseService = (() => {
         });
         // Save historic date wise record
         if (date) {
-            ops.push(b => b.set(db.collection('money_records').doc(`${date}_${companyId}_${accountName}`), {
+            const docId = buildMoneyRecordDocId(date, companyId, accountName);
+            ops.push(b => b.set(db.collection('money_records').doc(docId), {
                 date, accountName, companyId, money: money || 0, expense: expense || 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true }));
         }
@@ -183,16 +190,91 @@ const FirebaseService = (() => {
         const snap1 = await db.collection('accounts').where('companyId', '==', 'company1').get();
         snap1.forEach(doc => {
             ops.push(b => b.update(doc.ref, { money: 0, expense: 0, moneyDate: date || '' }));
-            if (date) ops.push(b => b.set(db.collection('money_records').doc(`${date}_company1_${doc.data().name}`), { date, accountName: doc.data().name, companyId: 'company1', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+            if (date) {
+                const docId = buildMoneyRecordDocId(date, 'company1', doc.data().name);
+                ops.push(b => b.set(db.collection('money_records').doc(docId), { date, accountName: doc.data().name, companyId: 'company1', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+            }
         });
         const snap2 = await db.collection('accounts').where('companyId', '==', 'company2').get();
         snap2.forEach(doc => {
             ops.push(b => b.update(doc.ref, { money: 0, expense: 0, moneyDate: date || '' }));
-            if (date) ops.push(b => b.set(db.collection('money_records').doc(`${date}_company2_${doc.data().name}`), { date, accountName: doc.data().name, companyId: 'company2', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+            if (date) {
+                const docId = buildMoneyRecordDocId(date, 'company2', doc.data().name);
+                ops.push(b => b.set(db.collection('money_records').doc(docId), { date, accountName: doc.data().name, companyId: 'company2', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+            }
         });
         
         await commitInChunks(ops);
         return { success: true, message: 'All money reset successfully' };
+    }
+
+    async function createMoneyBackup(backupDate, rows, reason) {
+        init();
+        const safeRows = Array.isArray(rows) ? rows : [];
+        if (safeRows.length === 0) {
+            return { success: false, message: 'No rows provided for backup' };
+        }
+
+        let totalMoney = 0;
+        let totalExpense = 0;
+        safeRows.forEach(r => {
+            totalMoney += parseInt(r.money) || 0;
+            totalExpense += parseInt(r.expense) || 0;
+        });
+
+        const docRef = await db.collection('money_backups').add({
+            backupDate: backupDate || '',
+            reason: reason || 'manual',
+            rows: safeRows.map(r => ({
+                companyId: r.companyId || '',
+                companyName: r.companyName || '',
+                accountName: r.accountName || '',
+                money: parseInt(r.money) || 0,
+                expense: parseInt(r.expense) || 0,
+                balance: (parseInt(r.money) || 0) - (parseInt(r.expense) || 0)
+            })),
+            totals: {
+                money: totalMoney,
+                expense: totalExpense,
+                balance: totalMoney - totalExpense
+            },
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        return { success: true, message: 'Money backup created', id: docRef.id };
+    }
+
+    async function getMoneyBackups() {
+        init();
+        let snap;
+        try {
+            snap = await db.collection('money_backups').orderBy('createdAt', 'desc').get();
+        } catch (e) {
+            // Fallback for environments where createdAt ordering may fail.
+            snap = await db.collection('money_backups').get();
+        }
+
+        const data = [];
+        snap.forEach(doc => {
+            const d = doc.data() || {};
+            data.push({
+                id: doc.id,
+                backupDate: d.backupDate || '',
+                reason: d.reason || '',
+                rows: Array.isArray(d.rows) ? d.rows : [],
+                totals: d.totals || { money: 0, expense: 0, balance: 0 },
+                createdAt: d.createdAt || null
+            });
+        });
+
+        data.sort((a, b) => {
+            const ad = a.backupDate || '';
+            const bd = b.backupDate || '';
+            if (ad === bd) return (String(b.id)).localeCompare(String(a.id));
+            return bd.localeCompare(ad);
+        });
+
+        return { success: true, data };
     }
 
     // ───── ORDERS ─────
@@ -377,7 +459,7 @@ const FirebaseService = (() => {
     return {
         init, getDb,
         // Accounts
-        getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney,
+        getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney, createMoneyBackup, getMoneyBackups,
         // Orders
         getOrders, submitOrders, updateOrder,
         // Remarks

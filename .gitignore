@@ -1,5 +1,6 @@
 # Config with secrets
 config.js
+.env
 
 # OS files
 .DS_Store

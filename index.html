@@ -47,6 +47,7 @@
                 <li><a href="#" class="nav-btn" data-target="daily-order"><i class='bx bx-calendar-event'></i> Daily Order</a></li>
                 <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
                 <li id="nav-money-management"><a href="#" class="nav-btn" data-target="money-management"><i class='bx bx-money'></i> Money Management</a></li>
+                <li id="nav-money-backup"><a href="#" class="nav-btn" data-target="money-backup"><i class='bx bx-archive'></i> Money Backup</a></li>
                 <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
             </ul>
             <div class="sidebar-footer">
@@ -319,6 +320,7 @@
                                 <p class="text-sm text-muted mt-1">Track money and expenses across all company accounts.</p>
                             </div>
                             <div class="flex gap-2 items-center">
+                                <button type="button" class="btn btn-outline btn-sm" id="money-backup-open-btn"><i class='bx bx-archive'></i> Backup History</button>
                                 <input type="date" id="money-date" class="date-input hidden" style="padding: 0.5rem; font-weight: 600;">
                                 <button type="button" class="btn btn-primary btn-sm hidden" id="money-save-btn"><i class='bx bx-save'></i> Save Changes</button>
                                 <button type="button" class="btn btn-outline btn-sm text-danger" id="money-reset-btn"><i class='bx bx-reset'></i> Reset All</button>
@@ -347,6 +349,53 @@
                                 <div class="text-right"><span class="text-xs text-muted block">Money</span><strong id="money-grand-money" class="text-main">0</strong></div>
                                 <div class="text-right"><span class="text-xs text-muted block">Expense</span><strong id="money-grand-expense" class="text-main">0</strong></div>
                                 <div class="text-right"><span class="text-xs text-muted block">Total Balance</span><strong id="money-grand-total" class="text-primary text-xl">0</strong></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ========== MONEY BACKUP ========== -->
+                <section id="money-backup" class="content-section">
+                    <div class="card mx-auto" style="max-width: 1000px;">
+                        <div class="flex-between mb-2">
+                            <div>
+                                <h3 class="font-bold text-xl">Money Backup History</h3>
+                                <p class="text-sm text-muted mt-1">Backups are created automatically before every money reset.</p>
+                            </div>
+                            <div class="flex gap-2 items-center">
+                                <select id="money-backup-select" class="date-input" style="min-width: 240px;">
+                                    <option value="">Select Backup Date</option>
+                                </select>
+                                <button type="button" class="btn btn-outline btn-sm" id="money-backup-refresh-btn"><i class='bx bx-refresh'></i> Refresh</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="money-backup-export-btn"><i class='bx bx-download'></i> Export Excel</button>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive mb-2" style="max-height: 60vh; overflow-y: auto;">
+                            <table class="table">
+                                <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 10;">
+                                    <tr>
+                                        <th>Backup Date</th>
+                                        <th>Company</th>
+                                        <th>Account Name</th>
+                                        <th class="text-right">Money</th>
+                                        <th class="text-right">Expense</th>
+                                        <th class="text-right">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="money-backup-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="money-backup-empty" class="hidden text-center p-4 text-muted">
+                            <p class="font-medium text-main">No backup data found.</p>
+                            <p class="text-sm mt-1">Reset money once to create backup history.</p>
+                        </div>
+                        <div style="background:var(--bg-main); padding:1rem; border-radius:8px; display:flex; justify-content:space-between; align-items:center; border:1px solid var(--border-color);">
+                            <span class="font-bold text-muted text-sm uppercase">Backup Total</span>
+                            <div style="display:flex; gap:2rem;">
+                                <div class="text-right"><span class="text-xs text-muted block">Money</span><strong id="money-backup-total-money" class="text-main">0</strong></div>
+                                <div class="text-right"><span class="text-xs text-muted block">Expense</span><strong id="money-backup-total-expense" class="text-main">0</strong></div>
+                                <div class="text-right"><span class="text-xs text-muted block">Balance</span><strong id="money-backup-total-balance" class="text-primary text-xl">0</strong></div>
                             </div>
                         </div>
                     </div>
