@@ -1773,7 +1773,6 @@ function showToast(message, type = "success") {
         }, 3500);
     }
 }
-}
 function showLoader() { document.getElementById('global-loader').classList.remove('hidden'); }
 function hideLoader() { document.getElementById('global-loader').classList.add('hidden'); }
 
