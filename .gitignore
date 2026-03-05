@@ -1,5 +1,4 @@
 # Config with secrets
-config.js
 .env
 
 # OS files
