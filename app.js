@@ -260,11 +260,12 @@ async function switchCompany(previousCompany = '') {
         AppState.accounts = [];
         AppState.dashboardData = [];
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
-        try {
-            await fetchAllCompaniesData({ refreshArchiveMonths: true });
-        } catch (e) {
-            console.warn('Non-blocking: failed to refresh all-company dashboard data', e);
-        }
+        
+        // Don't block company switch for slow Excel meta-data fetch
+        // Just refresh the dashboard data which is now only Firebase current month
+        fetchAllCompaniesData({ refreshArchiveMonths: false }).catch(e => {
+            console.warn('Silent update of all-company dashboard data', e);
+        });
         
         if (AppState.currentSection === 'dashboard') renderDashboard();
         else if (AppState.currentSection === 'daily-order') {
@@ -1748,36 +1749,30 @@ function showToast(message, type = "success") {
     if (!toast) return;
     if (toast._timer) clearTimeout(toast._timer);
 
-    // Reset styles
-    toast.style.border = "none";
-    toast.style.boxShadow = "0 10px 15px -3px rgba(0,0,0,0.1)";
+    toast.className = 'toast show';
+    if (type === 'error') toast.classList.add('toast-error');
+    else if (type === 'info') toast.classList.add('toast-info');
+    else toast.classList.add('toast-success');
 
-    // Set icon and colors based on type
-    let icon = `<i class='bx bxs-check-circle'></i>`;
-    let bg = "#10b981", color = "white"; // default success
-    
-    if (type === "error") { 
-        icon = `<i class='bx bxs-error-circle'></i>`; 
-        bg = "#ef4444"; 
-    } else if (type === "info") { 
-        icon = `<i class='bx bxs-info-circle'></i>`; 
-        bg = "#f8fafc"; 
-        color = "#1e293b"; 
-        toast.style.border = "1px solid #cbd5e1"; 
-    }
-    
-    toast.style.background = bg;
-    toast.style.color = color;
-    toast.innerHTML = `<div style="display:flex;align-items:center;flex:1;gap:10px;">${icon} <span>${message}</span></div><button onclick="document.getElementById('toast').classList.add('hidden')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:1.5rem;padding:0;line-height:0.5;margin-left:15px;opacity:0.8;">&times;</button>`;
-    
-    toast.classList.remove('hidden');
-    
-    // Auto-hide unless it's info (which we usually manage manually)
+    let icon = 'bx-check-circle';
+    if (type === 'error') icon = 'bx-error-circle';
+    else if (type === 'info') icon = 'bx-info-circle';
+
+    toast.innerHTML = `
+        <div class="toast-content">
+            <i class='bx ${icon} toast-icon'></i>
+            <span class="toast-msg">${message}</span>
+            <button class="toast-close" onclick="this.parentElement.parentElement.classList.remove('show')">&times;</button>
+        </div>
+        <div class="toast-progress"></div>
+    `;
+
     if (type !== "info") {
         toast._timer = setTimeout(() => {
-            toast.classList.add('hidden');
-        }, 3000);
+            toast.classList.remove('show');
+        }, 3500);
     }
+}
 }
 function showLoader() { document.getElementById('global-loader').classList.remove('hidden'); }
 function hideLoader() { document.getElementById('global-loader').classList.add('hidden'); }
