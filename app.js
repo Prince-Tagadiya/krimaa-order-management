@@ -510,10 +510,10 @@ function navigateTo(sectionId) {
     const activeBtn = document.querySelector(`[data-target="${sectionId}"]`);
     if(activeBtn) activeBtn.classList.add('active');
     const titles = {
-        'dashboard': 'แดชบอร์ด',
+        'dashboard': 'Dashboard',
         'daily-order': 'Daily Order Entry',
         'add-account': 'Manage Accounts',
-        'money-management': 'จัดการเงิน (Money Management)',
+        'money-management': 'Money Management',
         'data-sheet': 'Data Sheet'
     };
     document.getElementById('page-title').textContent = titles[sectionId];

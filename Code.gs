@@ -285,7 +285,7 @@ function editAccount(oldName, newName, companyId) {
   if (ordersSheet) {
     var ordData = ordersSheet.getDataRange().getValues();
     var ordStartIdx = 0;
-    if (ordData.length > 0 && (ordData[0][0] === 'Date' || ordData[0][0] === 'Date / તારીખ')) {
+    if (ordData.length > 0 && /^Date(\s*\/\s*.+)?$/.test(String(ordData[0][0] || '').trim())) {
       ordStartIdx = 1;
     }
     
@@ -430,7 +430,7 @@ function getDashboardData(companyId) {
   var startRow = 1;
   if (lastRow >= 1) {
     var firstCell = sheet.getRange(1, 1).getValue().toString();
-    if (firstCell === "Date" || firstCell === "Date / તારીખ") {
+    if (/^Date(\s*\/\s*.+)?$/.test(firstCell.trim())) {
       startRow = 2;
     }
   }
