@@ -142,6 +142,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 .sidebar-header i { font-size: 1.8rem; }
 .nav-links { flex: 1; list-style: none; display: flex; flex-direction: column; gap: 0.25rem; margin: 0; padding: 0;}
+#nav-dashboard { margin-top: auto; }
 .nav-btn {
     display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem;
     color: var(--text-muted); text-decoration: none; font-weight: 600; font-size: 0.875rem;
@@ -502,6 +503,15 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 .account-name { font-weight: 700; color: var(--text-main); flex: 1; }
 .account-actions { display: flex; gap: 0.5rem; }
+.account-meta {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: 0.5rem 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.35rem;
+}
+.money-account-meta { margin-top: 0.35rem; }
 
 .table-divider-row td {
     padding: 0.5rem 1rem !important; background: #f8fafc; color: var(--text-muted);
@@ -529,4 +539,332 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     .status-banner-stats { flex-wrap: wrap; justify-content: center; width: 100%; gap: 1rem; }
     .stat-divider { display: none; }
     .kpi-3-col { grid-template-columns: 1fr; }
+}
+
+/* ===== DATA SHEET ===== */
+.sheet-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.75rem 0;
+    margin-bottom: 0.5rem;
+}
+.sheet-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.sheet-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.sheet-wrapper {
+    overflow: auto;
+    max-height: calc(100vh - 200px);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: white;
+    box-shadow: var(--shadow-sm);
+}
+
+.sheet-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.78rem;
+    table-layout: auto;
+}
+
+/* Sticky header */
+.sheet-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: #f1f5f9;
+    color: var(--text-main);
+    font-weight: 800;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.55rem 0.6rem;
+    border-bottom: 2px solid var(--border-color);
+    border-right: 1px solid #e2e8f0;
+    white-space: nowrap;
+    text-align: center;
+}
+.sheet-table thead th:last-child { border-right: none; }
+
+/* Account group header */
+.sheet-table thead th.sheet-acct-group {
+    background: #e0ecff;
+    color: var(--primary);
+    font-weight: 800;
+    border-bottom: 1px solid #c7d6f0;
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+}
+
+.sheet-table thead th.sheet-sub-col {
+    background: #f8fafc;
+    font-weight: 700;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+/* Date column (frozen left) */
+.sheet-table thead th.sheet-date-col,
+.sheet-table tbody td.sheet-date-cell {
+    position: sticky;
+    left: 0;
+    z-index: 21;
+    background: #f8fafc;
+    font-weight: 800;
+    border-right: 2px solid #cbd5e1;
+    white-space: nowrap;
+    min-width: 100px;
+    text-align: left;
+}
+
+/* Dark separator between account groups */
+.sheet-acct-border {
+    border-right: 2.5px solid #334155 !important;
+}
+.sheet-table tbody td.sheet-date-cell {
+    background: #f8fafc;
+    color: var(--text-main);
+    font-size: 0.78rem;
+    padding: 0.4rem 0.6rem;
+}
+
+/* Body cells */
+.sheet-table tbody td {
+    padding: 0.35rem 0.45rem;
+    border-bottom: 1px solid #f1f5f9;
+    border-right: 1px solid #f1f5f9;
+    text-align: center;
+    vertical-align: middle;
+    color: var(--text-main);
+    font-variant-numeric: tabular-nums;
+    transition: background 0.15s;
+}
+.sheet-table tbody td:last-child { border-right: none; }
+
+/* Alternating row */
+.sheet-table tbody tr:nth-child(even) td {
+    background: #fafbfc;
+}
+.sheet-table tbody tr:nth-child(even) td.sheet-date-cell {
+    background: #f1f5f9;
+}
+
+/* Hover */
+.sheet-table tbody tr:hover td {
+    background: #eff6ff;
+}
+.sheet-table tbody tr:hover td.sheet-date-cell {
+    background: #dbeafe;
+}
+
+/* Editable cells */
+.sheet-table tbody td.sheet-editable {
+    cursor: text;
+    min-width: 52px;
+}
+.sheet-table tbody td.sheet-editable:focus-within {
+    background: #fff7ed;
+    box-shadow: inset 0 0 0 2px var(--primary);
+    border-radius: 2px;
+}
+
+.sheet-cell-input {
+    width: 100%;
+    border: none;
+    background: transparent;
+    text-align: center;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-main);
+    font-family: inherit;
+    outline: none;
+    padding: 0;
+    -moz-appearance: textfield;
+}
+.sheet-cell-input::-webkit-outer-spin-button,
+.sheet-cell-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.sheet-cell-input.sheet-remark-input {
+    text-align: left;
+    min-width: 120px;
+}
+
+/* Total column */
+.sheet-table th.sheet-total-col,
+.sheet-table tbody td.sheet-total-cell {
+    position: sticky;
+    right: 0;
+    z-index: 20;
+}
+.sheet-table thead th.sheet-total-col {
+    background: #0f172a;
+    color: white;
+    z-index: 30;
+    border-bottom: none;
+}
+.sheet-table tbody td.sheet-total-cell {
+    font-weight: 800;
+    color: var(--primary);
+    background: #f0f6ff;
+}
+
+/* Grand total row */
+.sheet-table tbody tr.sheet-grand-row td {
+    background: #f1f5f9 !important;
+    font-weight: 800;
+    font-size: 0.82rem;
+    border-top: 2px solid var(--border-color);
+    color: var(--text-main);
+}
+.sheet-table tbody tr.sheet-grand-row td.sheet-date-cell {
+    background: #e2e8f0 !important;
+}
+
+/* Day name chip */
+.sheet-day-chip {
+    display: inline-block;
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+}
+.sheet-day-chip.sheet-today {
+    background: var(--primary);
+    color: white;
+    padding: 0 0.35rem;
+    border-radius: 3px;
+}
+
+/* Company badge in header */
+.sheet-company-tag {
+    display: block;
+    font-size: 0.58rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    margin-top: 1px;
+}
+
+/* Sticky grand total row */
+.sheet-table tbody tr.sheet-grand-row td {
+    position: sticky;
+    bottom: -1px;
+    z-index: 25;
+}
+.sheet-table tbody tr.sheet-grand-row td.sheet-date-cell {
+    z-index: 26; /* Needs to be above date col padding when scrolling down */
+}
+.sheet-table tbody tr.sheet-grand-row td.sheet-total-cell {
+    z-index: 26; /* Stay exactly high on the right intersection */
+}
+
+/* ===== SYNC INDICATOR ===== */
+.sync-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.3rem 0.7rem;
+    border-radius: 20px;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+.sync-indicator.sync-saved {
+    background: #dcfce7;
+    color: #16a34a;
+}
+.sync-indicator.sync-pending {
+    background: #fef3c7;
+    color: #d97706;
+}
+.sync-indicator.sync-syncing {
+    background: #dbeafe;
+    color: var(--primary);
+}
+.sync-indicator.sync-error {
+    background: #fee2e2;
+    color: #dc2626;
+}
+.sync-indicator.sync-idle {
+    background: #f1f5f9;
+    color: var(--text-muted);
+}
+.sync-indicator i {
+    font-size: 1rem;
+}
+
+/* Spinner animation for syncing */
+@keyframes syncSpin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+.sync-indicator.sync-syncing i {
+    animation: syncSpin 1s linear infinite;
+}
+
+/* Backup button in sidebar */
+#backup-btn {
+    font-size: 0.75rem;
+    padding: 0.4rem 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    justify-content: center;
+    border-color: var(--border-color);
+    color: var(--text-muted);
+    transition: all 0.2s;
+}
+#backup-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: #eff6ff;
+}
+#backup-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.mb-1 { margin-bottom: 0.5rem; }
+
+/* Loading overlay for old data */
+.sheet-loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.85);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    z-index: 30;
+    border-radius: 0.75rem;
+}
+.sheet-loading-overlay i {
+    font-size: 2.5rem;
+    color: var(--primary);
+    animation: syncSpin 1s linear infinite;
+}
+.sheet-loading-overlay span {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+.sheet-wrapper {
+    position: relative;
 }

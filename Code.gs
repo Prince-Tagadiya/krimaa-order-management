@@ -6,6 +6,8 @@ var COMPANIES = {
   'company1': { name: 'Company 1', accountsSheet: 'Accounts_C1', ordersSheet: 'Orders_C1' },
   'company2': { name: 'Company 2', accountsSheet: 'Accounts_C2', ordersSheet: 'Orders_C2' }
 };
+var REMARKS_SHEET = 'Remarks';
+var _sheetsInitialised = {};
 
 function normalizeCompanyId(companyId) {
   var raw = (companyId || 'company1').toString().trim().toLowerCase();
@@ -27,16 +29,30 @@ function normalizeCompanyId(companyId) {
 // Function to automatically create the required Google Sheets if missing
 function setupSheets(companyId) {
   companyId = normalizeCompanyId(companyId);
+  if (_sheetsInitialised[companyId]) return;
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var company = COMPANIES[companyId];
   if (!company) {
-    // Fallback: setup all companies
     for (var cid in COMPANIES) {
       setupSheetsForCompany(ss, COMPANIES[cid]);
+      _sheetsInitialised[cid] = true;
     }
+    setupRemarksSheet(ss);
     return;
   }
   setupSheetsForCompany(ss, company);
+  setupRemarksSheet(ss);
+  _sheetsInitialised[companyId] = true;
+}
+
+function setupRemarksSheet(ss) {
+  var sheet = ss.getSheetByName(REMARKS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(REMARKS_SHEET);
+    sheet.appendRow(['Date', 'Remark', 'Updated']);
+    sheet.getRange('A1:C1').setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
 }
 
 function setupSheetsForCompany(ss, company) {
@@ -140,6 +156,14 @@ function doPost(e) {
       return output.setContent(JSON.stringify(updateAccountOrder(data.orderedAccounts, companyId)));
     } else if (action === 'getCompanies') {
       return output.setContent(JSON.stringify(getCompaniesInfo()));
+    } else if (action === 'saveRemark') {
+      return output.setContent(JSON.stringify(saveRemark(data.date, data.remark)));
+    } else if (action === 'getRemarks') {
+      return output.setContent(JSON.stringify(getRemarks()));
+    } else if (action === 'updateOrder') {
+      return output.setContent(JSON.stringify(updateSingleOrder(data.date, data.accountName, data.field, data.value, companyId)));
+    } else if (action === 'bulkBackup') {
+      return output.setContent(JSON.stringify(bulkBackup(data.orders, data.accounts, companyId)));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid action: ' + action}));
@@ -165,6 +189,8 @@ function doGet(e) {
       return output.setContent(JSON.stringify(getDashboardData(companyId)));
     } else if (action === 'getCompanies') {
       return output.setContent(JSON.stringify(getCompaniesInfo()));
+    } else if (action === 'getRemarks') {
+      return output.setContent(JSON.stringify(getRemarks()));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid GET action'}));
@@ -428,4 +454,137 @@ function getDashboardData(companyId) {
     });
   }
   return {success: true, data: records};
+}
+
+// ===== REMARKS =====
+function saveRemark(dateStr, remark) {
+  if (!dateStr) return {success: false, message: 'Date required'};
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupRemarksSheet(ss);
+  var sheet = ss.getSheetByName(REMARKS_SHEET);
+  var data = sheet.getDataRange().getValues();
+  var startIdx = (data.length > 0 && data[0][0] === 'Date') ? 1 : 0;
+  
+  // Find existing row for this date
+  for (var i = startIdx; i < data.length; i++) {
+    var rowDate = data[i][0];
+    if (rowDate instanceof Date) {
+      rowDate = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    }
+    if (rowDate.toString().trim() === dateStr.trim()) {
+      sheet.getRange(i + 1, 2).setValue(remark || '');
+      sheet.getRange(i + 1, 3).setValue(new Date());
+      return {success: true, message: 'Remark updated'};
+    }
+  }
+  
+  // New row
+  sheet.appendRow([dateStr, remark || '', new Date()]);
+  return {success: true, message: 'Remark saved'};
+}
+
+function getRemarks() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupRemarksSheet(ss);
+  var sheet = ss.getSheetByName(REMARKS_SHEET);
+  if (!sheet) return {success: true, data: {}};
+  var data = sheet.getDataRange().getValues();
+  var startIdx = (data.length > 0 && data[0][0] === 'Date') ? 1 : 0;
+  var remarks = {};
+  for (var i = startIdx; i < data.length; i++) {
+    var rawDate = data[i][0];
+    if (rawDate instanceof Date) {
+      rawDate = Utilities.formatDate(rawDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    }
+    remarks[rawDate.toString().trim()] = (data[i][1] || '').toString();
+  }
+  return {success: true, data: remarks};
+}
+
+// ===== UPDATE SINGLE ORDER CELL =====
+function updateSingleOrder(dateStr, accountName, field, value, companyId) {
+  companyId = normalizeCompanyId(companyId);
+  if (!dateStr || !accountName || !field) return {success: false, message: 'Missing parameters'};
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets(companyId);
+  var company = COMPANIES[companyId] || COMPANIES['company1'];
+  var sheet = ss.getSheetByName(company.ordersSheet);
+  var data = sheet.getDataRange().getValues();
+  var startIdx = (data.length > 0 && (data[0][0] === 'Date' || data[0][0] === 'Date / \u0CA4\u0CBE\u0CB0\u0CC0\u0C96')) ? 1 : 0;
+  
+  var colIndex = -1;
+  if (field === 'meesho') colIndex = 3;
+  else if (field === 'flipkart') colIndex = 4;
+  else return {success: false, message: 'Invalid field'};
+  
+  var numVal = parseInt(value) || 0;
+  
+  for (var i = startIdx; i < data.length; i++) {
+    var rowDate = data[i][0];
+    if (rowDate instanceof Date) {
+      rowDate = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    }
+    if (rowDate.toString().trim() === dateStr.trim() && data[i][1].toString().trim() === accountName.trim()) {
+      sheet.getRange(i + 1, colIndex).setValue(numVal);
+      // Recalculate total
+      var meesho = (colIndex === 3) ? numVal : (parseInt(data[i][2]) || 0);
+      var flipkart = (colIndex === 4) ? numVal : (parseInt(data[i][3]) || 0);
+      sheet.getRange(i + 1, 5).setValue(meesho + flipkart);
+      return {success: true, message: 'Order updated'};
+    }
+  }
+  
+  return {success: false, message: 'Order row not found for ' + dateStr + ' / ' + accountName};
+}
+
+// ===== BULK BACKUP (receives Firebase data and writes to Sheets) =====
+function bulkBackup(orders, accounts, companyId) {
+  companyId = normalizeCompanyId(companyId);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets(companyId);
+  var company = COMPANIES[companyId] || COMPANIES['company1'];
+  
+  // --- Backup Orders ---
+  if (orders && orders.length > 0) {
+    var ordersSheet = ss.getSheetByName(company.ordersSheet);
+    // Clear existing data (keep header)
+    var lastRow = ordersSheet.getLastRow();
+    if (lastRow > 1) {
+      ordersSheet.getRange(2, 1, lastRow - 1, 5).clearContent();
+    }
+    // Write new data
+    var rows = [];
+    for (var i = 0; i < orders.length; i++) {
+      var o = orders[i];
+      rows.push([
+        o.date || '',
+        o.accountName || '',
+        parseInt(o.meesho) || 0,
+        parseInt(o.flipkart) || 0,
+        parseInt(o.total) || 0
+      ]);
+    }
+    if (rows.length > 0) {
+      ordersSheet.getRange(2, 1, rows.length, 5).setValues(rows);
+    }
+  }
+  
+  // --- Backup Accounts ---
+  if (accounts && accounts.length > 0) {
+    var accountsSheet = ss.getSheetByName(company.accountsSheet);
+    var accLastRow = accountsSheet.getLastRow();
+    if (accLastRow > 1) {
+      accountsSheet.getRange(2, 1, accLastRow - 1, 3).clearContent();
+    }
+    var accRows = [];
+    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    for (var j = 0; j < accounts.length; j++) {
+      accRows.push([accounts[j], now, j]);
+    }
+    if (accRows.length > 0) {
+      accountsSheet.getRange(2, 1, accRows.length, 3).setValues(accRows);
+    }
+  }
+  
+  return {success: true, message: 'Backup completed for ' + company.name + ': ' + (orders ? orders.length : 0) + ' orders'};
 }

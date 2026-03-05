@@ -1,4 +1,4 @@
-const API_URL = "https://script.google.com/macros/s/AKfycbwj9oL5WWKMGzSGYv3llJTjbPcHg8z2DvCdtquDIvmMAlsEt01mDvd0_IFdzSRVvPgT/exec"; 
+// API_URL is now in config.js as SHEETS_API_URL
 
 // ===== Multi-User Auth System =====
 const USERS = [
@@ -8,12 +8,15 @@ const USERS = [
 
 const AppState = {
     accounts: [],
+    accountDetails: [],
     dashboardData: [],
     company1Accounts: [],
+    company1Details: [],
     company2Accounts: [],
+    company2Details: [],
     company1Data: [],
     company2Data: [],
-    currentSection: 'dashboard',
+    currentSection: 'data-sheet',
     currentCompany: 'company1',
     currentUser: null, // { username, role, displayName }
     heatmapMonth: new Date().getMonth(),
@@ -63,6 +66,26 @@ function diffDays(fromISO, toISO) {
     const toDate = new Date(`${toISO}T00:00:00`);
     if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) return -1;
     return Math.max(0, Math.floor((toDate - fromDate) / (1000 * 60 * 60 * 24)));
+}
+
+function formatISODateForDisplay(rawDate) {
+    const iso = normalizeToISODate(rawDate);
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-');
+    return `${d}/${m}/${y}`;
+}
+
+function getRelativeDayText(fromISO) {
+    const days = diffDays(fromISO, getTodayISODate());
+    if (days === -1) return 'Unknown';
+    if (days === 0) return 'Today';
+    return `${days} day${days > 1 ? 's' : ''} ago`;
+}
+
+function getRechargeText(rawDate) {
+    const iso = normalizeToISODate(rawDate);
+    if (!iso) return 'Not added';
+    return `${formatISODateForDisplay(iso)} (${getRelativeDayText(iso)})`;
 }
 
 function getCompanyDisplayName(companyId = AppState.currentCompany) {
@@ -141,6 +164,11 @@ document.addEventListener('DOMContentLoaded', () => { initApp(); });
 function initApp() {
     checkAuth();
     attachEventListeners();
+    initSyncIndicator();
+
+    // Backup button
+    const backupBtn = document.getElementById('backup-btn');
+    if (backupBtn) backupBtn.addEventListener('click', backupToSheets);
 
     const today = getTodayISODate();
     setOrderDateDefaults(true);
@@ -220,6 +248,11 @@ async function switchCompany(previousCompany = '') {
     showProgressToast(`Switching to ${companyName}...`);
 
     try {
+        // Force flush before switching (just to be safe although firebase queues these up beautifully)
+        if (typeof FirebaseService !== 'undefined') {
+            await FirebaseService.flushWrites();
+        }
+        
         AppState.accounts = [];
         AppState.dashboardData = [];
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
@@ -236,6 +269,14 @@ async function switchCompany(previousCompany = '') {
             checkExistingOrdersForDate();
         }
         else if (AppState.currentSection === 'add-account') renderAccountsList();
+        else if (AppState.currentSection === 'money-management') renderMoneyManagement();
+        else if (AppState.currentSection === 'data-sheet') { 
+            // Also switch data sheet filter and force re-render
+            const cmFilter = document.getElementById('sheet-company-filter');
+            if (cmFilter) cmFilter.value = AppState.currentCompany;
+            populateSheetMonthFilter(); 
+            renderDataSheet(); 
+        }
         updateOrderCompanyLabel();
         
         showToast(`Switched to ${companyName} successfully!`, "success");
@@ -282,12 +323,16 @@ function applyRolePermissions() {
     userInfo.innerHTML = `<span>${AppState.currentUser.displayName}</span>`;
     
     if (role === 'order') {
-        // Hide Dashboard and Manage Accounts for order role
+        // Hide Dashboard, Data Sheet and Manage Accounts for order role
         document.getElementById('nav-dashboard').style.display = 'none';
+        document.getElementById('nav-data-sheet').style.display = 'none';
         document.getElementById('nav-manage-accounts').style.display = 'none';
+        document.getElementById('nav-money-management').style.display = 'none';
     } else {
         document.getElementById('nav-dashboard').style.display = '';
+        document.getElementById('nav-data-sheet').style.display = '';
         document.getElementById('nav-manage-accounts').style.display = '';
+        document.getElementById('nav-money-management').style.display = '';
     }
 }
 
@@ -346,18 +391,23 @@ function attachEventListeners() {
     document.getElementById('add-account-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const accountName = document.getElementById('new-account-name').value.trim();
+        const mobile = document.getElementById('new-account-mobile')?.value.trim();
+        const rechargeDate = document.getElementById('new-account-recharge')?.value;
         if (!accountName) return;
         const btn = document.getElementById('add-account-btn');
         btn.disabled = true;
         document.getElementById('new-account-name').value = '';
+        if (document.getElementById('new-account-mobile')) document.getElementById('new-account-mobile').value = '';
+        if (document.getElementById('new-account-recharge')) document.getElementById('new-account-recharge').value = '';
+        
         const container = document.getElementById('active-account-list');
         const tempId = 'temp-' + Date.now();
         const tempHtml = `<div id="${tempId}" class="account-item" style="opacity: 0.6; border: 1px dashed var(--primary);"><i class='bx bx-loader-alt bx-spin'></i><span class="account-name">${accountName} <small class="text-muted">(Syncing...)</small></span></div>`;
         if (container.querySelector('p')) container.innerHTML = '';
         container.insertAdjacentHTML('afterbegin', tempHtml);
         try {
-            const res = await apiRequest({ action: 'addAccount', accountName, companyId: AppState.currentCompany });
-            if (res.success) { showToast("Account saved!", "success"); await fetchAccounts(); renderAccountsList(); }
+            const res = await apiRequest({ action: 'addAccount', accountName, mobile, gstin: '', rechargeDate, companyId: AppState.currentCompany });
+            if (res.success) { showToast("Account saved!", "success"); await fetchAccounts(); await fetchAllCompaniesData(); renderAccountsList(); }
             else { showToast(res.message, "error"); document.getElementById(tempId).remove(); }
         } catch (err) { showToast("Network Error!", "error"); document.getElementById(tempId).remove(); }
         finally { btn.disabled = false; }
@@ -406,14 +456,17 @@ function attachEventListeners() {
     
     document.getElementById('close-edit-modal-btn').addEventListener('click', () => document.getElementById('edit-account-modal').classList.remove('show'));
     document.getElementById('edit-account-modal').addEventListener('click', (e) => { if(e.target.id === 'edit-account-modal') e.target.classList.remove('show'); });
+    document.getElementById('edit-account-recharge')?.addEventListener('change', updateEditRechargeMeta);
     document.getElementById('edit-account-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const oldName = document.getElementById('edit-account-old-name').value;
         const newName = document.getElementById('edit-account-name').value.trim();
+        const mobile = document.getElementById('edit-account-mobile')?.value.trim();
+        const rechargeDate = document.getElementById('edit-account-recharge')?.value;
         if (!newName) return;
         showLoader();
         try {
-            const res = await apiRequest({ action: 'editAccount', oldName, newName, companyId: AppState.currentCompany });
+            const res = await apiRequest({ action: 'editAccount', oldName, newName, mobile, gstin: '', rechargeDate, companyId: AppState.currentCompany });
             if (res.success) {
                 showToast("Account updated!", "success");
                 document.getElementById('edit-account-modal').classList.remove('show');
@@ -446,10 +499,9 @@ function attachEventListeners() {
 }
 
 function navigateTo(sectionId) {
-    if (API_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL") { showToast("Please set the API_URL first!", "error"); return; }
     
     // Permission check for order role
-    if (AppState.currentUser?.role === 'order' && (sectionId === 'add-account' || sectionId === 'dashboard')) {
+    if (AppState.currentUser?.role === 'order' && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'data-sheet' || sectionId === 'money-management')) {
         showToast("Access denied", "error"); return;
     }
     
@@ -457,7 +509,13 @@ function navigateTo(sectionId) {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const activeBtn = document.querySelector(`[data-target="${sectionId}"]`);
     if(activeBtn) activeBtn.classList.add('active');
-    const titles = { 'dashboard': 'Dashboard', 'daily-order': 'Daily Order Entry', 'add-account': 'Manage Accounts' };
+    const titles = {
+        'dashboard': 'แดชบอร์ด',
+        'daily-order': 'Daily Order Entry',
+        'add-account': 'Manage Accounts',
+        'money-management': 'จัดการเงิน (Money Management)',
+        'data-sheet': 'Data Sheet'
+    };
     document.getElementById('page-title').textContent = titles[sectionId];
     document.querySelectorAll('.content-section').forEach(sec => sec.classList.remove('active'));
     document.getElementById(sectionId).classList.add('active');
@@ -470,22 +528,36 @@ function navigateTo(sectionId) {
     }
     else if (sectionId === 'dashboard') renderDashboard();
     else if (sectionId === 'add-account') renderAccountsList();
+    else if (sectionId === 'money-management') renderMoneyManagement();
+    else if (sectionId === 'data-sheet') { 
+        document.getElementById('sheet-company-filter').value = AppState.currentCompany;
+        populateSheetMonthFilter(); 
+        renderDataSheet(); 
+    }
 }
 
 async function loadInitialData() {
-    if (API_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL") { showToast("Set API_URL in app.js.", "error"); return; }
     showLoader();
     try {
+        FirebaseService.init();
+        
+        // One-time migration: Sheets → Firebase
+        await ensureFirebaseSeeded();
+        
         await Promise.all([fetchAccounts(), fetchDashboardData()]);
         try {
             await fetchAllCompaniesData();
         } catch (e) {
             console.warn('Non-blocking: failed to preload all-company dashboard data', e);
         }
+        
+        // Check auto-backup
+        checkAutoBackup();
+        
         if (AppState.currentUser?.role === 'order') {
             navigateTo('daily-order');
         } else {
-            navigateTo('dashboard');
+            navigateTo('data-sheet');
         }
     } catch (err) { console.error(err); showToast("Error loading data: " + err.message, "error"); }
     finally { hideLoader(); }
@@ -498,6 +570,8 @@ async function fetchAccounts() {
         if (Array.isArray(res?.data)) AppState.accounts = res.data;
         else if (Array.isArray(res)) AppState.accounts = res; // compatibility with legacy shape
         else AppState.accounts = [];
+        
+        if (res?.details) AppState.accountDetails = res.details;
     } catch(e) {
         console.error(e);
         throw e;
@@ -539,6 +613,8 @@ async function fetchAllCompaniesData() {
 
     if (c1Accounts !== null) AppState.company1Accounts = c1Accounts;
     if (c2Accounts !== null) AppState.company2Accounts = c2Accounts;
+    if (c1Acc && c1Acc.details) AppState.company1Details = c1Acc.details;
+    if (c2Acc && c2Acc.details) AppState.company2Details = c2Acc.details;
     if (c1Rows !== null) AppState.company1Data = c1Rows;
     if (c2Rows !== null) AppState.company2Data = c2Rows;
 }
@@ -550,23 +626,73 @@ function renderAccountsList() {
     if (AppState.accounts.length === 0) { container.innerHTML = '<p class="text-muted">No accounts added yet.</p>'; return; }
     const sorted = getSortedAccounts();
     const isAdmin = AppState.currentUser?.role === 'admin';
-    container.innerHTML = sorted.map((acc, idx) => `
-        <div class="account-item">
-            <div class="account-position-badge">${idx + 1}</div>
-            <span class="account-name">${acc}</span>
+    
+    // Add Sortable to container if not initialized
+    if (isAdmin && !container._sortableInstance) {
+        container._sortableInstance = Sortable.create(container, {
+            handle: '.drag-handle',
+            animation: 250,
+            onEnd: function() {
+                const newOrder = Array.from(container.children).map(c => c.dataset.account);
+                AppState.accounts = [...newOrder];
+                saveAccountPositions(newOrder);
+                saveAccountOrderToSheet(newOrder);
+                Array.from(container.children).forEach((el, idx) => {
+                    const posEl = el.querySelector('.account-position-badge');
+                    if (posEl) posEl.textContent = idx + 1;
+                });
+            }
+        });
+    }
+
+    container.innerHTML = sorted.map((acc, idx) => {
+        const details = AppState.accountDetails?.find(d => d.name === acc) || {};
+        const rechargeTxt = getRechargeText(details.rechargeDate);
+        const extraHtml = `
+            <div class="account-meta">
+                <span><i class='bx bx-phone'></i> Mobile: ${details.mobile || 'Not added'}</span>
+                <span><i class='bx bx-calendar'></i> Recharge: ${rechargeTxt}</span>
+            </div>`;
+
+        return `
+        <div class="account-item" data-account="${acc.replace(/"/g, '&quot;')}">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                ${isAdmin ? `<i class='bx bx-menu drag-handle' style="cursor: grab; color: #a0aec0;"></i>` : ''}
+                <div class="account-position-badge">${idx + 1}</div>
+                <div>
+                    <span class="account-name font-bold">${acc}</span>
+                    ${extraHtml}
+                </div>
+            </div>
             ${isAdmin ? `<div class="account-actions">
-                <button class="btn btn-outline btn-sm edit-btn" onclick="openEditAccount('${acc.replace(/'/g, "\\'")}')" title="Edit"><i class='bx bx-edit-alt'></i> Edit</button>
+                <button class="btn btn-outline btn-sm edit-btn" onclick="openEditAccount('${acc.replace(/'/g, "\\'")}')" title="Edit details"><i class='bx bx-edit-alt'></i></button>
                 <button class="btn btn-outline btn-sm delete-btn" onclick="openDeleteAccount('${acc.replace(/'/g, "\\'")}')" title="Delete"><i class='bx bx-trash'></i></button>
             </div>` : ''}
         </div>
-    `).join('');
+    `}).join('');
 }
 
 function openEditAccount(name) {
     document.getElementById('edit-account-old-name').value = name;
     document.getElementById('edit-account-name').value = name;
+    const nameLabel = document.getElementById('edit-account-name-display');
+    if (nameLabel) nameLabel.textContent = name;
+    
+    // Fill the detailed fields if available
+    const details = AppState.accountDetails?.find(d => d.name === name);
+    if (document.getElementById('edit-account-mobile')) document.getElementById('edit-account-mobile').value = details?.mobile || '';
+    if (document.getElementById('edit-account-recharge')) document.getElementById('edit-account-recharge').value = details?.rechargeDate || '';
+    updateEditRechargeMeta();
+    
     document.getElementById('edit-account-modal').classList.add('show');
-    setTimeout(() => document.getElementById('edit-account-name').focus(), 200);
+    setTimeout(() => document.getElementById('edit-account-mobile')?.focus(), 200);
+}
+
+function updateEditRechargeMeta() {
+    const rechargeInput = document.getElementById('edit-account-recharge');
+    const meta = document.getElementById('edit-account-recharge-meta');
+    if (!rechargeInput || !meta) return;
+    meta.textContent = rechargeInput.value ? getRechargeText(rechargeInput.value) : 'Not added';
 }
 
 function openDeleteAccount(name) {
@@ -640,9 +766,10 @@ function initDragAndDrop() {
     });
 }
 
-async function saveAccountOrderToSheet(orderedAccounts) {
+async function saveAccountOrderToSheet(orderedAccounts, paramCompanyId) {
+    const compId = paramCompanyId || AppState.currentCompany;
     try {
-        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts, companyId: AppState.currentCompany });
+        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts, companyId: compId });
         if (res.success) showToast('Position saved!', 'success');
         else showToast(res.message || 'Failed', 'error');
     } catch(err) { showToast('Position saved locally, sheet sync failed', 'error'); }
@@ -1280,43 +1407,289 @@ function toggleDateDetails(dateId) {
     if (icon) icon.classList.toggle('open', !isOpen);
 }
 
-// ===== API =====
+// ===== API (routes through Firebase) =====
 async function apiRequest(payload) {
-    const parseJsonResponse = async (res) => {
-        const text = await res.text();
-        try {
-            return JSON.parse(text);
-        } catch (e) {
-            throw new Error('Invalid JSON response from API');
+    const action = payload?.action;
+    const companyId = payload?.companyId || AppState.currentCompany || 'company1';
+    try {
+        switch (action) {
+            case 'getAccounts': return await FirebaseService.getAccounts(companyId);
+            case 'getDashboardData': return await FirebaseService.getOrders(companyId);
+            case 'submitOrders': return await FirebaseService.submitOrders(payload.date, payload.orders, companyId);
+            case 'addAccount': return await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+            case 'editAccount': return await FirebaseService.editAccount(payload.oldName, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+            case 'deleteAccount': return await FirebaseService.deleteAccount(payload.accountName, companyId);
+            case 'updateAccountOrder': return await FirebaseService.updateAccountOrder(payload.orderedAccounts, companyId);
+            case 'saveRemark': return await FirebaseService.saveRemark(payload.date, payload.remark);
+            case 'getRemarks': return await FirebaseService.getRemarks();
+            case 'updateOrder': return await FirebaseService.updateOrder(payload.date, payload.accountName, payload.field, payload.value, companyId);
+            case 'getCompanies': return { success: true, data: [{id: 'company1', name: 'Company 1'}, {id: 'company2', name: 'Company 2'}] };
+            case 'updateMoney': return await FirebaseService.updateMoney(payload.accountName, companyId, payload.money, payload.expense, payload.date);
+            case 'resetAllMoney': return await FirebaseService.resetAllMoney(payload.date);
+            default: throw new Error('Unknown action: ' + action);
         }
-    };
+    } catch (err) {
+        console.error(`Firebase ${action} error:`, err);
+        throw err;
+    }
+}
 
-    const postRequest = async () => {
-        const res = await fetch(API_URL, {
+// Google Sheets API – used only for backup/archive operations
+async function sheetsApiRequest(payload) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+    try {
+        const res = await fetch(SHEETS_API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: controller.signal
         });
-        if (!res.ok) throw new Error(`Network response was not ok (${res.status})`);
-        return parseJsonResponse(res);
-    };
-
-    try {
-        return await postRequest();
-    } catch (postError) {
-        // Backward-compatible fallback for read actions on older Apps Script deployments.
-        const action = payload?.action;
-        const isReadAction = action === 'getAccounts' || action === 'getDashboardData' || action === 'getCompanies';
-        if (!isReadAction) throw postError;
-
-        const params = new URLSearchParams({
-            action: action || '',
-            companyId: payload?.companyId || AppState.currentCompany || 'company1'
-        });
-        const getRes = await fetch(`${API_URL}?${params.toString()}`, { method: 'GET' });
-        if (!getRes.ok) throw postError;
-        return parseJsonResponse(getRes);
+        clearTimeout(timeout);
+        if (!res.ok) throw new Error(`Sheets API error (${res.status})`);
+        const text = await res.text();
+        try { return JSON.parse(text); } catch (e) { throw new Error('Invalid JSON from Sheets API'); }
+    } catch (e) {
+        clearTimeout(timeout);
+        if (e.name === 'AbortError') throw new Error('Sheets API timeout (15s)');
+        throw e;
     }
+}
+
+// ===== FIREBASE MIGRATION (one-time) =====
+async function ensureFirebaseSeeded() {
+    const seeded = localStorage.getItem('firebase_seeded');
+    if (seeded) return;
+    
+    try {
+        // Timeout entire migration to 30s max so app doesn't hang
+        await Promise.race([
+            _doFirebaseSeed(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Migration timeout')), 30000))
+        ]);
+    } catch (e) {
+        console.warn('Firebase seeding skipped/failed:', e);
+        showToast('Loading from Firebase…', 'info');
+    }
+}
+
+async function _doFirebaseSeed() {
+    let c1Empty = true, c2Empty = true;
+    try {
+        c1Empty = await FirebaseService.isEmpty('company1');
+        c2Empty = await FirebaseService.isEmpty('company2');
+    } catch (e) {
+        console.warn('Firestore check failed:', e);
+        // If Firestore itself fails, skip seeding entirely
+        return;
+    }
+    
+    if (!c1Empty && !c2Empty) {
+        localStorage.setItem('firebase_seeded', 'true');
+        return;
+    }
+    
+    showProgressToast('Setting up Firebase… (one-time)');
+    
+    try {
+        if (c1Empty) {
+            const [accRes, ordRes] = await Promise.all([
+                sheetsApiRequest({ action: 'getAccounts', companyId: 'company1' }),
+                sheetsApiRequest({ action: 'getDashboardData', companyId: 'company1' })
+            ]);
+            await FirebaseService.seedFromSheets('company1', accRes?.data || [], ordRes?.data || []);
+        }
+        if (c2Empty) {
+            const [accRes, ordRes] = await Promise.all([
+                sheetsApiRequest({ action: 'getAccounts', companyId: 'company2' }),
+                sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2' })
+            ]);
+            await FirebaseService.seedFromSheets('company2', accRes?.data || [], ordRes?.data || []);
+        }
+        // Seed remarks
+        try {
+            const remRes = await sheetsApiRequest({ action: 'getRemarks' });
+            if (remRes?.data) {
+                for (const [date, remark] of Object.entries(remRes.data)) {
+                    await FirebaseService.saveRemark(date, remark);
+                }
+            }
+        } catch(e) { console.warn('Remarks migration skipped:', e); }
+        
+        localStorage.setItem('firebase_seeded', 'true');
+        showToast('Firebase ready!', 'success');
+    } catch (e) {
+        console.error('Migration error:', e);
+        showToast('Migration skipped – data will load from Firebase', 'info');
+    }
+}
+
+// ===== BACKUP TO SHEETS =====
+async function backupToSheets() {
+    const btn = document.getElementById('backup-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Backing up…"; }
+    showToast('Starting backup to Google Sheets…', 'info');
+    
+    try {
+        // Flush any buffered writes first
+        await FirebaseService.flushWrites();
+        
+        const allData = await FirebaseService.getAllDataForBackup();
+        
+        // Send Company 1 orders to Sheets
+        if (allData.company1.orders.length > 0) {
+            await sheetsApiRequest({
+                action: 'bulkBackup',
+                companyId: 'company1',
+                orders: allData.company1.orders,
+                accounts: allData.company1.accounts.map(a => a.name)
+            });
+        }
+        // Send Company 2 orders to Sheets
+        if (allData.company2.orders.length > 0) {
+            await sheetsApiRequest({
+                action: 'bulkBackup',
+                companyId: 'company2',
+                orders: allData.company2.orders,
+                accounts: allData.company2.accounts.map(a => a.name)
+            });
+        }
+        // Save remarks
+        for (const [date, remark] of Object.entries(allData.remarks || {})) {
+            await sheetsApiRequest({ action: 'saveRemark', date, remark });
+        }
+        
+        // Update backup meta
+        await FirebaseService.setBackupMeta({
+            lastBackup: new Date().toISOString(),
+            lastBackupType: 'manual'
+        });
+        
+        showToast('Backup complete! ✓', 'success');
+        updateLastBackupTimeDisplay(new Date().toISOString());
+    } catch (e) {
+        console.error('Backup error:', e);
+        showToast('Backup failed: ' + e.message, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.innerHTML = "<i class='bx bx-cloud-upload'></i> Backup to Sheets"; }
+    }
+}
+
+function updateLastBackupTimeDisplay(isoString) {
+    const el = document.getElementById('last-backup-time');
+    if (!el) return;
+    if (!isoString) {
+        el.textContent = 'Never backed up';
+        return;
+    }
+    try {
+        const d = new Date(isoString);
+        el.textContent = 'Last Backup: ' + d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch(e) {
+        el.textContent = '';
+    }
+}
+
+// Monthly cleanup: move all data to Sheets, then clear old Firebase data
+async function monthlyCleanup() {
+    showToast('Running monthly backup…', 'info');
+    try {
+        await backupToSheets();
+        const deleted = await FirebaseService.clearOldOrders(true); // keep current month
+        await FirebaseService.setBackupMeta({
+            lastMonthlyBackup: new Date().toISOString()
+        });
+        showToast(`Monthly backup done! ${deleted} archived rows cleared.`, 'success');
+    } catch (e) {
+        console.error('Monthly cleanup error:', e);
+        showToast('Monthly cleanup failed', 'error');
+    }
+}
+
+async function checkAutoBackup() {
+    try {
+        const meta = await FirebaseService.getBackupMeta();
+        
+        if (meta && meta.lastBackup) {
+            updateLastBackupTimeDisplay(meta.lastBackup);
+        } else {
+            updateLastBackupTimeDisplay(null);
+        }
+        
+        const today = getTodayISODate();
+        const now = new Date();
+        
+        // Daily backup
+        if (APP_CONFIG.dailyBackupEnabled) {
+            const lastDaily = meta.lastBackup ? meta.lastBackup.substring(0, 10) : '';
+            if (lastDaily !== today) {
+                console.log('Auto daily backup triggered');
+                backupToSheets(); // fire and forget
+            }
+        }
+        
+        // Monthly cleanup on 1st of month
+        if (APP_CONFIG.monthlyCleanup && now.getDate() === 1) {
+            const lastMonthly = meta.lastMonthlyBackup ? meta.lastMonthlyBackup.substring(0, 7) : '';
+            const currentMonth = today.substring(0, 7);
+            if (lastMonthly !== currentMonth) {
+                console.log('Auto monthly cleanup triggered');
+                monthlyCleanup(); // fire and forget
+            }
+        }
+    } catch (e) {
+        console.warn('Auto-backup check failed:', e);
+    }
+}
+
+// ===== SYNC INDICATOR =====
+function initSyncIndicator() {
+    FirebaseService.onSyncStatusChange(status => {
+        const pending = typeof FirebaseService !== 'undefined' && FirebaseService.getPendingCount ? FirebaseService.getPendingCount() : 0;
+        const el = document.getElementById('sync-indicator');
+        if (el) {
+            el.className = 'sync-indicator sync-' + status;
+            const icons = {
+                idle:    'bx-check-circle',
+                saved:   'bx-check-circle',
+                pending: 'bx-time-five',
+                syncing: 'bx-loader-alt bx-spin',
+                error:   'bx-error-circle'
+            };
+            const labels = {
+                idle:    'Synced',
+                saved:   'Saved ✓',
+                pending: `${pending} unsaved`,
+                syncing: 'Saving…',
+                error:   'Sync error'
+            };
+            el.innerHTML = `<i class='bx ${icons[status] || icons.idle}'></i><span>${labels[status] || 'Synced'}</span>`;
+        }
+        
+        // Manual Save Button on Data Sheet
+        const saveBtn = document.getElementById('sheet-save-btn');
+        if (saveBtn) {
+            const pendingParams = typeof FirebaseService !== 'undefined' && FirebaseService.getPendingCount ? FirebaseService.getPendingCount() : 0;
+            if (pendingParams > 0 || status === 'pending') {
+                saveBtn.classList.remove('hidden');
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = `<i class='bx bx-save'></i> Save ${pendingParams} changes`;
+            } else if (status === 'syncing') {
+                saveBtn.classList.remove('hidden');
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = `<i class='bx bx-loader-alt bx-spin'></i> Saving…`;
+            } else {
+                saveBtn.classList.add('hidden');
+            }
+        }
+    });
+    
+    // Bind Save Now button
+    document.getElementById('sheet-save-btn')?.addEventListener('click', () => {
+        if (typeof FirebaseService !== 'undefined') {
+            FirebaseService.flushWrites();
+        }
+    });
 }
 
 function updateOrderDateLabel() {
@@ -1360,7 +1733,7 @@ function showToast(message, type = "success") {
     
     toast.style.background = bg;
     toast.style.color = color;
-    toast.innerHTML = `${icon} <span>${message}</span>`;
+    toast.innerHTML = `<div style="display:flex;align-items:center;flex:1;gap:10px;">${icon} <span>${message}</span></div><button onclick="document.getElementById('toast').classList.add('hidden')" style="background:none;border:none;color:inherit;cursor:pointer;font-size:1.5rem;padding:0;line-height:0.5;margin-left:15px;opacity:0.8;">&times;</button>`;
     
     toast.classList.remove('hidden');
     
@@ -1379,3 +1752,567 @@ window.app = { navigateTo };
 window.openEditAccount = openEditAccount;
 window.openDeleteAccount = openDeleteAccount;
 window.toggleDateDetails = toggleDateDetails;
+
+// ===== DATA SHEET =====
+
+// Debounce helper
+const _sheetSaveTimers = {};
+function debouncedSave(key, fn, delayMs = 1500) {
+    if (_sheetSaveTimers[key]) clearTimeout(_sheetSaveTimers[key]);
+    _sheetSaveTimers[key] = setTimeout(fn, delayMs);
+}
+
+// Remark cache
+let _remarkCache = null;
+let _remarkCacheLoaded = false;
+
+async function loadRemarksFromBackend() {
+    if (_remarkCacheLoaded && _remarkCache) return _remarkCache;
+    try {
+        const res = await apiRequest({ action: 'getRemarks' });
+        if (res && res.success !== false && res.data) {
+            _remarkCache = res.data;
+            // Also sync to localStorage as fallback
+            localStorage.setItem('sheetRemarks', JSON.stringify(res.data));
+        } else {
+            _remarkCache = {};
+        }
+    } catch (e) {
+        console.warn('Could not load remarks from backend, using local', e);
+        try { _remarkCache = JSON.parse(localStorage.getItem('sheetRemarks') || '{}'); } catch(ex) { _remarkCache = {}; }
+    }
+    _remarkCacheLoaded = true;
+    return _remarkCache;
+}
+
+function initDataSheetListeners() {
+    const compFilter = document.getElementById('sheet-company-filter');
+    const monthFilter = document.getElementById('sheet-month-filter');
+    const exportBtn = document.getElementById('sheet-export-btn');
+    const reorderBtn = document.getElementById('sheet-reorder-btn');
+    
+    if (compFilter) compFilter.addEventListener('change', renderDataSheet);
+    if (monthFilter) monthFilter.addEventListener('change', renderDataSheet);
+    if (exportBtn) exportBtn.addEventListener('click', exportSheetCSV);
+    if (reorderBtn) reorderBtn.addEventListener('click', openReorderColumnsModal);
+
+    const closeReorderBtn = document.getElementById('close-reorder-modal-btn');
+    if (closeReorderBtn) {
+        closeReorderBtn.addEventListener('click', () => {
+            document.getElementById('reorder-columns-modal').classList.remove('show');
+        });
+    }
+
+    const reorderModal = document.getElementById('reorder-columns-modal');
+    if (reorderModal) {
+        reorderModal.addEventListener('click', (e) => {
+            if (e.target.id === 'reorder-columns-modal') e.target.classList.remove('show');
+        });
+    }
+}
+
+function openReorderColumnsModal() {
+    const modal = document.getElementById('reorder-columns-modal');
+    const list = document.getElementById('reorder-account-list');
+    if (!modal || !list) return;
+    
+    const companyFilter = document.getElementById('sheet-company-filter').value;
+    let accounts = [];
+    if (companyFilter === 'company1') {
+        accounts = [...AppState.company1Accounts];
+    } else if (companyFilter === 'company2') {
+        accounts = [...AppState.company2Accounts];
+    } else {
+        showToast('Please select Company 1 or Company 2 first to reorder.', 'info');
+        return;
+    }
+    
+    list.innerHTML = accounts.map(acc => `
+        <div class="account-item reorder-item" data-account="${acc.replace(/'/g, "\\'")}" style="cursor: grab; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: #f8fafc; display: flex; align-items: center; gap: 0.75rem;">
+            <i class='bx bx-menu text-muted'></i>
+            <span class="font-bold text-sm">${acc}</span>
+        </div>
+    `).join('');
+    
+    modal.classList.add('show');
+    
+    if (list._sortableInstance) list._sortableInstance.destroy();
+    list._sortableInstance = Sortable.create(list, {
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        onEnd: function() {
+            const newOrder = [];
+            list.querySelectorAll('.reorder-item').forEach(item => {
+                newOrder.push(item.dataset.account);
+            });
+            if (companyFilter === 'company1') {
+                AppState.company1Accounts = newOrder;
+            } else {
+                AppState.company2Accounts = newOrder;
+            }
+            saveAccountOrderToSheet(newOrder, companyFilter);
+            renderDataSheet();
+        }
+    });
+}
+
+function populateSheetMonthFilter() {
+    const monthFilter = document.getElementById('sheet-month-filter');
+    if (!monthFilter) return;
+    
+    const allData = [...AppState.company1Data, ...AppState.company2Data];
+    const months = new Set();
+    allData.forEach(r => {
+        const d = normalizeToISODate(r.date);
+        if (d) months.add(d.substring(0, 7));
+    });
+    
+    const sortedMonths = [...months].sort().reverse();
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const currentMonth = getTodayISODate().substring(0, 7);
+    
+    // Remember current selection
+    const prevVal = monthFilter.value;
+    
+    let html = '<option value="all">All Months</option>';
+    sortedMonths.forEach(m => {
+        const [y, mo] = m.split('-');
+        const label = `${monthNames[parseInt(mo)-1]} ${y}`;
+        const sel = (prevVal && prevVal === m) ? 'selected' : (!prevVal && m === currentMonth ? 'selected' : '');
+        html += `<option value="${m}" ${sel}>${label}</option>`;
+    });
+    if (sortedMonths.length === 0) {
+        html += `<option value="${currentMonth}" selected>${monthNames[new Date().getMonth()]} ${new Date().getFullYear()}</option>`;
+    }
+    monthFilter.innerHTML = html;
+}
+
+async function renderDataSheet() {
+    const thead = document.getElementById('sheet-thead');
+    const tbody = document.getElementById('sheet-tbody');
+    const emptyMsg = document.getElementById('sheet-empty');
+    const wrapper = document.querySelector('.sheet-wrapper');
+    if (!thead || !tbody) return;
+    
+    const companyFilter = document.getElementById('sheet-company-filter').value;
+    const monthFilter = document.getElementById('sheet-month-filter').value;
+    
+    // Determine which companies to show
+    let accounts = [];
+    let rawData = [];
+    
+    if (companyFilter === 'company1') {
+        accounts = AppState.company1Accounts.map(a => ({ name: a, company: 'company1', label: getCompanyDisplayName('company1') }));
+        rawData = [...AppState.company1Data];
+    } else if (companyFilter === 'company2') {
+        accounts = AppState.company2Accounts.map(a => ({ name: a, company: 'company2', label: getCompanyDisplayName('company2') }));
+        rawData = [...AppState.company2Data];
+    } else {
+        AppState.company1Accounts.forEach(a => accounts.push({ name: a, company: 'company1', label: getCompanyDisplayName('company1') }));
+        AppState.company2Accounts.forEach(a => accounts.push({ name: a, company: 'company2', label: getCompanyDisplayName('company2') }));
+        rawData = [...AppState.company1Data, ...AppState.company2Data];
+    }
+    
+    // Filter by month
+    if (monthFilter && monthFilter !== 'all') {
+        rawData = rawData.filter(r => {
+            const d = normalizeToISODate(r.date);
+            return d && d.startsWith(monthFilter);
+        });
+    }
+    
+    // Collect unique dates, newest first
+    const dateSet = new Set();
+    rawData.forEach(r => {
+        const d = normalizeToISODate(r.date);
+        if (d) dateSet.add(d);
+    });
+    
+    // Always include today's date in the data sheet if it matches the current month filter
+    const todayStr = getTodayISODate();
+    if (!monthFilter || monthFilter === 'all' || todayStr.startsWith(monthFilter)) {
+        dateSet.add(todayStr);
+    }
+    
+    const dates = [...dateSet].sort().reverse();
+    
+    if (accounts.length === 0 || dates.length === 0) {
+        wrapper.classList.add('hidden');
+        emptyMsg.classList.remove('hidden');
+        return;
+    }
+    wrapper.classList.remove('hidden');
+    emptyMsg.classList.add('hidden');
+    
+    // Build lookup: { date -> { accountName -> { meesho, flipkart, total, company } } }
+    const lookup = {};
+    rawData.forEach(r => {
+        const d = normalizeToISODate(r.date);
+        if (!d) return;
+        if (!lookup[d]) lookup[d] = {};
+        const key = r.accountName;
+        if (!lookup[d][key]) lookup[d][key] = { meesho: 0, flipkart: 0, total: 0 };
+        lookup[d][key].meesho += parseInt(r.meesho) || 0;
+        lookup[d][key].flipkart += parseInt(r.flipkart) || 0;
+        lookup[d][key].total += parseInt(r.total) || 0;
+    });
+    
+    // Load remarks (from backend first time, then cached)
+    const savedRemarks = await loadRemarksFromBackend();
+    
+    const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    
+    // === HEADER ===
+    let headerRow1 = '<tr><th class="sheet-date-col" rowspan="2">Date</th>';
+    accounts.forEach((acc, idx) => {
+        const compTag = companyFilter === 'all' ? `<span class="sheet-company-tag">${acc.label}</span>` : '';
+        const borderCls = 'sheet-acct-group' + (idx < accounts.length - 1 ? '' : '');
+        headerRow1 += `<th class="sheet-acct-group sheet-acct-border" colspan="2">${acc.name}${compTag}</th>`;
+    });
+    headerRow1 += '<th class="sheet-acct-group sheet-total-col" rowspan="2">Total</th>';
+    headerRow1 += '<th class="sheet-acct-group" rowspan="2" style="min-width:140px;">Remarks</th>';
+    headerRow1 += '</tr>';
+    
+    let headerRow2 = '<tr>';
+    accounts.forEach(() => {
+        headerRow2 += '<th class="sheet-sub-col">M</th><th class="sheet-sub-col sheet-acct-border">F</th>';
+    });
+    headerRow2 += '</tr>';
+    thead.innerHTML = headerRow1 + headerRow2;
+    
+    // === BODY ===
+    let bodyHtml = '';
+    const grandTotals = { meesho: new Array(accounts.length).fill(0), flipkart: new Array(accounts.length).fill(0), total: 0 };
+    
+    dates.forEach(date => {
+        const [y, m, d] = date.split('-');
+        const dateObj = new Date(parseInt(y), parseInt(m)-1, parseInt(d));
+        const dayName = dayNames[dateObj.getDay()];
+        const isToday = date === todayStr;
+        const dayChipClass = isToday ? 'sheet-day-chip sheet-today' : 'sheet-day-chip';
+        const formattedDate = `${d}/${m}/${y}`;
+        
+        bodyHtml += '<tr>';
+        bodyHtml += `<td class="sheet-date-cell">${formattedDate} <span class="${dayChipClass}">${dayName}</span></td>`;
+        
+        let rowTotal = 0;
+        accounts.forEach((acc, idx) => {
+            const cell = lookup[date]?.[acc.name] || { meesho: 0, flipkart: 0, total: 0 };
+            const meeshoVal = cell.meesho || '';
+            const flipkartVal = cell.flipkart || '';
+            rowTotal += cell.total;
+            grandTotals.meesho[idx] += cell.meesho;
+            grandTotals.flipkart[idx] += cell.flipkart;
+            
+            bodyHtml += `<td class="sheet-editable"><input type="number" class="sheet-cell-input" value="${meeshoVal || ''}" data-date="${date}" data-account="${acc.name}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="-"></td>`;
+            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${flipkartVal || ''}" data-date="${date}" data-account="${acc.name}" data-company="${acc.company}" data-field="flipkart" min="0" placeholder="-"></td>`;
+        });
+        grandTotals.total += rowTotal;
+        
+        bodyHtml += `<td class="sheet-total-cell">${rowTotal}</td>`;
+        
+        const remarkVal = savedRemarks[date] || '';
+        bodyHtml += `<td class="sheet-editable"><input type="text" class="sheet-cell-input sheet-remark-input" value="${remarkVal.replace(/"/g, '&quot;')}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
+        bodyHtml += '</tr>';
+    });
+    
+    // Grand total row
+    bodyHtml += '<tr class="sheet-grand-row">';
+    bodyHtml += '<td class="sheet-date-cell">TOTAL</td>';
+    accounts.forEach((_, idx) => {
+        bodyHtml += `<td>${grandTotals.meesho[idx]}</td>`;
+        bodyHtml += `<td class="sheet-acct-border">${grandTotals.flipkart[idx]}</td>`;
+    });
+    bodyHtml += `<td class="sheet-total-cell">${grandTotals.total}</td>`;
+    bodyHtml += '<td></td>';
+    bodyHtml += '</tr>';
+    
+    tbody.innerHTML = bodyHtml;
+    
+    // === EVENT: Save remarks (buffered to Firebase) ===
+    tbody.querySelectorAll('input[data-field="remark"]').forEach(inp => {
+        inp.addEventListener('change', () => {
+            const date = inp.dataset.date;
+            const val = inp.value;
+            
+            // Update cache immediately
+            if (!_remarkCache) _remarkCache = {};
+            _remarkCache[date] = val;
+            localStorage.setItem('sheetRemarks', JSON.stringify(_remarkCache));
+            
+            // Buffer the write to Firebase (flushes after APP_CONFIG.writeBufferMs)
+            FirebaseService.bufferWrite(`remark_${date}`, () =>
+                FirebaseService.saveRemark(date, val)
+            );
+        });
+    });
+    
+    // === EVENT: Save order cell edits (buffered to Firebase) ===
+    tbody.querySelectorAll('input[data-field="meesho"], input[data-field="flipkart"]').forEach(inp => {
+        inp.addEventListener('change', () => {
+            const { date, account, company, field } = inp.dataset;
+            const value = parseInt(inp.value) || 0;
+            
+            // Update local state immediately
+            const stateData = company === 'company1' ? AppState.company1Data : AppState.company2Data;
+            const row = stateData.find(r => normalizeToISODate(r.date) === date && r.accountName === account);
+            if (row) {
+                row[field] = value;
+                row.total = (parseInt(row.meesho) || 0) + (parseInt(row.flipkart) || 0);
+            }
+            
+            // Recalculate totals in UI immediately
+            recalcSheetRowTotal(inp);
+            
+            // Buffer the write to Firebase
+            FirebaseService.bufferWrite(`order_${date}_${account}_${field}`, () =>
+                FirebaseService.updateOrder(date, account, field, value, company)
+            );
+        });
+    });
+}
+
+// Recalculate a row's total cell when a value changes
+function recalcSheetRowTotal(inputEl) {
+    const tr = inputEl.closest('tr');
+    if (!tr) return;
+    const inputs = tr.querySelectorAll('input[data-field="meesho"], input[data-field="flipkart"]');
+    let total = 0;
+    inputs.forEach(inp => total += parseInt(inp.value) || 0);
+    const totalCell = tr.querySelector('.sheet-total-cell');
+    if (totalCell) totalCell.textContent = total;
+    
+    // Also recalculate grand total row
+    const tbody = document.getElementById('sheet-tbody');
+    if (!tbody) return;
+    const grandRow = tbody.querySelector('.sheet-grand-row');
+    if (!grandRow) return;
+    const allRows = tbody.querySelectorAll('tr:not(.sheet-grand-row)');
+    let grandTotal = 0;
+    allRows.forEach(row => {
+        const tc = row.querySelector('.sheet-total-cell');
+        if (tc) grandTotal += parseInt(tc.textContent) || 0;
+    });
+    const grandTotalCell = grandRow.querySelector('.sheet-total-cell');
+    if (grandTotalCell) grandTotalCell.textContent = grandTotal;
+}
+
+function exportSheetCSV() {
+    const table = document.getElementById('sheet-table');
+    if (!table) return;
+    
+    const rows = [];
+    const headerCells = table.querySelectorAll('thead tr');
+    const accounts = [];
+    headerCells[0]?.querySelectorAll('th.sheet-acct-group').forEach(th => {
+        const txt = th.textContent.trim();
+        if (txt !== 'Total' && txt !== 'Remarks') accounts.push(txt);
+    });
+    
+    const headerRow = ['Date'];
+    accounts.forEach(name => {
+        headerRow.push(`${name} - Meesho`);
+        headerRow.push(`${name} - Flipkart`);
+    });
+    headerRow.push('Total', 'Remarks');
+    rows.push(headerRow);
+    
+    table.querySelectorAll('tbody tr:not(.sheet-grand-row)').forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        const row = [];
+        cells.forEach(td => {
+            const input = td.querySelector('input');
+            row.push(input ? input.value : td.textContent.trim());
+        });
+        rows.push(row);
+    });
+    
+    if (rows.length <= 1) { showToast('No data to export', 'error'); return; }
+    
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `krimaa_data_sheet_${getTodayISODate()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast('Sheet exported!', 'success');
+}
+
+// Initialize sheet listeners after DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+    initDataSheetListeners();
+});
+
+// ===== MONEY MANAGEMENT =====
+async function renderMoneyManagement() {
+    const tbody = document.getElementById('money-management-tbody');
+    if (!tbody) return;
+    
+    // Combine accounts from both companies + their details
+    const mgmtAccounts = [];
+    AppState.company1Accounts.forEach(accName => {
+        const details = AppState.company1Details?.find(d => d.name === accName) || {};
+        mgmtAccounts.push({
+            name: accName,
+            company: 'Company 1',
+            companyId: 'company1',
+            money: parseInt(details.money) || 0,
+            expense: parseInt(details.expense) || 0,
+            moneyDate: details.moneyDate || '',
+            mobile: details.mobile || '',
+            rechargeDate: details.rechargeDate || ''
+        });
+    });
+    AppState.company2Accounts.forEach(accName => {
+        const details = AppState.company2Details?.find(d => d.name === accName) || {};
+        mgmtAccounts.push({
+            name: accName,
+            company: 'Company 2',
+            companyId: 'company2',
+            money: parseInt(details.money) || 0,
+            expense: parseInt(details.expense) || 0,
+            moneyDate: details.moneyDate || '',
+            mobile: details.mobile || '',
+            rechargeDate: details.rechargeDate || ''
+        });
+    });
+    
+    // Set default date to today
+    const dateInput = document.getElementById('money-date');
+    if (dateInput && !dateInput.value) {
+        dateInput.value = getTodayISODate();
+        dateInput.classList.remove('hidden');
+    }
+    
+    if (mgmtAccounts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-muted">No accounts found.</td></tr>';
+        document.getElementById('money-grand-money').textContent = '0';
+        document.getElementById('money-grand-expense').textContent = '0';
+        document.getElementById('money-grand-total').textContent = '0';
+        return;
+    }
+    
+    tbody.innerHTML = mgmtAccounts.map((acc, idx) => {
+        const rechargeTxt = getRechargeText(acc.rechargeDate);
+        const metaHtml = `
+            <div class="account-meta money-account-meta">
+                <span><i class='bx bx-phone'></i> Mobile: ${acc.mobile || 'Not added'}</span>
+                <span><i class='bx bx-calendar'></i> Recharge: ${rechargeTxt}</span>
+                ${acc.moneyDate ? `<span><i class='bx bx-time-five'></i> Updated: ${formatISODateForDisplay(acc.moneyDate)}</span>` : ''}
+            </div>
+        `;
+        return `
+        <tr class="money-row" data-account="${acc.name.replace(/"/g, '&quot;')}" data-company-id="${acc.companyId}">
+            <td class="drag-handle-cell"><i class='bx bx-menu money-drag-handle' style="cursor: grab; color: #a0aec0;"></i></td>
+            <td class="position-number">${idx + 1}</td>
+            <td><span class="badge ${acc.companyId === 'company1' ? 'badge-a' : 'badge-b'}">${acc.company}</span></td>
+            <td class="font-medium">${acc.name}${metaHtml}</td>
+            <td><input type="number" class="inp-money sheet-cell-input" min="0" value="${acc.money || ''}" data-index="${idx}" placeholder="0"></td>
+            <td><input type="number" class="inp-expense sheet-cell-input" min="0" value="${acc.expense || ''}" data-index="${idx}" placeholder="0"></td>
+            <td><span class="row-total font-bold" id="money-total-${idx}">${acc.money - acc.expense}</span></td>
+        </tr>
+    `}).join('');
+    
+    const updateGrandTotals = () => {
+        let totalMoney = 0;
+        let totalExpense = 0;
+        tbody.querySelectorAll('.money-row').forEach((row, idx) => {
+            const m = parseInt(row.querySelector('.inp-money').value) || 0;
+            const e = parseInt(row.querySelector('.inp-expense').value) || 0;
+            row.querySelector('.row-total').textContent = m - e;
+            totalMoney += m;
+            totalExpense += e;
+        });
+        document.getElementById('money-grand-money').textContent = totalMoney;
+        document.getElementById('money-grand-expense').textContent = totalExpense;
+        document.getElementById('money-grand-total').textContent = totalMoney - totalExpense;
+    };
+    
+    tbody.querySelectorAll('.inp-money, .inp-expense').forEach(inp => {
+        inp.addEventListener('input', () => {
+             updateGrandTotals();
+             const row = inp.closest('.money-row');
+             const accName = row.dataset.account;
+             const companyId = row.dataset.companyId;
+             const money = parseInt(row.querySelector('.inp-money').value) || 0;
+             const expense = parseInt(row.querySelector('.inp-expense').value) || 0;
+             const date = document.getElementById('money-date').value || getTodayISODate();
+             
+             // Also update local state
+             const detailsList = companyId === 'company1' ? AppState.company1Details : AppState.company2Details;
+             if (detailsList) {
+                 const det = detailsList.find(d => d.name === accName);
+                 if (det) { det.money = money; det.expense = expense; det.moneyDate = date; }
+             }
+             
+             FirebaseService.bufferWrite(`money_${companyId}_${accName}`, () => FirebaseService.updateMoney(accName, companyId, money, expense, date));
+        });
+    });
+    
+    updateGrandTotals();
+    
+    // Sortable for Money Management
+    if (tbody._sortableInstance) tbody._sortableInstance.destroy();
+    tbody._sortableInstance = Sortable.create(tbody, {
+        handle: '.money-drag-handle',
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        onEnd: function() {
+            // Need to save new order for company 1 and company 2 separately
+            const newOrder1 = [];
+            const newOrder2 = [];
+            Array.from(tbody.children).forEach((row, idx) => {
+                row.querySelector('.position-number').textContent = idx + 1;
+                const companyId = row.dataset.companyId;
+                const accountName = row.dataset.account;
+                if (companyId === 'company1') newOrder1.push(accountName);
+                if (companyId === 'company2') newOrder2.push(accountName);
+            });
+            // Update UI/local state visually and trigger sheet updates
+            AppState.company1Accounts = newOrder1;
+            AppState.company2Accounts = newOrder2;
+            
+            showToast('Saving new order...', 'info');
+            Promise.all([
+                saveAccountOrderToSheet(newOrder1, 'company1'),
+                saveAccountOrderToSheet(newOrder2, 'company2')
+            ]).then(() => showToast('Order saved!', 'success')).catch(() => showToast('Failed to save order', 'error'));
+        }
+    });
+}
+
+// Reset ALL money data
+document.addEventListener('DOMContentLoaded', () => {
+    const resetBtn = document.getElementById('money-reset-btn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+            if(confirm('Are you sure you want to clear all money and expense data across all companies?')) {
+                showToast('Resetting data...', 'info');
+                const date = document.getElementById('money-date').value || getTodayISODate();
+                try {
+                    await apiRequest({ action: 'resetAllMoney', date });
+                    // clear local stores
+                    ['company1Details', 'company2Details'].forEach(detKey => {
+                        (AppState[detKey] || []).forEach(d => { d.money = 0; d.expense = 0; d.moneyDate = date; });
+                    });
+                    renderMoneyManagement();
+                    showToast('All data reset successfully', 'success');
+                } catch(e) {
+                    showToast('Failed to reset', 'error');
+                }
+            }
+        });
+    }
+    
+    const moneySaveBtn = document.getElementById('money-save-btn');
+    if (moneySaveBtn) {
+        moneySaveBtn.addEventListener('click', () => {
+            FirebaseService.flushWrites();
+            showToast('Changes saved', 'success');
+        });
+    }
+});
