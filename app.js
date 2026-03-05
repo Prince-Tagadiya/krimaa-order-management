@@ -333,13 +333,11 @@ function applyRolePermissions() {
         document.getElementById('nav-data-sheet').style.display = 'none';
         document.getElementById('nav-manage-accounts').style.display = 'none';
         document.getElementById('nav-money-management').style.display = 'none';
-        document.getElementById('nav-money-backup').style.display = 'none';
     } else {
         document.getElementById('nav-dashboard').style.display = '';
         document.getElementById('nav-data-sheet').style.display = '';
         document.getElementById('nav-manage-accounts').style.display = '';
         document.getElementById('nav-money-management').style.display = '';
-        document.getElementById('nav-money-backup').style.display = '';
     }
 }
 
