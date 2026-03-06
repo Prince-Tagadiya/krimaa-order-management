@@ -175,7 +175,7 @@ function initApp() {
 
     // Backup button
     const backupBtn = document.getElementById('backup-btn');
-    if (backupBtn) backupBtn.addEventListener('click', backupToSheets);
+    if (backupBtn) backupBtn.addEventListener('click', () => backupToSheets(false));
 
     const today = getTodayISODate();
     setOrderDateDefaults(true);
@@ -2862,9 +2862,9 @@ function renderKarigarGrid() {
                         <h3 class="font-bold text-lg">${k.name}</h3>
                         ${lastActivity}
                     </div>
-                    <div style="background: ${isNegative ? '#fee2e2' : '#dcfce7'}; color: ${balColor}; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: bold; text-align: right;">
+                    <div class="karigar-balance-val" style="background: ${isNegative ? '#fee2e2' : '#dcfce7'}; color: ${balColor}; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: bold; text-align: right;">
                         <span style="font-size: 0.7rem; display:block; text-transform:uppercase; margin-bottom: -2px;">Balance</span>
-                        ₹${Math.abs(stats.balance).toFixed(2)}${isNegative ? ' Due' : ' Clear'}
+                        <span class="actual-bal">₹${Math.abs(stats.balance).toFixed(2)}${isNegative ? ' Due' : ' Clear'}</span>
                     </div>
                 </div>
                 
@@ -3331,9 +3331,9 @@ document.getElementById('export-pdf-karigar-btn')?.addEventListener('click', () 
     const rows = [];
     document.querySelectorAll('#karigar-grid .card').forEach(card => {
         const name = card.querySelector('.font-bold.text-lg')?.textContent.trim() || '';
-        const jama = card.querySelector('.text-success.font-bold')?.textContent.replace('₹', '').trim() || '0';
-        const upad = card.querySelector('.text-danger.font-bold')?.textContent.replace('₹', '').trim() || '0';
-        const balance = card.querySelector('.text-primary, .text-danger')?.textContent.replace('₹', '').trim() || '0';
+        const jama = card.querySelector('.text-success')?.textContent.replace('₹', '').trim() || '0';
+        const upad = card.querySelector('.text-danger')?.textContent.replace('₹', '').trim() || '0';
+        const balance = card.querySelector('.karigar-balance-val .actual-bal')?.textContent.replace('₹', '').trim() || '0';
         rows.push([name, jama, upad, balance]);
     });
     exportTableToPDF('Karigar Management Report', ['Name', 'Total Jama', 'Total Upad', 'Balance'], rows, `Karigar_Report_${getTodayISODate()}.pdf`);
@@ -3366,8 +3366,8 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
     try {
         showToast('Generating Multi-Page PDF...', 'info');
         
-        // Actually fetch the real data here directly from API.
-        const res = await apiRequest({ action: 'getGlobalReport', fromDate, toDate });
+        // Actually fetch the real data here directly from Google Sheets via sheetsApiRequest
+        const res = await sheetsApiRequest({ action: 'getGlobalReport', fromDate, toDate });
         if(!res || !res.success) throw new Error(res?.message || 'Failed to generate report');
         
         if (!window.jspdf) { throw new Error('PDF Library not loaded'); }
