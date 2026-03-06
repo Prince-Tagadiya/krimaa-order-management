@@ -2,8 +2,8 @@
 
 // ===== Multi-User Auth System =====
 const USERS = [
-    { username: 'Krimaa', password: 'Kirmaa4484', role: 'admin', displayName: 'Admin' },
-    { username: 'Order', password: 'Order123', role: 'order', displayName: 'Order Entry' }
+    { username: 'Krimaa', password: 'Krimaa4484', role: 'admin', displayName: 'Admin' },
+    { username: 'Krimaa_Users', password: 'Krimaa123', role: 'order', displayName: 'Order Entry' }
 ];
 
 const AppState = {
@@ -20,6 +20,9 @@ const AppState = {
     sheetArchiveCache: {},
     moneyBackups: [],
     selectedMoneyBackupId: '',
+    karigars: [],
+    karigarTransactions: [],
+    designPrices: {},
     currentSection: 'data-sheet',
     currentCompany: 'company1',
     currentUser: null, // { username, role, displayName }
@@ -170,6 +173,9 @@ function initApp() {
     attachEventListeners();
     initSyncIndicator();
 
+    // Backup button
+    const backupBtn = document.getElementById('backup-btn');
+    if (backupBtn) backupBtn.addEventListener('click', backupToSheets);
 
     const today = getTodayISODate();
     setOrderDateDefaults(true);
@@ -425,9 +431,8 @@ function attachEventListeners() {
         document.querySelectorAll('.order-row').forEach(row => {
             const accountName = row.dataset.account;
             const meesho = parseInt(row.querySelector('.inp-meesho').value) || 0;
-            const flipkart = parseInt(row.querySelector('.inp-flipkart').value) || 0;
-            if (meesho > 0 || flipkart > 0) hasData = true;
-            orders.push({ accountName, meesho, flipkart, total: meesho + flipkart });
+            if (meesho > 0) hasData = true;
+            orders.push({ accountName, meesho, total: meesho });
         });
         if (!hasData) return showToast("Please enter at least one order value!", "error");
         const btn = document.getElementById('submit-orders-btn');
@@ -512,17 +517,28 @@ function navigateTo(sectionId) {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const activeBtn = document.querySelector(`[data-target="${sectionId}"]`);
     if(activeBtn) activeBtn.classList.add('active');
+    
     const titles = {
         'dashboard': 'Dashboard',
         'daily-order': 'Daily Order Entry',
         'add-account': 'Manage Accounts',
         'money-management': 'Money Management',
         'money-backup': 'Money Backup History',
-        'data-sheet': 'Data Sheet'
+        'data-sheet': 'Data Sheet',
+        'karigar': 'Karigar Management'
     };
-    document.getElementById('page-title').textContent = titles[sectionId];
+    
+    // Update global title if it exists, and section-specific title
+    const globalTitle = document.getElementById('page-title');
+    if (globalTitle) globalTitle.textContent = titles[sectionId];
+    
     document.querySelectorAll('.content-section').forEach(sec => sec.classList.remove('active'));
-    document.getElementById(sectionId).classList.add('active');
+    const targetSec = document.getElementById(sectionId);
+    if (targetSec) {
+        targetSec.classList.add('active');
+        const secTitle = targetSec.querySelector('.page-title');
+        if (secTitle) secTitle.textContent = titles[sectionId];
+    }
 
     if (sectionId === 'daily-order') {
         setOrderDateDefaults();
@@ -534,6 +550,7 @@ function navigateTo(sectionId) {
     else if (sectionId === 'add-account') renderAccountsList();
     else if (sectionId === 'money-management') renderMoneyManagement();
     else if (sectionId === 'money-backup') renderMoneyBackupPage();
+    else if (sectionId === 'karigar') renderKarigarPage();
     else if (sectionId === 'data-sheet') { 
         document.getElementById('sheet-company-filter').value = AppState.currentCompany;
         loadAvailableSheetMonths().then(() => populateSheetMonthFilter());
@@ -541,28 +558,55 @@ function navigateTo(sectionId) {
     }
 }
 
+async function ensureLegacyOrdersMigrated() {
+    if (localStorage.getItem('legacy_migrated_v2')) return;
+    try {
+        showProgressToast('Optimizing older database records...');
+        let migratedCount = 0;
+        let batch;
+        do {
+            batch = await FirebaseService.migrateLegacyOrdersToDailyOrders();
+            if (batch?.count) migratedCount += batch.count;
+        } while (batch && batch.count === 500); // 500 is the limit on our migration function
+        localStorage.setItem('legacy_migrated_v2', 'true');
+        if (migratedCount > 0) {
+            showToast(`Successfully optimized ${migratedCount} database records!`, 'success');
+        }
+    } catch(e) {
+        console.error('Migration failed:', e);
+    }
+}
+
 async function loadInitialData() {
     showLoader();
     try {
+        console.log("🚀 [INITIALIZATION] Starting web app...");
         FirebaseService.init();
         
+        console.log("🚀 [INITIALIZATION] Checking legacy migration and seeds...");
         // One-time migration: Sheets → Firebase
         await ensureFirebaseSeeded();
+        await ensureLegacyOrdersMigrated();
         
-        await Promise.all([fetchAccounts(), fetchDashboardData()]);
-        try {
-            await fetchAllCompaniesData({ refreshArchiveMonths: true });
-        } catch (e) {
-            console.warn('Non-blocking: failed to preload all-company dashboard data', e);
-        }
+        console.log("🚀 [INITIALIZATION] Fetching fresh data instantly from Firestore...");
         
-        // Check auto-backup
+        // Wait for all actual Firebase data to load first, avoiding empty flash entirely!
+        await Promise.all([
+            fetchAccounts(),
+            fetchAllCompaniesData({ refreshArchiveMonths: false })
+        ]);
+        
+        console.log("🚀 [INITIALIZATION] Local data ready. Booting UI in background...");
+        // Load the sheets metadata seamlessly in background
+        loadAvailableSheetMonths(true).catch(e => console.warn('Background meta fetch:', e));
+        
+        // Update backup time in UI (now isolated from auto-trigger)
         checkAutoBackup();
         
+        console.log("🚀 [INITIALIZATION] Finished completely. Routing to UI.");
         if (AppState.currentUser?.role === 'order') {
             navigateTo('daily-order');
         } else {
-            loadAvailableSheetMonths();
             navigateTo('data-sheet');
         }
     } catch (err) { console.error(err); showToast("Error loading data: " + err.message, "error"); }
@@ -584,14 +628,87 @@ async function fetchAccounts() {
     }
 }
 
+function getSheetsCache(companyId) {
+    try {
+        const cached = localStorage.getItem(`sheetsCache_${companyId}`);
+        if (cached) return JSON.parse(cached);
+    } catch(e) {}
+    return [];
+}
+
+function setSheetsCache(companyId, data) {
+    try {
+        localStorage.setItem(`sheetsCache_${companyId}`, JSON.stringify(data));
+    } catch(e) {}
+}
+
+function mergeOrders(historical, recent) {
+    const map = new Map();
+    (historical||[]).forEach(r => map.set(`${r.date}_${r.accountName}`, r));
+    (recent||[]).forEach(r => map.set(`${r.date}_${r.accountName}`, r));
+    return Array.from(map.values()).sort((a,b) => (b.date > a.date ? 1 : -1));
+}
+
+let _isSyncingBg = false;
+function showBackgroundLoader() {
+    const loader = document.getElementById('background-sheets-loader');
+    if (loader) loader.classList.remove('hidden');
+}
+function hideBackgroundLoader() {
+    const loader = document.getElementById('background-sheets-loader');
+    if (loader) loader.classList.add('hidden');
+}
+
+async function backgroundSheetsSync() {
+    if (_isSyncingBg) return;
+    showBackgroundLoader();
+    _isSyncingBg = true;
+    try {
+        const [res1, res2] = await Promise.all([
+            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(()=>null),
+            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(()=>null)
+        ]);
+        
+        let shouldRender = false;
+
+        if (res1 && Array.isArray(res1.data)) {
+            setSheetsCache('company1', res1.data);
+            shouldRender = true;
+        }
+        if (res2 && Array.isArray(res2.data)) {
+            setSheetsCache('company2', res2.data);
+            shouldRender = true;
+        }
+        
+        if (shouldRender) {
+            const f1 = await apiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(()=>null);
+            const f2 = await apiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(()=>null);
+            
+            AppState.company1Data = mergeOrders(getSheetsCache('company1'), f1?.data || []);
+            AppState.company2Data = mergeOrders(getSheetsCache('company2'), f2?.data || []);
+            
+            AppState.dashboardData = AppState.currentCompany === 'company1' ? AppState.company1Data : AppState.company2Data;
+            
+            if (AppState.currentSection === 'dashboard') renderDashboard();
+            else if (AppState.currentSection === 'data-sheet') renderDataSheet();
+        }
+    } catch (e) {
+        console.warn('Background sync failed', e);
+    } finally {
+        _isSyncingBg = false;
+        hideBackgroundLoader();
+    }
+}
+
 async function fetchDashboardData() {
     try {
-        const currentMonth = getTodayISODate().substring(0, 7);
-        const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany, month: currentMonth });
-        if (res && res.success === false) throw new Error(res.message || 'Unable to fetch dashboard data');
-        if (Array.isArray(res?.data)) AppState.dashboardData = res.data;
-        else if (Array.isArray(res)) AppState.dashboardData = res; // compatibility with legacy shape
-        else AppState.dashboardData = [];
+        const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany });
+        const fbData = Array.isArray(res?.data) ? res.data : [];
+        const cached = getSheetsCache(AppState.currentCompany);
+        
+        AppState.dashboardData = mergeOrders(cached, fbData);
+        if (AppState.currentCompany === 'company1') AppState.company1Data = AppState.dashboardData;
+        if (AppState.currentCompany === 'company2') AppState.company2Data = AppState.dashboardData;
     } catch(e) {
         console.error(e);
         throw e;
@@ -601,38 +718,39 @@ async function fetchDashboardData() {
 async function fetchAllCompaniesData(options = {}) {
     const refreshArchiveMonths = !!options.refreshArchiveMonths;
     const toList = (res) => {
-        if (!res || (res && res.success === false)) return null;
+        if (!res || res.success === false) return null;
         if (Array.isArray(res?.data)) return res.data;
         if (Array.isArray(res)) return res;
         return [];
     };
 
-    const currentMonth = getTodayISODate().substring(0, 7);
-    const [c1Acc, c2Acc, c1Data, c2Data] = await Promise.all([
+    const [c1Acc, c2Acc, f1, f2] = await Promise.all([
         apiRequest({ action: 'getAccounts', companyId: 'company1' }).catch(() => null),
         apiRequest({ action: 'getAccounts', companyId: 'company2' }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company1', month: currentMonth }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company2', month: currentMonth }).catch(() => null)
+        apiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(() => null),
+        apiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(() => null)
     ]);
 
     const c1Accounts = toList(c1Acc);
     const c2Accounts = toList(c2Acc);
-    const c1Rows = toList(c1Data);
-    const c2Rows = toList(c2Data);
+    const fData1 = toList(f1) || [];
+    const fData2 = toList(f2) || [];
 
     if (c1Accounts !== null) AppState.company1Accounts = c1Accounts;
     if (c2Accounts !== null) AppState.company2Accounts = c2Accounts;
     if (c1Acc && c1Acc.details) AppState.company1Details = c1Acc.details;
     if (c2Acc && c2Acc.details) AppState.company2Details = c2Acc.details;
-    if (c1Rows !== null) AppState.company1Data = c1Rows;
-    if (c2Rows !== null) AppState.company2Data = c2Rows;
+
+    AppState.company1Data = mergeOrders(getSheetsCache('company1'), fData1);
+    AppState.company2Data = mergeOrders(getSheetsCache('company2'), fData2);
+
+    // Run sheet sync in background
+    backgroundSheetsSync();
 
     if (refreshArchiveMonths) {
         try {
             await loadAvailableSheetMonths(true);
-        } catch (e) {
-            console.warn('Could not load archive month list from sheets', e);
-        }
+        } catch (e) {}
     }
 }
 
@@ -731,16 +849,14 @@ function renderOrderEntryTable() {
             <td class="position-number">${index + 1}</td>
             <td class="font-medium">${acc}</td>
             <td><input type="number" min="0" class="inp-meesho" data-index="${index}" placeholder="0"></td>
-            <td><input type="number" min="0" class="inp-flipkart" data-index="${index}" placeholder="0"></td>
             <td><span class="row-total" id="total-${index}">0</span></td>
         </tr>
     `).join('');
-    document.querySelectorAll('.inp-meesho, .inp-flipkart').forEach(inp => {
+    document.querySelectorAll('.inp-meesho').forEach(inp => {
         inp.addEventListener('input', (e) => {
             const idx = e.target.dataset.index;
             const m = parseInt(document.querySelector(`.inp-meesho[data-index="${idx}"]`).value) || 0;
-            const f = parseInt(document.querySelector(`.inp-flipkart[data-index="${idx}"]`).value) || 0;
-            document.getElementById(`total-${idx}`).textContent = (m + f);
+            document.getElementById(`total-${idx}`).textContent = m;
             calculateGrandTotals();
         });
     });
@@ -762,19 +878,15 @@ function initDragAndDrop() {
                 newOrder.push(row.dataset.account);
                 row.querySelector('.position-number').textContent = idx + 1;
                 row.querySelector('.inp-meesho').dataset.index = idx;
-                row.querySelector('.inp-flipkart').dataset.index = idx;
-                row.querySelector('.row-total').id = `total-${idx}`;
             });
-            saveAccountPositions(newOrder);
             saveAccountOrderToSheet(newOrder);
-            document.querySelectorAll('.inp-meesho, .inp-flipkart').forEach(inp => {
+            document.querySelectorAll('.inp-meesho').forEach(inp => {
                 const newInp = inp.cloneNode(true);
                 inp.parentNode.replaceChild(newInp, inp);
                 newInp.addEventListener('input', (e) => {
                     const idx = e.target.dataset.index;
                     const m = parseInt(document.querySelector(`.inp-meesho[data-index="${idx}"]`).value) || 0;
-                    const f = parseInt(document.querySelector(`.inp-flipkart[data-index="${idx}"]`).value) || 0;
-                    document.getElementById(`total-${idx}`).textContent = (m + f);
+                    document.getElementById(`total-${idx}`).textContent = m;
                     calculateGrandTotals();
                 });
             });
@@ -793,12 +905,10 @@ async function saveAccountOrderToSheet(orderedAccounts, paramCompanyId) {
 }
 
 function calculateGrandTotals() {
-    let gm = 0, gf = 0;
+    let gm = 0;
     document.querySelectorAll('.inp-meesho').forEach(inp => gm += (parseInt(inp.value) || 0));
-    document.querySelectorAll('.inp-flipkart').forEach(inp => gf += (parseInt(inp.value) || 0));
     document.getElementById('table-grand-meesho').textContent = gm;
-    document.getElementById('table-grand-flipkart').textContent = gf;
-    document.getElementById('table-grand-total').textContent = (gm + gf);
+    document.getElementById('table-grand-total').textContent = gm;
 }
 
 function checkExistingOrdersForDate() {
@@ -824,18 +934,17 @@ function checkExistingOrdersForDate() {
             </div>
         `;
         formContainer.classList.remove('hidden');
-        let gm = 0, gf = 0, gt = 0;
+        let gm = 0, gt = 0;
         const modalBody = document.getElementById('modal-details-tbody');
         modalBody.innerHTML = existingOrders.map(o => {
-            const m = parseInt(o.meesho)||0, f = parseInt(o.flipkart)||0, t = parseInt(o.total)||0;
-            gm += m; gf += f; gt += t;
-            return `<tr><td>${o.accountName}</td><td style="text-align:right;">${m}</td><td style="text-align:right;">${f}</td><td style="text-align:right;font-weight:600;">${t}</td></tr>`;
+            const m = parseInt(o.meesho)||0, t = parseInt(o.total)||0;
+            gm += m; gt += t;
+            return `<tr><td>${o.accountName}</td><td style="text-align:right;">${m}</td><td style="text-align:right;font-weight:600;">${t}</td></tr>`;
         }).join('');
         document.getElementById('submitted-grand-total').textContent = gt;
         const [yyyy, mm, dd] = dateInput.split('-');
         document.getElementById('modal-date').textContent = `${dd}/${mm}/${yyyy}`;
         document.getElementById('modal-grand-meesho').textContent = gm;
-        document.getElementById('modal-grand-flipkart').textContent = gf;
         document.getElementById('modal-grand-total').textContent = gt;
     } else {
         alert.classList.add('hidden'); formContainer.classList.remove('hidden');
@@ -859,6 +968,7 @@ function filterDataByDate(data) {
         const rowDate = normalizeToISODate(d.date);
         if (!rowDate) return false;
         if (filterType === 'this_month') return rowDate.startsWith(currentMonthStr);
+        else if (filterType === 'all_time') return true;
         else if (filterType === 'custom_date') {
             if (from && to) return rowDate >= from && rowDate <= to;
             if (from) return rowDate >= from;
@@ -870,9 +980,9 @@ function filterDataByDate(data) {
 }
 
 function sumTotals(data) {
-    let meesho = 0, flipkart = 0, total = 0;
-    data.forEach(row => { meesho += parseInt(row.meesho)||0; flipkart += parseInt(row.flipkart)||0; total += parseInt(row.total)||0; });
-    return { meesho, flipkart, total };
+    let meesho = 0, total = 0;
+    data.forEach(row => { meesho += parseInt(row.meesho)||0; total += parseInt(row.total)||0; });
+    return { meesho, total };
 }
 
 // ===== MAIN DASHBOARD RENDER =====
@@ -907,13 +1017,10 @@ function renderDashboard() {
     
     // KPI Cards
     document.getElementById('dash-c1-meesho').textContent = c1Totals.meesho;
-    document.getElementById('dash-c1-flipkart').textContent = c1Totals.flipkart;
     document.getElementById('dash-c1-total').textContent = c1Totals.total;
     document.getElementById('dash-c2-meesho').textContent = c2Totals.meesho;
-    document.getElementById('dash-c2-flipkart').textContent = c2Totals.flipkart;
     document.getElementById('dash-c2-total').textContent = c2Totals.total;
     document.getElementById('dash-combined-meesho').textContent = c1Totals.meesho + c2Totals.meesho;
-    document.getElementById('dash-combined-flipkart').textContent = c1Totals.flipkart + c2Totals.flipkart;
     document.getElementById('dash-combined-total').textContent = c1Totals.total + c2Totals.total;
 
     // Account-wise Totals with dividers
@@ -938,8 +1045,8 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
     
     const buildAccTotals = (accounts, filtered) => {
         const totals = {};
-        accounts.forEach(a => totals[a] = { meesho:0, flipkart:0, total:0 });
-        filtered.forEach(row => { if (totals[row.accountName]) { totals[row.accountName].meesho += parseInt(row.meesho)||0; totals[row.accountName].flipkart += parseInt(row.flipkart)||0; totals[row.accountName].total += parseInt(row.total)||0; } });
+        accounts.forEach(a => totals[a] = { meesho:0, total:0 });
+        filtered.forEach(row => { if (totals[row.accountName]) { totals[row.accountName].meesho += parseInt(row.meesho)||0; totals[row.accountName].total += parseInt(row.total)||0; } });
         return totals;
     };
     
@@ -953,7 +1060,7 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
         html += `<tr class="table-divider-row"><td colspan="5">Company A Accounts</td></tr>`;
         Object.keys(c1AccTotals).forEach(acc => {
             const d = c1AccTotals[acc];
-            html += `<tr><td class="font-medium">${acc}</td><td class="text-center"><span class="dot dot-a"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right text-muted">${d.flipkart}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
+            html += `<tr><td class="font-medium">${acc}</td><td class="text-center"><span class="dot dot-a"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
         });
     }
 
@@ -962,7 +1069,7 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
         html += `<tr class="table-divider-row"><td colspan="5">Company B Accounts</td></tr>`;
         Object.keys(c2AccTotals).forEach(acc => {
             const d = c2AccTotals[acc];
-            html += `<tr><td class="font-medium">${acc}</td><td class="text-center"><span class="dot dot-b"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right text-muted">${d.flipkart}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
+            html += `<tr><td class="font-medium">${acc}</td><td class="text-center"><span class="dot dot-b"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
         });
     }
 
@@ -978,9 +1085,9 @@ function renderRecentRecords(c1Filtered, c2Filtered) {
     
     const dateGroups = {};
     allRecords.forEach(r => {
-        if (!dateGroups[r.date]) dateGroups[r.date] = { totalMeesho: 0, totalFlipkart: 0, totalOrders: 0, records: [] };
-        const m = parseInt(r.meesho)||0, f = parseInt(r.flipkart)||0, t = parseInt(r.total)||0;
-        dateGroups[r.date].totalMeesho += m; dateGroups[r.date].totalFlipkart += f; dateGroups[r.date].totalOrders += t;
+        if (!dateGroups[r.date]) dateGroups[r.date] = { totalMeesho: 0, totalOrders: 0, records: [] };
+        const m = parseInt(r.meesho)||0, t = parseInt(r.total)||0;
+        dateGroups[r.date].totalMeesho += m; dateGroups[r.date].totalOrders += t;
         dateGroups[r.date].records.push(r);
     });
     
@@ -988,10 +1095,10 @@ function renderRecentRecords(c1Filtered, c2Filtered) {
     let html = '';
     sortedDates.forEach(date => {
         const group = dateGroups[date]; const dateId = date.replace(/-/g, '');
-        html += `<tr class="date-header-row" onclick="toggleDateDetails('${dateId}')"><td><span class="date-toggle-icon" id="icon-${dateId}"><i class='bx bx-chevron-right'></i></span>${date}</td><td>All</td><td>All Accounts</td><td>${group.totalMeesho}</td><td>${group.totalFlipkart}</td><td style="font-weight:600;">${group.totalOrders}</td></tr>`;
+        html += `<tr class="date-header-row" onclick="toggleDateDetails('${dateId}')"><td><span class="date-toggle-icon" id="icon-${dateId}"><i class='bx bx-chevron-right'></i></span>${date}</td><td>All</td><td>All Accounts</td><td>${group.totalMeesho}</td><td style="font-weight:600;">${group.totalOrders}</td></tr>`;
         group.records.forEach(r => {
-            const m = parseInt(r.meesho)||0, f = parseInt(r.flipkart)||0, t = parseInt(r.total)||0;
-            html += `<tr class="date-detail-row" data-date="${dateId}"><td></td><td><span class="company-badge badge-${r.company.toLowerCase()}">${r.company}</span></td><td>${r.accountName}</td><td>${m}</td><td>${f}</td><td style="font-weight:500;">${t}</td></tr>`;
+            const m = parseInt(r.meesho)||0, t = parseInt(r.total)||0;
+            html += `<tr class="date-detail-row" data-date="${dateId}"><td></td><td><span class="company-badge badge-${r.company.toLowerCase()}">${r.company}</span></td><td>${r.accountName}</td><td>${m}</td><td style="font-weight:500;">${t}</td></tr>`;
         });
     });
     if (sortedDates.length === 0) html = '<tr><td colspan="6" class="text-center text-muted">No records found.</td></tr>';
@@ -1158,7 +1265,6 @@ function renderCompanyComparison(c1Totals, c2Totals) {
     
     const items = [
         { label: 'Meesho Orders', a: c1Totals.meesho, b: c2Totals.meesho },
-        { label: 'Flipkart Orders', a: c1Totals.flipkart, b: c2Totals.flipkart },
         { label: 'Total Orders', a: c1Totals.total, b: c2Totals.total }
     ];
     
@@ -1328,11 +1434,11 @@ window.showHeatmapDetails = function(dateStr) {
     const [y, m, d] = dateStr.split('-');
     const weekday = new Date(y, parseInt(m)-1, d).toLocaleDateString('en-US', { weekday: 'long' });
     
-    let c1M = 0, c1F = 0, c1T = 0;
-    AppState.company1Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => { c1M += parseInt(r.meesho)||0; c1F += parseInt(r.flipkart)||0; c1T += parseInt(r.total)||0; });
+    let c1M = 0, c1T = 0;
+    AppState.company1Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => { c1M += parseInt(r.meesho)||0; c1T += parseInt(r.total)||0; });
     
-    let c2M = 0, c2F = 0, c2T = 0;
-    AppState.company2Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => { c2M += parseInt(r.meesho)||0; c2F += parseInt(r.flipkart)||0; c2T += parseInt(r.total)||0; });
+    let c2M = 0, c2T = 0;
+    AppState.company2Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => { c2M += parseInt(r.meesho)||0; c2T += parseInt(r.total)||0; });
     const dayTotal = c1T + c2T;
     const company1Name = getCompanyDisplayName('company1');
     const company2Name = getCompanyDisplayName('company2');
@@ -1353,7 +1459,6 @@ window.showHeatmapDetails = function(dateStr) {
                 </div>
                 <div class="date-company-chips">
                     <span>Meesho: <strong>${c1M}</strong></span>
-                    <span>Flipkart: <strong>${c1F}</strong></span>
                 </div>
             </div>
             <div class="date-company-card date-company-b">
@@ -1363,7 +1468,6 @@ window.showHeatmapDetails = function(dateStr) {
                 </div>
                 <div class="date-company-chips">
                     <span>Meesho: <strong>${c2M}</strong></span>
-                    <span>Flipkart: <strong>${c2F}</strong></span>
                 </div>
             </div>
         </div>
@@ -1379,13 +1483,13 @@ function exportToCSV() {
     const c1Filtered = filterDataByDate(AppState.company1Data);
     const c2Filtered = filterDataByDate(AppState.company2Data);
     
-    const rows = [['Date', 'Company', 'Account', 'Meesho', 'Flipkart', 'Total']];
+    const rows = [['Date', 'Company', 'Account', 'Meesho', 'Total']];
     
     c1Filtered.forEach(r => {
-        rows.push([normalizeToISODate(r.date), 'Company A', r.accountName, parseInt(r.meesho)||0, parseInt(r.flipkart)||0, parseInt(r.total)||0]);
+        rows.push([normalizeToISODate(r.date), 'Company A', r.accountName, parseInt(r.meesho)||0, parseInt(r.total)||0]);
     });
     c2Filtered.forEach(r => {
-        rows.push([normalizeToISODate(r.date), 'Company B', r.accountName, parseInt(r.meesho)||0, parseInt(r.flipkart)||0, parseInt(r.total)||0]);
+        rows.push([normalizeToISODate(r.date), 'Company B', r.accountName, parseInt(r.meesho)||0, parseInt(r.total)||0]);
     });
     
     if (rows.length <= 1) { showToast('No data to export', 'error'); return; }
@@ -1445,6 +1549,7 @@ async function apiRequest(payload) {
             case 'resetAllMoney': return await FirebaseService.resetAllMoney(payload.date);
             case 'createMoneyBackup': return await FirebaseService.createMoneyBackup(payload.date, payload.rows, payload.reason);
             case 'getMoneyBackups': return await FirebaseService.getMoneyBackups();
+            case 'deleteMoneyBackup': return await FirebaseService.deleteMoneyBackup(payload.backupId);
             default: throw new Error('Unknown action: ' + action);
         }
     } catch (err) {
@@ -1544,62 +1649,64 @@ async function _doFirebaseSeed() {
 }
 
 // ===== BACKUP TO SHEETS =====
-async function backupToSheets() {
-    showToast('Starting backup to Google Sheets…', 'info');
+async function backupToSheets(isAuto = false) {
+    const btn = document.getElementById('backup-btn');
+    if (!isAuto && btn) { btn.disabled = true; btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Fetching Local Data..."; }
+    if (!isAuto) showToast('Starting full database backup to Google Sheets…', 'info');
     
     try {
-        // Flush any buffered writes first
+        // 1. Flush any pending Firestore writes
         await FirebaseService.flushWrites();
         
+        // 2. Get EVERY single piece of data from Firebase
         const allData = await FirebaseService.getAllDataForBackup();
         
-        const syncCompanyData = async (companyId) => {
-            const orders = allData[companyId].orders || [];
-            if (orders.length === 0) return;
-
-            // Group by month to avoid overwriting the whole sheet
-            const monthlyGroups = {};
-            orders.forEach(o => {
-                const m = (o.date || '').substring(0, 7);
-                if (m) {
-                    if (!monthlyGroups[m]) monthlyGroups[m] = [];
-                    monthlyGroups[m].push(o);
-                }
-            });
-
-            for (const [month, monthOrders] of Object.entries(monthlyGroups)) {
-                await sheetsApiRequest({
-                    action: 'bulkBackup',
-                    companyId,
-                    orders: monthOrders,
-                    accounts: (allData[companyId].accounts || []).map(a => a.name),
-                    append: true,
-                    clearMonth: month
-                });
-            }
-        };
-
-        await syncCompanyData('company1');
-        await syncCompanyData('company2');
-
-        // Save remarks
-        for (const [date, remark] of Object.entries(allData.remarks || {})) {
-            await sheetsApiRequest({ action: 'saveRemark', date, remark });
-        }
+        if (!isAuto && btn) { btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Syncing to Google Sheets..."; }
         
-        // Update backup meta
-        await FirebaseService.setBackupMeta({
-            lastBackup: new Date().toISOString(),
-            lastBackupType: 'manual'
+        // 3. Send all data to Google Sheets in one comprehensive call
+        const response = await sheetsApiRequest({
+            action: 'saveFullBackup',
+            data: allData
         });
         
-        showToast('Backup complete! ✓', 'success');
-        updateLastBackupTimeDisplay(new Date().toISOString());
+        if (response && response.success) {
+            const now = new Date().toISOString();
+            await FirebaseService.setBackupMeta({ 
+                lastBackup: now,
+                totalOrders: (allData.company1.orders.length || 0) + (allData.company2.orders.length || 0)
+            });
+            updateLastBackupTimeDisplay(now);
+            if (!isAuto) showToast('Full backup successful!', 'success');
+            
+            // Cleanup Firestore after successful backup
+            if (!isAuto) showToast('Maintaining 30-day window in Firestore…', 'info');
+            
+            if (!isAuto && btn) {
+                btn.innerHTML = `<i class='bx bx-check-double'></i> Saved ${response.totalRows || 0} Records`;
+                btn.classList.add('btn-success', 'text-white');
+                btn.classList.remove('btn-outline');
+            }
+            
+            await FirebaseService.clearOldOrders();
+            
+            if (!isAuto && btn) {
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = "<i class='bx bx-cloud-upload'></i> Backup to Sheets";
+                    btn.classList.remove('btn-success', 'text-white');
+                    btn.classList.add('btn-outline');
+                }, 3000);
+            }
+        } else {
+            throw new Error(response?.message || 'Backup failed at Sheets layer');
+        }
     } catch (e) {
         console.error('Backup error:', e);
-        showToast('Backup failed: ' + e.message, 'error');
-    } finally {
-        // no-op
+        if (!isAuto) showToast('Full backup failed. Check connection.', 'error');
+        if (!isAuto && btn) {
+            btn.disabled = false;
+            btn.innerHTML = "<i class='bx bx-cloud-upload'></i> Backup to Sheets";
+        }
     }
 }
 
@@ -1619,18 +1726,18 @@ function updateLastBackupTimeDisplay(isoString) {
 }
 
 // Monthly cleanup: move all data to Sheets, then clear old Firebase data
-async function monthlyCleanup() {
-    showToast('Running monthly backup…', 'info');
+async function monthlyCleanup(isAuto = false) {
+    if (!isAuto) showToast('Running monthly backup…', 'info');
     try {
-        await backupToSheets();
-        const deleted = await FirebaseService.clearOldOrders(true); // keep current month
+        await backupToSheets(isAuto);
+        const deleted = await FirebaseService.clearOldOrders(); // No parameter anymore
         await FirebaseService.setBackupMeta({
             lastMonthlyBackup: new Date().toISOString()
         });
-        showToast(`Monthly backup done! ${deleted} archived rows cleared.`, 'success');
+        if (!isAuto) showToast(`Monthly backup done! ${deleted} archived rows cleared.`, 'success');
     } catch (e) {
         console.error('Monthly cleanup error:', e);
-        showToast('Monthly cleanup failed', 'error');
+        if (!isAuto) showToast('Monthly cleanup failed', 'error');
     }
 }
 
@@ -1644,29 +1751,11 @@ async function checkAutoBackup() {
             updateLastBackupTimeDisplay(null);
         }
         
-        const today = getTodayISODate();
-        const now = new Date();
+        // The user intentionally requested: "dont do auto backup only manual backup"
+        console.log("🛑 Automated backups are permanently disabled by user choice. Manual backups ONLY.");
         
-        // Daily backup
-        if (APP_CONFIG.dailyBackupEnabled) {
-            const lastDaily = meta.lastBackup ? meta.lastBackup.substring(0, 10) : '';
-            if (lastDaily !== today) {
-                console.log('Auto daily backup triggered');
-                backupToSheets(); // fire and forget
-            }
-        }
-        
-        // Monthly cleanup on 1st of month
-        if (APP_CONFIG.monthlyCleanup && now.getDate() === 1) {
-            const lastMonthly = meta.lastMonthlyBackup ? meta.lastMonthlyBackup.substring(0, 7) : '';
-            const currentMonth = today.substring(0, 7);
-            if (lastMonthly !== currentMonth) {
-                console.log('Auto monthly cleanup triggered');
-                monthlyCleanup(); // fire and forget
-            }
-        }
     } catch (e) {
-        console.warn('Auto-backup check failed:', e);
+        console.warn('Auto-backup meta check failed:', e);
     }
 }
 
@@ -1918,15 +2007,40 @@ function populateSheetMonthFilter() {
     // Remember current selection
     const prevVal = monthFilter.value;
     
-    let html = '<option value="all">All Months (Firebase)</option>';
+    let html = `<option value="all" ${!prevVal || prevVal === 'all' ? 'selected' : ''}>All Time</option>`;
     sortedMonths.forEach(m => {
         const [y, mo] = m.split('-');
         const isCurrent = m === currentMonth;
         const label = `${monthNames[parseInt(mo)-1]} ${y}${isCurrent ? ' (Current)' : ''}`;
-        const sel = (prevVal && prevVal === m) ? 'selected' : (!prevVal && m === currentMonth ? 'selected' : '');
+        const sel = (prevVal && prevVal === m) ? 'selected' : '';
         html += `<option value="${m}" ${sel}>${label}</option>`;
     });
     monthFilter.innerHTML = html;
+}
+
+async function loadHistoricalData(companyId, month) {
+    showLoader();
+    try {
+        showToast(`Fetching ${month} data from Google Sheets…`, 'info');
+        const res = await sheetsApiRequest({ action: 'getDashboardData', companyId, month });
+        if (res?.data && Array.isArray(res.data)) {
+            // Merge with local state but only for the Data Sheet view
+            if (companyId === 'company1') {
+                AppState.company1Data = mergeOrders(AppState.company1Data, res.data);
+            } else {
+                AppState.company2Data = mergeOrders(AppState.company2Data, res.data);
+            }
+            showToast(`Loaded ${res.data.length} records from archive.`, 'success');
+            await renderDataSheet();
+        } else {
+            showToast('No historical data found in Sheets.', 'info');
+        }
+    } catch (e) {
+        console.error('Load historical failed:', e);
+        showToast('Failed to load from Sheets', 'error');
+    } finally {
+        hideLoader();
+    }
 }
 
 async function renderDataSheet() {
@@ -1958,46 +2072,10 @@ async function renderDataSheet() {
     // Filter by month
     const currentMonth = getTodayISODate().substring(0, 7);
     if (monthFilter && monthFilter !== 'all') {
-        const isArchive = monthFilter !== currentMonth;
-        
-        if (isArchive) {
-            // Check cache
-            const cacheKey = `${companyFilter}_${monthFilter}`;
-            if (AppState.sheetArchiveCache[cacheKey]) {
-                rawData = AppState.sheetArchiveCache[cacheKey];
-            } else {
-                showProgressToast(`Loading ${monthFilter} from archives…`);
-                try {
-                    const res = await sheetsApiRequest({ 
-                        action: 'getDashboardData', 
-                        companyId: companyFilter === 'all' ? 'company1' : companyFilter, 
-                        month: monthFilter 
-                    });
-                    
-                    if (companyFilter === 'all') {
-                        // If all companies selected, we need to fetch C2 as well if we only did C1
-                        const res2 = await sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2', month: monthFilter });
-                        rawData = [...(res.data || []), ...(res2.data || [])];
-                    } else {
-                        rawData = res.data || [];
-                    }
-                    
-                    AppState.sheetArchiveCache[cacheKey] = rawData;
-                    hideLoader();
-                    // Re-render now that we have data
-                    renderDataSheet(); 
-                    return;
-                } catch (e) {
-                    showToast('Failed to load archived month', 'error');
-                }
-            }
-        } else {
-            // Current month from Firebase (already in rawData)
-            rawData = rawData.filter(r => {
-                const d = normalizeToISODate(r.date);
-                return d && d.startsWith(monthFilter);
-            });
-        }
+        rawData = rawData.filter(r => {
+            const d = normalizeToISODate(r.date);
+            return d && d.startsWith(monthFilter);
+        });
     }
     
     // Collect unique dates, newest first
@@ -2018,21 +2096,37 @@ async function renderDataSheet() {
     if (accounts.length === 0 || dates.length === 0) {
         wrapper.classList.add('hidden');
         emptyMsg.classList.remove('hidden');
+        
+        // If a specific month is selected and no data locally, offer to load from Sheets
+        if (monthFilter && monthFilter !== 'all' && monthFilter !== currentMonth) {
+            const compId = companyFilter === 'all' ? 'company1' : companyFilter; // Default to comp1 if all
+            emptyMsg.innerHTML = `
+                <div class="p-8 text-center">
+                    <i class='bx bx-history text-4xl text-muted mb-4'></i>
+                    <p class="mb-4">No local data found for ${monthFilter}.</p>
+                    <button class="btn btn-primary" onclick="loadHistoricalData('${compId}', '${monthFilter}')">
+                        <i class='bx bx-cloud-download'></i> Load from Google Sheets Archive
+                    </button>
+                    <p class="text-xs text-muted mt-2">Firestore only keeps the last 30 days for speed.</p>
+                </div>
+            `;
+        } else {
+            emptyMsg.innerHTML = '<p class="p-8 text-center text-muted">No records found for the selected filter.</p>';
+        }
         return;
     }
     wrapper.classList.remove('hidden');
     emptyMsg.classList.add('hidden');
     
-    // Build lookup: { date -> { accountName -> { meesho, flipkart, total, company } } }
+    // Build lookup: { date -> { accountName -> { meesho, total, company } } }
     const lookup = {};
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (!d) return;
         if (!lookup[d]) lookup[d] = {};
         const key = r.accountName;
-        if (!lookup[d][key]) lookup[d][key] = { meesho: 0, flipkart: 0, total: 0 };
+        if (!lookup[d][key]) lookup[d][key] = { meesho: 0, total: 0 };
         lookup[d][key].meesho += parseInt(r.meesho) || 0;
-        lookup[d][key].flipkart += parseInt(r.flipkart) || 0;
         lookup[d][key].total += parseInt(r.total) || 0;
     });
     
@@ -2042,26 +2136,21 @@ async function renderDataSheet() {
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     
     // === HEADER ===
-    let headerRow1 = '<tr><th class="sheet-date-col" rowspan="2">Date</th>';
+    let headerRow1 = '<tr><th class="sheet-date-col">Date</th>';
     accounts.forEach((acc, idx) => {
         const compTag = companyFilter === 'all' ? `<span class="sheet-company-tag">${acc.label}</span>` : '';
-        const borderCls = 'sheet-acct-group' + (idx < accounts.length - 1 ? '' : '');
-        headerRow1 += `<th class="sheet-acct-group sheet-acct-border" colspan="2">${acc.name}${compTag}</th>`;
+        headerRow1 += `<th class="sheet-acct-group sheet-acct-border">${acc.name}${compTag}</th>`;
     });
-    headerRow1 += '<th class="sheet-acct-group sheet-total-col" rowspan="2">Total</th>';
-    headerRow1 += '<th class="sheet-acct-group" rowspan="2" style="min-width:140px;">Remarks</th>';
+    headerRow1 += '<th class="sheet-acct-group sheet-total-col">Total</th>';
+    headerRow1 += '<th class="sheet-acct-group" style="min-width:140px;">Remarks</th>';
     headerRow1 += '</tr>';
     
-    let headerRow2 = '<tr>';
-    accounts.forEach(() => {
-        headerRow2 += '<th class="sheet-sub-col">M</th><th class="sheet-sub-col sheet-acct-border">F</th>';
-    });
-    headerRow2 += '</tr>';
+    let headerRow2 = ''; // Removed second header row for headers
     thead.innerHTML = headerRow1 + headerRow2;
     
     // === BODY ===
     let bodyHtml = '';
-    const grandTotals = { meesho: new Array(accounts.length).fill(0), flipkart: new Array(accounts.length).fill(0), total: 0 };
+    const grandTotals = { meesho: new Array(accounts.length).fill(0), total: 0 };
     
     dates.forEach(date => {
         const [y, m, d] = date.split('-');
@@ -2076,15 +2165,12 @@ async function renderDataSheet() {
         
         let rowTotal = 0;
         accounts.forEach((acc, idx) => {
-            const cell = lookup[date]?.[acc.name] || { meesho: 0, flipkart: 0, total: 0 };
+            const cell = lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
             const meeshoVal = cell.meesho || '';
-            const flipkartVal = cell.flipkart || '';
             rowTotal += cell.total;
             grandTotals.meesho[idx] += cell.meesho;
-            grandTotals.flipkart[idx] += cell.flipkart;
             
-            bodyHtml += `<td class="sheet-editable"><input type="number" class="sheet-cell-input" value="${meeshoVal || ''}" data-date="${date}" data-account="${acc.name}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="-"></td>`;
-            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${flipkartVal || ''}" data-date="${date}" data-account="${acc.name}" data-company="${acc.company}" data-field="flipkart" min="0" placeholder="-"></td>`;
+            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${meeshoVal || ''}" data-date="${date}" data-account="${acc.name}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="-"></td>`;
         });
         grandTotals.total += rowTotal;
         
@@ -2099,8 +2185,7 @@ async function renderDataSheet() {
     bodyHtml += '<tr class="sheet-grand-row">';
     bodyHtml += '<td class="sheet-date-cell">TOTAL</td>';
     accounts.forEach((_, idx) => {
-        bodyHtml += `<td>${grandTotals.meesho[idx]}</td>`;
-        bodyHtml += `<td class="sheet-acct-border">${grandTotals.flipkart[idx]}</td>`;
+        bodyHtml += `<td class="sheet-acct-border">${grandTotals.meesho[idx]}</td>`;
     });
     bodyHtml += `<td class="sheet-total-cell">${grandTotals.total}</td>`;
     bodyHtml += '<td></td>';
@@ -2127,7 +2212,7 @@ async function renderDataSheet() {
     });
     
     // === EVENT: Save order cell edits (buffered to Firebase) ===
-    tbody.querySelectorAll('input[data-field="meesho"], input[data-field="flipkart"]').forEach(inp => {
+    tbody.querySelectorAll('input[data-field="meesho"]').forEach(inp => {
         inp.addEventListener('change', () => {
             const { date, account, company, field } = inp.dataset;
             const value = parseInt(inp.value) || 0;
@@ -2137,7 +2222,7 @@ async function renderDataSheet() {
             const row = stateData.find(r => normalizeToISODate(r.date) === date && r.accountName === account);
             if (row) {
                 row[field] = value;
-                row.total = (parseInt(row.meesho) || 0) + (parseInt(row.flipkart) || 0);
+                row.total = parseInt(row.meesho) || 0;
             }
             
             // Recalculate totals in UI immediately
@@ -2155,7 +2240,7 @@ async function renderDataSheet() {
 function recalcSheetRowTotal(inputEl) {
     const tr = inputEl.closest('tr');
     if (!tr) return;
-    const inputs = tr.querySelectorAll('input[data-field="meesho"], input[data-field="flipkart"]');
+    const inputs = tr.querySelectorAll('input[data-field="meesho"]');
     let total = 0;
     inputs.forEach(inp => total += parseInt(inp.value) || 0);
     const totalCell = tr.querySelector('.sheet-total-cell');
@@ -2191,7 +2276,6 @@ function exportSheetCSV() {
     const headerRow = ['Date'];
     accounts.forEach(name => {
         headerRow.push(`${name} - Meesho`);
-        headerRow.push(`${name} - Flipkart`);
     });
     headerRow.push('Total', 'Remarks');
     rows.push(headerRow);
@@ -2231,28 +2315,27 @@ async function renderMoneyManagement() {
     const tbody = document.getElementById('money-management-tbody');
     if (!tbody) return;
     
-    // Combine accounts from both companies + their details
+    // Combine accounts from both companies + their details in their set order
     const mgmtAccounts = [];
-    AppState.company1Accounts.forEach(accName => {
-        const details = AppState.company1Details?.find(d => d.name === accName) || {};
-        mgmtAccounts.push({
-            name: accName,
-            company: 'Company 1',
-            companyId: 'company1',
-            money: parseInt(details.money) || 0,
-            expense: parseInt(details.expense) || 0,
-            moneyDate: details.moneyDate || ''
-        });
-    });
-    AppState.company2Accounts.forEach(accName => {
-        const details = AppState.company2Details?.find(d => d.name === accName) || {};
-        mgmtAccounts.push({
-            name: accName,
-            company: 'Company 2',
-            companyId: 'company2',
-            money: parseInt(details.money) || 0,
-            expense: parseInt(details.expense) || 0,
-            moneyDate: details.moneyDate || ''
+    
+    // Determine which company to show first based on current view for consistency
+    const sortedCompanies = AppState.currentCompany === 'company2' ? ['company2', 'company1'] : ['company1', 'company2'];
+    
+    sortedCompanies.forEach(compId => {
+        const accounts = compId === 'company1' ? AppState.company1Accounts : AppState.company2Accounts;
+        const detailsList = compId === 'company1' ? AppState.company1Details : AppState.company2Details;
+        const companyLabel = compId === 'company1' ? 'Company 1' : 'Company 2';
+        
+        (accounts || []).forEach(accName => {
+            const details = (detailsList || []).find(d => d.name === accName) || {};
+            mgmtAccounts.push({
+                name: accName,
+                company: companyLabel,
+                companyId: compId,
+                money: parseInt(details.money) || 0,
+                expense: parseInt(details.expense) || 0,
+                moneyDate: details.moneyDate || ''
+            });
         });
     });
     
@@ -2301,6 +2384,11 @@ async function renderMoneyManagement() {
     tbody.querySelectorAll('.inp-money, .inp-expense').forEach(inp => {
         inp.addEventListener('input', () => {
              updateGrandTotals();
+             
+             // Unhide save button
+             const saveBtn = document.getElementById('money-save-btn');
+             if (saveBtn) saveBtn.classList.remove('hidden');
+             
              const row = inp.closest('.money-row');
              const accName = row.dataset.account;
              const companyId = row.dataset.companyId;
@@ -2539,9 +2627,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const moneySaveBtn = document.getElementById('money-save-btn');
     if (moneySaveBtn) {
-        moneySaveBtn.addEventListener('click', () => {
+        // Clone to remove old bound listeners
+        const newMoneySaveBtn = moneySaveBtn.cloneNode(true);
+        moneySaveBtn.parentNode.replaceChild(newMoneySaveBtn, moneySaveBtn);
+        newMoneySaveBtn.addEventListener('click', () => {
             FirebaseService.flushWrites();
-            showToast('Changes saved', 'success');
+            newMoneySaveBtn.classList.add('hidden');
+            showToast('Changes saved instantly!', 'success');
         });
     }
 
@@ -2558,36 +2650,547 @@ document.addEventListener('DOMContentLoaded', () => {
         backupRefreshBtn.addEventListener('click', () => renderMoneyBackupPage(true));
     }
 
-    const backupExportBtn = document.getElementById('money-backup-export-btn');
-    if (backupExportBtn) {
-        backupExportBtn.addEventListener('click', exportMoneyBackupToExcel);
-    }
-    
     const backupDeleteBtn = document.getElementById('money-backup-delete-btn');
     if (backupDeleteBtn) {
         backupDeleteBtn.addEventListener('click', async () => {
-            const backupId = AppState.selectedMoneyBackupId;
-            if (!backupId) {
-                showToast('Please select a backup to delete', 'error');
+            const activeBackup = getSelectedMoneyBackup();
+            if (!activeBackup || !activeBackup.id) {
+                showToast('Please select a backup to delete', 'info');
                 return;
             }
-            if (confirm('Are you sure you want to permanently delete this backup?')) {
-                showToast('Deleting backup...', 'info');
+            if (confirm(`Are you sure you want to delete this backup from ${activeBackup.backupDate}? This action cannot be undone.`)) {
+                showProgressToast('Deleting backup...');
                 try {
-                    const res = await FirebaseService.deleteMoneyBackup(backupId);
-                    if (res.success) {
-                        AppState.moneyBackups = AppState.moneyBackups.filter(b => b.id !== backupId);
-                        AppState.selectedMoneyBackupId = '';
-                        await loadMoneyBackups(true); // force reload from server
-                        renderMoneyBackupPage();
+                    const res = await apiRequest({ action: 'deleteMoneyBackup', backupId: activeBackup.id });
+                    if (res?.success !== false) {
                         showToast('Backup deleted successfully', 'success');
+                        AppState.selectedMoneyBackupId = '';
+                        renderMoneyBackupPage(true);
                     } else {
                         showToast(res.message || 'Failed to delete backup', 'error');
                     }
                 } catch (e) {
-                    showToast('Error deleting backup: ' + e.message, 'error');
+                    showToast('Failed to delete backup', 'error');
                 }
             }
         });
     }
+
+    const backupExportBtn = document.getElementById('money-backup-export-btn');
+    if (backupExportBtn) {
+        backupExportBtn.addEventListener('click', exportMoneyBackupToExcel);
+    }
 });
+
+/* ===== KARIGAR MANAGEMENT ===== */
+async function loadKarigarData() {
+    try {
+        const [kRes, tRes, pRes] = await Promise.all([
+            FirebaseService.getKarigars(),
+            FirebaseService.getKarigarTransactions(),
+            FirebaseService.getDesignPrices()
+        ]);
+        
+        if (kRes.success) AppState.karigars = kRes.data || [];
+        if (tRes.success) AppState.karigarTransactions = (tRes.data || []).sort((a,b) => new Date(b.date) - new Date(a.date));
+        if (pRes.success) AppState.designPrices = pRes.data || {};
+    } catch(e) {
+        console.error("Failed to load karigar data", e);
+    }
+}
+
+async function renderKarigarPage() {
+    await loadKarigarData();
+    renderKarigarGrid();
+    setupKarigarListeners();
+}
+
+function calculateKarigarBalance(karigarName) {
+    if (!karigarName) return { totalJama: 0, totalUpad: 0, balance: 0, lastTx: null };
+    const searchName = karigarName.trim().toLowerCase();
+    const tx = AppState.karigarTransactions.filter(t => (t.karigarName || '').trim().toLowerCase() === searchName);
+    let totalJama = 0;
+    let totalUpad = 0;
+    tx.forEach(t => {
+        if (t.type === 'jama') {
+            totalJama += (parseFloat(t.total) || 0);
+            totalUpad += (parseFloat(t.upadAmount) || 0);
+        }
+        if (t.type === 'upad') totalUpad += (parseFloat(t.amount) || 0);
+    });
+    return { totalJama, totalUpad, balance: totalJama - totalUpad, lastTx: tx[0] };
+}
+
+function renderKarigarGrid() {
+    const grid = document.getElementById('karigar-grid');
+    const searchInput = document.getElementById('karigar-search-input');
+    const query = (searchInput.value || '').trim().toLowerCase();
+    const btnCreate = document.getElementById('btn-create-karigar');
+    
+    if (!grid) return;
+    grid.innerHTML = '';
+    
+    let filtered = AppState.karigars;
+    if (query) {
+        filtered = AppState.karigars.filter(k => (k.name || '').toLowerCase().includes(query));
+    }
+    
+    const exactMatch = AppState.karigars.some(k => (k.name || '').toLowerCase() === query);
+    if (query && !exactMatch) {
+        btnCreate.style.display = 'block';
+    } else {
+        btnCreate.style.display = 'none';
+    }
+    
+    if (filtered.length === 0) {
+        grid.innerHTML = `<div class="card p-4 text-center text-muted" style="grid-column: 1 / -1;"><i class="bx bx-user-x text-4xl mb-2"></i><p>No karigars found.</p></div>`;
+        return;
+    }
+    
+    // Check reset logic: Show "Monthly Reset Required" if it hasn't been reset this month.
+    // It will show on the 1st, 2nd, etc. until the user actually clicks it and finishes the reset.
+    const currentMonth = getTodayISODate().substring(0, 7);
+    const lastResetMonth = localStorage.getItem('karigar_last_reset_month') || '';
+    const resetBtn = document.getElementById('btn-reset-karigar');
+    
+    if (resetBtn) {
+        if (lastResetMonth !== currentMonth) {
+            resetBtn.style.display = 'block';
+            resetBtn.classList.remove('btn-outline-primary', 'text-primary');
+            resetBtn.classList.add('btn-danger', 'text-white');
+            resetBtn.innerHTML = "<i class='bx bx-error-circle'></i> Monthly Reset Required";
+            
+            // Rebind click
+            const newResetBtn = resetBtn.cloneNode(true);
+            resetBtn.parentNode.replaceChild(newResetBtn, resetBtn);
+            newResetBtn.addEventListener('click', confirmKarigarMonthlyReset);
+        } else {
+            resetBtn.style.display = 'none'; // hide completely if done
+        }
+    }
+    
+    let html = '';
+    let globalBalanceSum = 0;
+    
+    filtered.forEach(k => {
+        const stats = calculateKarigarBalance(k.name);
+        globalBalanceSum += stats.balance;
+        
+        const lastActivity = stats.lastTx ? `<span class="text-xs text-muted">Last active: ${formatISODateForDisplay(stats.lastTx.date)}</span>` : '<span class="text-xs text-muted">No activity yet</span>';
+        
+        const isNegative = stats.balance < 0;
+        const balColor = isNegative ? 'var(--danger)' : 'var(--success)';
+        
+        html += `
+            <div class="card" style="display:flex; flex-direction:column; gap: 1rem;">
+                <div class="flex-between">
+                    <div>
+                        <h3 class="font-bold text-lg">${k.name}</h3>
+                        ${lastActivity}
+                    </div>
+                    <div style="background: ${isNegative ? '#fee2e2' : '#dcfce7'}; color: ${balColor}; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: bold; text-align: right;">
+                        <span style="font-size: 0.7rem; display:block; text-transform:uppercase; margin-bottom: -2px;">Balance</span>
+                        ₹${Math.abs(stats.balance).toFixed(2)}${isNegative ? ' Due' : ' Clear'}
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 1rem; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); padding: 0.75rem 0; margin: 0 -0.5rem; justify-content: space-around; text-align: center;">
+                    <div>
+                        <span class="text-xs text-muted" style="display:block;">Total Maal (Jama)</span>
+                        <strong class="text-success">₹${stats.totalJama.toFixed(2)}</strong>
+                    </div>
+                    <div style="width: 1px; background: var(--border-color);"></div>
+                    <div>
+                        <span class="text-xs text-muted" style="display:block;">Total Borrow (Upad)</span>
+                        <strong class="text-danger">₹${stats.totalUpad.toFixed(2)}</strong>
+                    </div>
+                </div>
+
+                <div class="flex gap-2 w-100" style="margin-top: auto; display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
+                    <button class="btn btn-outline btn-karigar-upad" data-name="${k.name.replace(/"/g, '&quot;')}">
+                        <i class='bx bx-minus-circle'></i> Borrow (Upad)
+                    </button>
+                    <button class="btn btn-primary btn-karigar-jama" data-name="${k.name.replace(/"/g, '&quot;')}">
+                        <i class='bx bx-plus-circle'></i> Maal (Jama)
+                    </button>
+                    <button class="btn btn-outline btn-sm btn-karigar-history" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2;">
+                        <i class='bx bx-history'></i> View Detailed History
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+    grid.innerHTML = html;
+    
+    const obEl = document.getElementById('karigar-overall-balance');
+    if (obEl) {
+        obEl.textContent = '₹' + Math.abs(globalBalanceSum).toFixed(2) + (globalBalanceSum < 0 ? ' Due' : ' Clear');
+        obEl.className = globalBalanceSum < 0 ? 'text-lg text-danger' : 'text-lg text-success';
+    }
+    
+    // Bind buttons
+    grid.querySelectorAll('.btn-karigar-upad').forEach(btn => {
+        btn.addEventListener('click', (e) => openKarigarUpadModal(e.target.closest('.btn-karigar-upad').dataset.name));
+    });
+    grid.querySelectorAll('.btn-karigar-jama').forEach(btn => {
+        btn.addEventListener('click', (e) => openKarigarJamaModal(e.target.closest('.btn-karigar-jama').dataset.name));
+    });
+    grid.querySelectorAll('.btn-karigar-history').forEach(btn => {
+        btn.addEventListener('click', (e) => openKarigarHistoryModal(e.target.closest('.btn-karigar-history').dataset.name));
+    });
+}
+
+function setupKarigarListeners() {
+    const searchInput = document.getElementById('karigar-search-input');
+    if (searchInput && !searchInput.dataset.bound) {
+        searchInput.addEventListener('input', renderKarigarGrid);
+        searchInput.dataset.bound = 'true';
+    }
+    
+    const createBtn = document.getElementById('btn-create-karigar');
+    if (createBtn && !createBtn.dataset.bound) {
+        createBtn.addEventListener('click', () => {
+            document.getElementById('karigar-create-name').value = document.getElementById('karigar-search-input').value.trim();
+            document.getElementById('karigar-create-modal').classList.add('show');
+        });
+        createBtn.dataset.bound = 'true';
+    }
+    
+    document.getElementById('close-karigar-create-modal')?.addEventListener('click', () => {
+        document.getElementById('karigar-create-modal').classList.remove('show');
+    });
+    document.getElementById('close-karigar-jama-modal')?.addEventListener('click', () => {
+        document.getElementById('karigar-jama-modal').classList.remove('show');
+    });
+    document.getElementById('close-karigar-upad-modal')?.addEventListener('click', () => {
+        document.getElementById('karigar-upad-modal').classList.remove('show');
+    });
+    document.getElementById('close-karigar-history-modal')?.addEventListener('click', () => {
+        document.getElementById('karigar-history-modal').classList.remove('show');
+    });
+    
+    // Auto-fill price & total calculate for Jama
+    const jamaDesign = document.getElementById('karigar-jama-design');
+    const jamaPrice = document.getElementById('karigar-jama-price');
+    const jamaPic = document.getElementById('karigar-jama-pic');
+    const jamaTotalDisplay = document.getElementById('karigar-jama-total-display');
+    
+    const jamaSize = document.getElementById('karigar-jama-size');
+    if (jamaSize && !jamaSize.dataset.bound) {
+        jamaSize.addEventListener('input', () => {
+            jamaSize.value = jamaSize.value.toUpperCase();
+        });
+        jamaSize.dataset.bound = 'true';
+    }
+
+    if (jamaDesign && !jamaDesign.dataset.bound) {
+        jamaDesign.addEventListener('input', () => {
+            const up = jamaDesign.value.trim().toUpperCase();
+            if (AppState.designPrices[up]) {
+                const oldVal = jamaPrice.value;
+                jamaPrice.value = AppState.designPrices[up];
+                
+                // Show AI animation if it auto-filled a different price
+                if (oldVal != jamaPrice.value) {
+                    jamaPrice.classList.add('rainbow-autofill');
+                    setTimeout(() => jamaPrice.classList.remove('rainbow-autofill'), 2500);
+                }
+            }
+            updateJamaTotal();
+        });
+        jamaPrice.addEventListener('input', updateJamaTotal);
+        jamaPic.addEventListener('input', updateJamaTotal);
+        function updateJamaTotal() {
+            const p = parseFloat(jamaPrice.value) || 0;
+            const q = parseInt(jamaPic.value) || 0;
+            jamaTotalDisplay.textContent = '₹' + (p * q).toFixed(2);
+        }
+        jamaDesign.dataset.bound = 'true';
+    }
+
+    // Upad Live Balance Update
+    const upadAmount = document.getElementById('karigar-upad-amount');
+    const upadBalanceDisplay = document.getElementById('karigar-upad-balance-display');
+    if (upadAmount && !upadAmount.dataset.bound) {
+        upadAmount.addEventListener('input', () => {
+            const karigarName = document.getElementById('karigar-upad-id').value;
+            const stats = calculateKarigarBalance(karigarName);
+            const borrow = parseFloat(upadAmount.value) || 0;
+            const newBal = stats.balance - borrow;
+            
+            upadBalanceDisplay.textContent = '₹' + newBal.toFixed(2);
+            if (newBal < 0) {
+                upadBalanceDisplay.classList.remove('text-primary', 'text-success');
+                upadBalanceDisplay.classList.add('text-danger');
+            } else {
+                upadBalanceDisplay.classList.remove('text-danger');
+                upadBalanceDisplay.classList.add('text-primary');
+            }
+        });
+        upadAmount.dataset.bound = 'true';
+    }
+    
+    // Form submits
+    const createForm = document.getElementById('karigar-create-form');
+    if (createForm && !createForm.dataset.bound) {
+        createForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('karigar-create-name').value.trim();
+            if (!name) return;
+            showLoader();
+            try {
+                await FirebaseService.addKarigar(name);
+                document.getElementById('karigar-search-input').value = '';
+                document.getElementById('karigar-create-modal').classList.remove('show');
+                showToast("Karigar created successfully!", "success");
+                await renderKarigarPage();
+            } catch (err) { showToast("Failed to create", "error"); }
+            finally { hideLoader(); }
+        });
+        createForm.dataset.bound = 'true';
+    }
+    
+    const jamaForm = document.getElementById('karigar-jama-form');
+    if (jamaForm && !jamaForm.dataset.bound) {
+        jamaForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const karigarName = document.getElementById('karigar-jama-id').value;
+            const date = document.getElementById('karigar-jama-date').value;
+            const designName = document.getElementById('karigar-jama-design').value;
+            const size = document.getElementById('karigar-jama-size').value;
+            const pic = document.getElementById('karigar-jama-pic').value;
+            const price = document.getElementById('karigar-jama-price').value;
+            const upadAmount = document.getElementById('karigar-jama-upad').value || 0;
+            
+            showLoader();
+            try {
+                await FirebaseService.addKarigarJama({ 
+                    karigarName, date, designName, size, pic, price, upadAmount, 
+                    companyId: AppState.currentCompany,
+                    addedBy: AppState.currentUser?.role || 'admin'
+                });
+                document.getElementById('karigar-jama-modal').classList.remove('show');
+                showToast("Maal (Jama) added successfully!", "success");
+                
+                // Update local price cache immediately
+                if (designName && price) {
+                    AppState.designPrices[designName.toString().trim().toUpperCase()] = parseFloat(price);
+                }
+                
+                await renderKarigarPage();
+            } catch (err) { showToast("Failed to add", "error"); }
+            finally { hideLoader(); }
+        });
+        jamaForm.dataset.bound = 'true';
+    }
+    
+    const upadForm = document.getElementById('karigar-upad-form');
+    if (upadForm && !upadForm.dataset.bound) {
+        upadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const karigarName = document.getElementById('karigar-upad-id').value;
+            const date = document.getElementById('karigar-upad-date').value;
+            const amount = document.getElementById('karigar-upad-amount').value;
+            
+            showLoader();
+            try {
+                await FirebaseService.addKarigarUpad({ 
+                    karigarName, date, amount, 
+                    companyId: AppState.currentCompany,
+                    addedBy: AppState.currentUser?.role || 'admin'
+                });
+                document.getElementById('karigar-upad-modal').classList.remove('show');
+                showToast("Borrow (Upad) added successfully!", "success");
+                await renderKarigarPage();
+            } catch (err) { showToast("Failed to add", "error"); }
+            finally { hideLoader(); }
+        });
+        upadForm.dataset.bound = 'true';
+    }
+}
+
+function openKarigarJamaModal(name) {
+    document.getElementById('karigar-jama-id').value = name;
+    document.getElementById('karigar-jama-name-display').textContent = name;
+    document.getElementById('karigar-jama-date').value = getTodayISODate();
+    document.getElementById('karigar-jama-design').value = '';
+    document.getElementById('karigar-jama-size').value = '';
+    document.getElementById('karigar-jama-pic').value = '';
+    document.getElementById('karigar-jama-price').value = '';
+    document.getElementById('karigar-jama-upad').value = '';
+    document.getElementById('karigar-jama-total-display').textContent = '0';
+    document.getElementById('karigar-jama-modal').classList.add('show');
+}
+
+function openKarigarUpadModal(name) {
+    const stats = calculateKarigarBalance(name);
+    document.getElementById('karigar-upad-id').value = name;
+    document.getElementById('karigar-upad-name-display').textContent = name;
+    document.getElementById('karigar-upad-date').value = getTodayISODate();
+    document.getElementById('karigar-upad-amount').value = '';
+    
+    // Set summary displays
+    document.getElementById('karigar-upad-jama-display').textContent = '₹' + stats.totalJama.toFixed(2);
+    const balanceDisplay = document.getElementById('karigar-upad-balance-display');
+    balanceDisplay.textContent = '₹' + stats.balance.toFixed(2);
+    
+    if (stats.balance < 0) {
+        balanceDisplay.classList.remove('text-primary', 'text-success');
+        balanceDisplay.classList.add('text-danger');
+    } else {
+        balanceDisplay.classList.remove('text-danger');
+        balanceDisplay.classList.add('text-primary');
+    }
+    
+    document.getElementById('karigar-upad-modal').classList.add('show');
+}
+
+function openKarigarHistoryModal(name) {
+    const txs = AppState.karigarTransactions.filter(t => t.karigarName === name);
+    document.getElementById('karigar-history-name-display').textContent = name;
+    const tbody = document.getElementById('karigar-history-tbody');
+    tbody.innerHTML = '';
+    
+    let totalJama = 0;
+    let totalUpad = 0;
+    
+    if (txs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-muted">No transactions recorded for this karigar.</td></tr>';
+    } else {
+        txs.forEach(t => {
+            const isJama = t.type === 'jama';
+            const jamaVal = isJama ? parseFloat(t.total || 0) : 0;
+            const upadVal = isJama ? parseFloat(t.upadAmount || 0) : parseFloat(t.amount || 0);
+            
+            totalJama += jamaVal;
+            totalUpad += upadVal;
+            
+            let companyTag = '';
+            if (t.companyId === 'company1') companyTag = `<span class="badge badge-primary badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C1</span>`;
+            if (t.companyId === 'company2') companyTag = `<span class="badge badge-success badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C2</span>`;
+            
+            let addedByTag = '';
+            if (t.addedBy === 'admin') addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> Admin</span>`;
+            if (t.addedBy === 'order') addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> Order</span>`;
+            
+            const row = `
+                <tr style="border-bottom: 1px solid var(--border-light); ${!isJama ? 'background: #fffcfc;' : ''}">
+                    <td class="p-2 text-sm">${formatISODateForDisplay(t.date)} <div class="mt-1">${companyTag}</div></td>
+                    <td class="p-2 text-sm font-medium">${isJama ? (t.designName || 'Maal') : '<span class="text-danger font-bold">Direct Borrow (Upad)</span>'} ${addedByTag}</td>
+                    <td class="p-2 text-sm text-center">${t.size || '-'}</td>
+                    <td class="p-2 text-sm text-right font-bold">${t.pic || '-'}</td>
+                    <td class="p-2 text-sm text-right font-mono">${t.price ? '₹'+parseFloat(t.price).toFixed(2) : '-'}</td>
+                    <td class="p-2 text-sm text-right text-success font-bold">${isJama ? '₹'+jamaVal.toFixed(2) : '-'}</td>
+                    <td class="p-2 text-sm text-right text-danger font-bold">${upadVal > 0 ? '₹'+upadVal.toFixed(2) : '-'}</td>
+                    <td class="p-2 text-sm text-center">
+                        <button onclick="deleteKarigarHistory('${t.id}', '${name}')" class="btn-icon text-danger" title="Delete record"><i class='bx bx-trash'></i></button>
+                    </td>
+                </tr>
+            `;
+            tbody.insertAdjacentHTML('beforeend', row);
+        });
+    }
+    
+    document.getElementById('history-total-jama').textContent = '₹' + totalJama.toFixed(2);
+    document.getElementById('history-total-upad').textContent = '₹' + totalUpad.toFixed(2);
+    document.getElementById('history-net-balance').textContent = '₹' + (totalJama - totalUpad).toFixed(2);
+    
+    const balEl = document.getElementById('history-net-balance');
+    if (totalJama - totalUpad < 0) {
+        balEl.classList.remove('text-primary', 'text-success');
+        balEl.classList.add('text-danger');
+    } else {
+        balEl.classList.remove('text-danger');
+        balEl.classList.add('text-success');
+    }
+    
+    const deleteBtn = document.getElementById('btn-delete-employee');
+    deleteBtn.onclick = () => deleteCompleteKarigar(name);
+    
+    document.getElementById('karigar-history-modal').classList.add('show');
+}
+
+async function deleteCompleteKarigar(karigarName) {
+    if (!confirm(`!! WARNING !!\nAre you sure you want to completely delete "${karigarName}"? This will permanently remove them from the system.`)) return;
+    
+    showLoader();
+    try {
+        await FirebaseService.deleteKarigar(karigarName);
+        showToast(`Employee ${karigarName} deleted`, 'success');
+        
+        document.getElementById('karigar-history-modal').classList.remove('show');
+        
+        // Remove locally and re-render
+        AppState.karigars = AppState.karigars.filter(k => k.name !== karigarName);
+        renderKarigarGrid();
+    } catch (e) {
+        console.error('Failed to delete karigar:', e);
+        showToast('Failed to delete employee', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+async function deleteKarigarHistory(txId, karigarName) {
+    if (!confirm('Are you certain you want to specifically delete this record? This cannot be undone.')) return;
+    
+    showLoader();
+    try {
+        await FirebaseService.deleteKarigarTransaction(txId);
+        showToast('Record deleted successfully', 'success');
+        
+        // Remove locally without full fetch
+        AppState.karigarTransactions = AppState.karigarTransactions.filter(t => t.id !== txId);
+        
+        // Refresh the open modal and background grid immediately
+        openKarigarHistoryModal(karigarName);
+        renderKarigarGrid();
+    } catch (e) {
+        console.error('Failed to delete transaction:', e);
+        showToast('Failed to delete record.', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+window.onload = function() {
+    checkAuth();
+};
+
+async function confirmKarigarMonthlyReset() {
+    if (!confirm("This will backup ALL current Karigar data to Google Sheets and instantly clear it from the app for the new month.\n\nAre you sure you want to proceed?")) return;
+    
+    showLoader();
+    try {
+        showToast('Initiating backup to Google Sheets...', 'info');
+        
+        // Ensure all pending writes are flushed first
+        await FirebaseService.flushWrites();
+        
+        // Full database backup is the safest way so nothing else gets missed
+        const allData = await FirebaseService.getAllDataForBackup();
+        const response = await sheetsApiRequest({ action: 'saveFullBackup', data: allData });
+        
+        if (response && response.success) {
+            showToast('Backup successful. Clearing local database...', 'info');
+            
+            // Delete from firestore
+            const deleted = await FirebaseService.clearKarigarMonthlyData();
+            
+            // Update UI & memory state
+            AppState.karigarTransactions = [];
+            const currentMonth = getTodayISODate().substring(0, 7);
+            localStorage.setItem('karigar_last_reset_month', currentMonth);
+            
+            showToast(`Monthly Reset complete! Cleared ${deleted} records.`, 'success');
+            renderKarigarGrid();
+        } else {
+            showToast('Backup failed. Local data was kept safe.', 'error');
+        }
+    } catch (e) {
+        console.error('Reset error:', e);
+        showToast('System Error during reset.', 'error');
+    } finally {
+        hideLoader();
+    }
+}

@@ -89,6 +89,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 .btn-primary:disabled { background-color: #93c5fd; cursor: not-allowed; box-shadow: none; }
 .btn-outline { background-color: white; border: 1px solid var(--border-color); color: var(--text-main); }
 .btn-outline:hover { background-color: var(--bg-main); border-color: #cbd5e1; }
+.btn-outline:disabled { background-color: #f8fafc; color: #94a3b8; border-color: #e2e8f0; cursor: not-allowed; pointer-events: none; opacity: 0.7; }
 .btn-danger { background-color: var(--danger); color: white; }
 .btn-danger:hover { background-color: #dc2626; }
 .btn-lg { padding: 0.75rem 1.5rem; font-size: 1rem; border-radius: var(--radius); }
@@ -978,3 +979,48 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 .toast-info .toast-icon { color: #3b82f6; }
 .toast-info .toast-progress { display: none; }
 
+
+/* ===== Premium AI Auto-Fill Animation ===== */
+@keyframes ai-aura {
+    0% {
+        box-shadow: 0 0 0 0 rgba(168, 85, 247, 0.2), inset 0 0 0 rgba(168, 85, 247, 0);
+        border-color: rgba(168, 85, 247, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 15px 1px rgba(168, 85, 247, 0.3), inset 0 0 8px rgba(168, 85, 247, 0.1);
+        border-color: rgba(217, 70, 239, 0.6);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0), inset 0 0 0 rgba(59, 130, 246, 0);
+        border-color: var(--border-color);
+    }
+}
+
+@keyframes ai-bg-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+.rainbow-autofill {
+    animation: ai-aura 2.5s ease-in-out, ai-bg-shift 2.5s ease-in-out;
+    background: linear-gradient(120deg, transparent 0%, rgba(139,92,246,0.1) 30%, rgba(236,72,153,0.1) 70%, transparent 100%);
+    background-size: 200% auto;
+    color: var(--text-main) !important;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+[data-theme="dark"] .rainbow-autofill {
+    background: linear-gradient(120deg, transparent 0%, rgba(139,92,246,0.25) 30%, rgba(236,72,153,0.2) 70%, transparent 100%);
+}
+
+.rainbow-autofill::placeholder {
+    color: var(--text-muted) !important;
+}
+
+/* Modal text input enhancement */
+.modal input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(19, 91, 236, 0.1);
+}

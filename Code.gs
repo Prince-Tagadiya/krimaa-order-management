@@ -8,6 +8,9 @@ var COMPANIES = {
 };
 var REMARKS_SHEET = 'Remarks';
 var MONEY_BACKUP_SHEET = 'Money_Backups';
+var KARIGAR_SHEET = 'Karigars';
+var KARIGAR_TX_SHEET = 'Karigar_Transactions';
+var DESIGN_PRICES_SHEET = 'Design_Prices';
 var _sheetsInitialised = {};
 
 function normalizeCompanyId(companyId) {
@@ -44,7 +47,34 @@ function setupSheets(companyId) {
   setupSheetsForCompany(ss, company);
   setupRemarksSheet(ss);
   setupMoneyBackupSheet(ss);
+  setupKarigarSheets(ss);
   _sheetsInitialised[companyId] = true;
+}
+
+function setupKarigarSheets(ss) {
+  var kSheet = ss.getSheetByName(KARIGAR_SHEET);
+  if (!kSheet) {
+    kSheet = ss.insertSheet(KARIGAR_SHEET);
+    kSheet.appendRow(['Name', 'Added At']);
+    kSheet.getRange('A1:B1').setFontWeight('bold');
+    kSheet.setFrozenRows(1);
+  }
+
+  var txSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
+  if (!txSheet) {
+    txSheet = ss.insertSheet(KARIGAR_TX_SHEET);
+    txSheet.appendRow(['Date', 'Karigar', 'Type', 'Design', 'Size', 'Pic', 'Price', 'Total Jama', 'Upad Amount', 'Created At']);
+    txSheet.getRange('A1:J1').setFontWeight('bold');
+    txSheet.setFrozenRows(1);
+  }
+
+  var dpSheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
+  if (!dpSheet) {
+    dpSheet = ss.insertSheet(DESIGN_PRICES_SHEET);
+    dpSheet.appendRow(['Design Name', 'Latest Price', 'Updated At']);
+    dpSheet.getRange('A1:C1').setFontWeight('bold');
+    dpSheet.setFrozenRows(1);
+  }
 }
 
 function setupRemarksSheet(ss) {
@@ -69,26 +99,16 @@ function setupMoneyBackupSheet(ss) {
 
 function setupSheetsForCompany(ss, company) {
   var accountsSheet = ss.getSheetByName(company.accountsSheet);
-  if (!accountsSheet) {
-    accountsSheet = ss.insertSheet(company.accountsSheet);
-    accountsSheet.appendRow(['Account Name', 'Added Date', 'Position']);
-    accountsSheet.getRange("A1:C1").setFontWeight("bold");
-    accountsSheet.setFrozenRows(1);
-  } else {
-    // Ensure Position column header exists for older sheets
-    var header = accountsSheet.getRange(1, 3).getValue();
-    if (header !== 'Position') {
-      accountsSheet.getRange(1, 3).setValue('Position').setFontWeight('bold');
-    }
-  }
+  if (!accountsSheet) accountsSheet = ss.insertSheet(company.accountsSheet);
+  // Unconditionally ensure valid headers exist
+  accountsSheet.getRange(1, 1, 1, 3).setValues([['Account Name', 'Added Date', 'Position']]).setFontWeight("bold");
+  accountsSheet.setFrozenRows(1);
   
   var ordersSheet = ss.getSheetByName(company.ordersSheet);
-  if (!ordersSheet) {
-    ordersSheet = ss.insertSheet(company.ordersSheet);
-    ordersSheet.appendRow(['Date', 'Account Name', 'Meesho', 'Flipkart', 'Total']);
-    ordersSheet.getRange("A1:E1").setFontWeight("bold");
-    ordersSheet.setFrozenRows(1);
-  }
+  if (!ordersSheet) ordersSheet = ss.insertSheet(company.ordersSheet);
+  // Unconditionally ensure valid headers exist
+  ordersSheet.getRange(1, 1, 1, 5).setValues([['Date', 'Account Name', 'Meesho', 'Total', 'Synced At']]).setFontWeight("bold");
+  ordersSheet.setFrozenRows(1);
 }
 
 // Migrate existing data from old sheets (Accounts/Orders) to Company 1 sheets
@@ -180,6 +200,8 @@ function doPost(e) {
       return output.setContent(JSON.stringify(bulkBackup(data.orders, data.accounts, companyId, data.append, data.clearMonth)));
     } else if (action === 'saveMoneyBackup') {
       return output.setContent(JSON.stringify(saveMoneyBackup(data.date, data.rows, data.reason)));
+    } else if (action === 'saveFullBackup') {
+      return output.setContent(JSON.stringify(saveFullBackup(data.data)));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid action: ' + action}));
@@ -464,7 +486,7 @@ function submitOrders(dateStr, orders, companyId) {
   var newRows = [];
   for (var j = 0; j < orders.length; j++) {
     var order = orders[j];
-    newRows.push([dateStr, order.accountName, order.meesho || 0, order.flipkart || 0, order.total || 0]);
+    newRows.push([dateStr, order.accountName, order.meesho || 0, order.total || 0]);
   }
   
   if(newRows.length > 0) {
@@ -495,7 +517,7 @@ function getDashboardData(companyId, monthFilter) {
   }
 
   if (lastRow < startRow) return {success: true, data: []};
-  var data = sheet.getRange(startRow, 1, lastRow - (startRow - 1), 5).getValues();
+  var data = sheet.getRange(startRow, 1, lastRow - (startRow - 1), 4).getValues();
   var records = [];
   
   for (var i = 0; i < data.length; i++) {
@@ -508,8 +530,7 @@ function getDashboardData(companyId, monthFilter) {
       date: formattedDate,
       accountName: data[i][1],
       meesho: data[i][2],
-      flipkart: data[i][3],
-      total: data[i][4]
+      total: data[i][3]
     });
   }
   
@@ -606,7 +627,6 @@ function updateSingleOrder(dateStr, accountName, field, value, companyId) {
   
   var colIndex = -1;
   if (field === 'meesho') colIndex = 3;
-  else if (field === 'flipkart') colIndex = 4;
   else return {success: false, message: 'Invalid field'};
   
   var numVal = parseInt(value) || 0;
@@ -619,9 +639,7 @@ function updateSingleOrder(dateStr, accountName, field, value, companyId) {
     if (rowDate.toString().trim() === dateStr.trim() && data[i][1].toString().trim() === accountName.trim()) {
       sheet.getRange(i + 1, colIndex).setValue(numVal);
       // Recalculate total
-      var meesho = (colIndex === 3) ? numVal : (parseInt(data[i][2]) || 0);
-      var flipkart = (colIndex === 4) ? numVal : (parseInt(data[i][3]) || 0);
-      sheet.getRange(i + 1, 5).setValue(meesho + flipkart);
+      sheet.getRange(i + 1, 4).setValue(numVal);
       return {success: true, message: 'Order updated'};
     }
   }
@@ -630,74 +648,181 @@ function updateSingleOrder(dateStr, accountName, field, value, companyId) {
 }
 
 // ===== BULK BACKUP (receives Firebase data and writes to Sheets) =====
-function bulkBackup(orders, accounts, companyId, appendOnly, clearMonth) {
-  companyId = normalizeCompanyId(companyId);
+function saveFullBackup(data) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  setupSheets(companyId);
-  var company = COMPANIES[companyId] || COMPANIES['company1'];
+  setupSheets('all');
   
-  // --- Backup Orders ---
-  if (orders && orders.length > 0) {
-    var ordersSheet = ss.getSheetByName(company.ordersSheet);
-    
-    // Clear logic
-    if (clearMonth && clearMonth.length === 7) {
-      // Delete rows for specific month
-      var data = ordersSheet.getDataRange().getValues();
-      for (var i = data.length - 1; i >= 1; i--) {
-        var rowDate = data[i][0];
-        var rowMonth = "";
-        if (rowDate instanceof Date) {
-          rowMonth = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "yyyy-MM");
-        } else if (typeof rowDate === 'string' && rowDate.length >= 7) {
-          rowMonth = rowDate.substring(0, 7);
-        }
-        if (rowMonth === clearMonth) {
-          ordersSheet.deleteRow(i + 1);
-        }
-      }
-    } else if (!appendOnly) {
-      // Full clear
-      var lastRow = ordersSheet.getLastRow();
-      if (lastRow > 1) {
-        ordersSheet.getRange(2, 1, lastRow - 1, 5).clearContent();
-      }
-    }
-    
-    // Write new data
+  var totalRows = 0;
+  
+  // 1. Sync Remarks
+  if (data.remarks) {
+    var sheet = ss.getSheetByName(REMARKS_SHEET);
+    sheet.clear();
+    sheet.appendRow(['Account ID', 'Remark', 'Last Updated']);
+    sheet.getRange('A1:C1').setFontWeight('bold');
     var rows = [];
-    for (var i = 0; i < orders.length; i++) {
-      var o = orders[i];
-      rows.push([
-        o.date || '',
-        o.accountName || '',
-        parseInt(o.meesho) || 0,
-        parseInt(o.flipkart) || 0,
-        parseInt(o.total) || 0
-      ]);
+    for (var id in data.remarks) {
+      if (id === 'last_update') continue;
+      rows.push([id, data.remarks[id], new Date()]);
     }
     if (rows.length > 0) {
-      var startRow = ordersSheet.getLastRow() + 1;
-      ordersSheet.getRange(startRow, 1, rows.length, 5).setValues(rows);
+      sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+      totalRows += rows.length;
     }
   }
-  
-  // --- Backup Accounts ---
-  if (accounts && accounts.length > 0) {
-    var accountsSheet = ss.getSheetByName(company.accountsSheet);
-    var accLastRow = accountsSheet.getLastRow();
-    if (accLastRow > 1) {
-      accountsSheet.getRange(2, 1, accLastRow - 1, 3).clearContent();
-    }
-    var accRows = [];
-    var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-    for (var j = 0; j < accounts.length; j++) {
-      accRows.push([accounts[j], now, j]);
-    }
-    if (accRows.length > 0) {
-      accountsSheet.getRange(2, 1, accRows.length, 3).setValues(accRows);
+
+  // 2. Sync Karigars (Overwrite style for simplicity or UPSERT)
+  if (data.karigars) {
+    var sheet = ss.getSheetByName(KARIGAR_SHEET);
+    sheet.getRange(2, 1, Math.max(1, sheet.getLastRow()), 2).clearContent();
+    var rows = data.karigars.map(function(k) { return [k.name, k.addedDate || new Date()]; });
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+      totalRows += rows.length;
     }
   }
+
+  // 3. Sync Karigar Transactions (UPSERT logic to prevent data loss)
+  if (data.karigarTransactions) {
+    var sheet = ss.getSheetByName(KARIGAR_TX_SHEET);
+    var existData = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow()-1, 10).getValues() : [];
+    var existMap = {};
+    existData.forEach(function(r) {
+      var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : r[0];
+      var key = dStr + "_" + r[1] + "_" + r[2] + "_" + r[3] + "_" + r[5]; // Date_Karigar_Type_Design_Pic
+      existMap[key] = true;
+    });
+
+    var newRows = [];
+    data.karigarTransactions.forEach(function(tx) {
+      var dStr = tx.date;
+      var key = dStr + "_" + tx.karigarName + "_" + tx.type + "_" + (tx.designName || '') + "_" + (tx.pic || '0');
+      if (!existMap[key]) {
+        newRows.push([
+          tx.date, 
+          tx.karigarName, 
+          tx.type, 
+          tx.designName || '', 
+          tx.size || '', 
+          tx.pic || 0, 
+          tx.price || 0, 
+          tx.total || 0, 
+          tx.amount || tx.upadAmount || 0,
+          new Date()
+        ]);
+      }
+    });
+    if (newRows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 10).setValues(newRows);
+      totalRows += newRows.length;
+    }
+  }
+
+  // 4. Sync Design Prices
+  if (data.designPrices) {
+    var sheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
+    sheet.clear();
+    sheet.appendRow(['Design Name', 'Latest Price', 'Updated At']);
+    sheet.getRange('A1:C1').setFontWeight('bold');
+    var rows = [];
+    for (var design in data.designPrices) {
+      rows.push([design, data.designPrices[design], new Date()]);
+    }
+    if (rows.length > 0) {
+      sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+      totalRows += rows.length;
+    }
+  }
+
+  // 5. Sync Money Backups
+  if (data.moneyBackups) {
+    var sheet = ss.getSheetByName(MONEY_BACKUP_SHEET);
+    var existDates = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow()-1, 1).getValues().map(function(r){ return String(r[0]); }) : [];
+    var newRows = [];
+    data.moneyBackups.forEach(function(b) {
+      if (existDates.indexOf(String(b.backupDate)) === -1) {
+        (b.rows || []).forEach(function(r) {
+           newRows.push([b.backupDate, r.companyId, r.companyName, r.accountName, r.money, r.expense, r.balance, b.reason || '', b.timestamp || new Date()]);
+        });
+      }
+    });
+    if (newRows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 9).setValues(newRows);
+      totalRows += newRows.length;
+    }
+  }
+
+  // 6. Sync Company 1 & 2 Orders and Accounts
+  totalRows += syncCompanyData(ss, 'company1', data.company1);
+  totalRows += syncCompanyData(ss, 'company2', data.company2);
+
+  return { success: true, message: "Full database backup to Sheets successful.", totalRows: totalRows };
+}
+
+function syncCompanyData(ss, companyId, compData) {
+  var count = 0;
+  if (!compData) return count;
+  var company = COMPANIES[companyId];
+  if (!company) return count;
+
+  // Sync Accounts
+  if (compData.accounts && compData.accounts.length > 0) {
+    var sheet = ss.getSheetByName(company.accountsSheet);
+    sheet.getRange(2, 1, Math.max(1, sheet.getLastRow()), 3).clearContent();
+    var rows = compData.accounts.map(function(acc, idx) {
+      return [acc.name, acc.addedDate || new Date(), acc.position || idx];
+    });
+    sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+    count += rows.length;
+  }
+
+  // Sync Orders (UPSERT)
+  if (compData.orders && compData.orders.length > 0) {
+    count += syncOrdersToSheet(ss.getSheetByName(company.ordersSheet), compData.orders);
+  }
   
-  return {success: true, message: 'Backup completed for ' + company.name + ': ' + (orders ? orders.length : 0) + ' orders'};
+  return count;
+}
+
+function syncOrdersToSheet(sheet, orders) {
+  var lastRow = sheet.getLastRow();
+  var existData = lastRow > 1 ? sheet.getRange(2, 1, lastRow-1, 5).getValues() : [];
+  var existMap = {};
+  existData.forEach(function(r, idx) {
+    var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : r[0];
+    var key = dStr + "_" + r[1];
+    existMap[key] = { row: idx + 2, data: r };
+  });
+
+  var now = new Date();
+  var newRows = [];
+  var updatedRowsCount = 0;
+  
+  orders.forEach(function(o) {
+    var key = o.date + "_" + o.accountName;
+    if (existMap[key]) {
+      var exist = existMap[key].data;
+      if (parseInt(exist[2]) !== parseInt(o.meesho) || parseInt(exist[3]) !== parseInt(o.total)) {
+        sheet.getRange(existMap[key].row, 3, 1, 3).setValues([[o.meesho, o.total, now]]);
+        updatedRowsCount++;
+      }
+    } else {
+      newRows.push([o.date, o.accountName, o.meesho, o.total, now]);
+    }
+  });
+
+  if (newRows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 5).setValues(newRows);
+  }
+  
+  return newRows.length + updatedRowsCount;
+}
+
+// Keep for compatibility
+function bulkBackup(orders, accounts, companyId) {
+  var data = { 
+    company1: companyId === 'company1' ? { orders: orders, accounts: accounts } : { orders: [], accounts: [] },
+    company2: companyId === 'company2' ? { orders: orders, accounts: accounts } : { orders: [], accounts: [] }
+  };
+  return saveFullBackup(data);
 }
