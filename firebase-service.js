@@ -54,6 +54,15 @@ const FirebaseService = (() => {
             .join('_');
     }
 
+    let accountNameIdMap = {};
+    let accountIdNameMap = {};
+
+    function buildMoneyRecordDocId(date, companyId, accountName) {
+        return [date, companyId, accountName]
+            .map(v => encodeURIComponent(String(v || '').trim()))
+            .join('_');
+    }
+
     // ───── ACCOUNTS ─────
     async function getAccounts(companyId) {
         init();
@@ -72,7 +81,13 @@ const FirebaseService = (() => {
                 .get();
         }
         const docs = [];
-        snap.forEach(doc => docs.push(doc.data()));
+        snap.forEach(doc => {
+            const data = doc.data();
+            const id = data.accountId || doc.id;
+            accountNameIdMap[data.name.trim()] = id;
+            accountIdNameMap[id] = data.name.trim();
+            docs.push(data);
+        });
         docs.sort((a, b) => (a.position || 0) - (b.position || 0));
         return { success: true, data: docs.map(d => d.name), details: docs };
     }
@@ -89,7 +104,9 @@ const FirebaseService = (() => {
         if (!dup.empty) return { success: false, message: 'Account already exists' };
         // Next position
         const all = await db.collection('accounts').where('companyId', '==', companyId).get();
-        await db.collection('accounts').add({
+        const docRef = db.collection('accounts').doc();
+        await docRef.set({
+            accountId: docRef.id,
             name,
             nameLower: name.toLowerCase(),
             companyId,
@@ -129,21 +146,9 @@ const FirebaseService = (() => {
                 rechargeDate: rechargeDate || ''
             }));
         });
-        // Also rename in daily_orders
-        const dOrdSnap = await db.collection('daily_orders')
-            .where('companyId', '==', companyId)
-            .get();
-        dOrdSnap.forEach(doc => {
-            const data = doc.data();
-            if (data.accounts && data.accounts.includes(oldName.trim())) {
-                const idx = data.accounts.indexOf(oldName.trim());
-                if (idx !== -1) {
-                    const newAccs = [...data.accounts];
-                    newAccs[idx] = newName;
-                    ops.push(b => b.update(doc.ref, { accounts: newAccs }));
-                }
-            }
-        });
+        // Thanks to our ID-based system, we NO LONGER need to manually update thousands
+        // of orders exactly right here! It will resolve globally and automatically.
+        
         await commitInChunks(ops);
         return { success: true, message: 'Account updated successfully' };
     }
@@ -326,9 +331,11 @@ const FirebaseService = (() => {
                 
                 if (d.accounts && d.orders) {
                     for (let i = 0; i < d.accounts.length; i++) {
+                        const accIdOrName = d.accounts[i];
+                        const resolvedName = accountIdNameMap[accIdOrName] || accIdOrName;
                         records.push({
                             date: d.date,
-                            accountName: d.accounts[i],
+                            accountName: resolvedName,
                             meesho: d.orders[i] || 0,
                             total: d.orders[i] || 0
                         });
@@ -349,7 +356,8 @@ const FirebaseService = (() => {
         const accounts = [];
         const orderVals = [];
         orders.forEach(o => {
-            accounts.push(o.accountName);
+            const accId = accountNameIdMap[o.accountName.trim()] || o.accountName;
+            accounts.push(accId); // Store unique ID instead of name
             orderVals.push(o.meesho || 0);
         });
         
@@ -388,9 +396,11 @@ const FirebaseService = (() => {
         const accounts = d.accounts || [];
         const orders = d.orders || [];
         
-        const idx = accounts.indexOf((accountName || '').trim());
+        const accId = accountNameIdMap[(accountName || '').trim()] || accountName;
+        
+        const idx = accounts.indexOf(accId);
         if (idx === -1) {
-            accounts.push((accountName || '').trim());
+            accounts.push(accId);
             orders.push(numVal);
         } else {
             orders[idx] = numVal;
@@ -459,7 +469,10 @@ const FirebaseService = (() => {
                  const data = d.data();
                  if (data.accounts && data.orders) {
                      for(let i=0; i<data.accounts.length; i++) {
-                         arr.push({ date: data.date, accountName: data.accounts[i], meesho: data.orders[i], total: data.orders[i], companyId });
+                         // Swap ID to readable Name before sending to script
+                         const accIdOrName = data.accounts[i];
+                         const resolvedName = accountIdNameMap[accIdOrName] || accIdOrName;
+                         arr.push({ date: data.date, accountName: resolvedName, meesho: data.orders[i], total: data.orders[i], companyId });
                      }
                  }
              });
@@ -766,6 +779,50 @@ const FirebaseService = (() => {
         }
     }
 
+    // ───── MIGRATION: NAMES TO UNIQUE IDS ─────
+    async function migrateDatabaseToIds() {
+        if (localStorage.getItem('migrated_orders_to_ids_v1')) return;
+        init();
+        console.log("Migrating all historical orders to use unique IDs...");
+        const ops = [];
+        
+        // 1. Ensure all accounts have an ID
+        const accSnap = await db.collection('accounts').get();
+        const mapNameId = {};
+        accSnap.forEach(doc => {
+            let accId = doc.data().accountId;
+            if (!accId) { 
+                accId = doc.id; 
+                ops.push(b => b.update(doc.ref, { accountId: accId })); 
+            }
+            mapNameId[doc.data().name.trim()] = accId;
+        });
+        
+        // 2. Scan daily_orders and convert array of names to IDs
+        const ordSnap = await db.collection('daily_orders').get();
+        ordSnap.forEach(doc => {
+            const data = doc.data();
+            if (data.accounts) {
+                let changed = false;
+                const newAccs = [...data.accounts];
+                for (let i = 0; i < newAccs.length; i++) {
+                    const originalStr = newAccs[i].trim();
+                    if (mapNameId[originalStr]) {
+                        newAccs[i] = mapNameId[originalStr]; // Swap!
+                        changed = true;
+                    }
+                }
+                if (changed) { 
+                    ops.push(b => b.update(doc.ref, { accounts: newAccs })); 
+                }
+            }
+        });
+        
+        await commitInChunks(ops);
+        localStorage.setItem('migrated_orders_to_ids_v1', 'true');
+        console.log("Migration finished.");
+    }
+
     function getPendingCount() { return _pendingWrites.size; }
 
     // ───── PUBLIC API ─────
@@ -780,7 +837,7 @@ const FirebaseService = (() => {
         // Backup
         getAllDataForBackup, clearOldOrders, getBackupMeta, setBackupMeta,
         // Migration
-        seedFromSheets, isEmpty, migrateLegacyOrdersToDailyOrders,
+        seedFromSheets, isEmpty, migrateLegacyOrdersToDailyOrders, migrateDatabaseToIds,
         // Karigar
         getKarigars, addKarigar, deleteKarigar, getKarigarTransactions,
         addKarigarJama,

@@ -649,6 +649,7 @@ async function loadInitialData() {
         await ensureFirebaseSeeded();
         await ensureLegacyOrdersMigrated();
         await autoFixMismatchedAccountNames();
+        await FirebaseService.migrateDatabaseToIds();
         
         console.log("🚀 [INITIALIZATION] Fetching fresh data instantly from Firestore...");
         
