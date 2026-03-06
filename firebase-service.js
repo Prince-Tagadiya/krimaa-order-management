@@ -313,38 +313,38 @@ const FirebaseService = (() => {
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
 
-        // Fetch all orders for this company. We filter by date in-memory to avoid composite index requirements.
-        let query = db.collection('daily_orders').where('companyId', '==', companyId);
+        // 1. Fetch valid Account IDs for this company
+        const accSnap = await db.collection('accounts').where('companyId', '==', companyId).get();
+        const validAccIds = new Set();
+        accSnap.forEach(doc => {
+             validAccIds.add(doc.data().accountId || doc.id);
+        });
+
+        // 2. Fetch from fast Daily Summary layer!
+        let query = db.collection('daily_summary').where('date', '>=', monthStr ? `${monthStr}-01` : thirtyDaysAgoStr);
+        if (monthStr) query = query.where('date', '<=', `${monthStr}-31`);
 
         try {
             const snap = await query.get();
             const records = [];
             snap.forEach(doc => {
                 const d = doc.data();
-                
-                // In-memory filter exactly like before to prevent index crash
-                if (monthStr) {
-                    if (d.date && !d.date.startsWith(monthStr)) return;
-                } else {
-                    if (d.date && d.date < thirtyDaysAgoStr) return;
-                }
-                
-                if (d.accounts && d.orders) {
-                    for (let i = 0; i < d.accounts.length; i++) {
-                        const accIdOrName = d.accounts[i];
-                        const resolvedName = accountIdNameMap[accIdOrName] || accIdOrName;
+                for (const [key, val] of Object.entries(d)) {
+                    if (key !== 'date' && key !== 'masterCompany' && validAccIds.has(key)) {
+                        const resolvedName = accountIdNameMap[key] || key;
                         records.push({
                             date: d.date,
                             accountName: resolvedName,
-                            meesho: d.orders[i] || 0,
-                            total: d.orders[i] || 0
+                            meesho: val,
+                            total: val,
+                            companyId
                         });
                     }
                 }
             });
             return { success: true, data: records };
         } catch (e) {
-            console.error("Firebase fetch error. Make sure indexes are configured if adding new queries: ", e);
+            console.error("Firebase fetch error: ", e);
             throw e;
         }
     }
@@ -353,66 +353,72 @@ const FirebaseService = (() => {
         init();
         if (!orders?.length) return { success: false, message: 'No orders provided' };
         
-        const accounts = [];
-        const orderVals = [];
+        const dStr = String(date).split('T')[0];
+        const year = dStr.substring(0, 4);
+        const month = dStr.substring(5, 7);
+        const partition = `orders_${year}_${month}`;
+
+        const ops = [];
+        const summaryUpdates = {};
+        
         orders.forEach(o => {
             const accId = accountNameIdMap[o.accountName.trim()] || o.accountName;
-            accounts.push(accId); // Store unique ID instead of name
-            orderVals.push(o.meesho || 0);
+            const quantity = parseInt(o.meesho) || 0;
+            
+            const docId = `${date}_${accId}`;
+            const orderRef = db.collection(partition).doc(docId);
+            
+            ops.push(b => b.set(orderRef, {
+                orderId: docId,
+                accountId: accId,
+                masterCompany: companyId,
+                quantity,
+                date: dStr,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true }));
+            
+            summaryUpdates[accId] = quantity;
         });
         
-        const docRef = db.collection('daily_orders').doc(`${companyId}_${date}`);
-        await docRef.set({
-            date,
-            companyId,
-            accounts,
-            orders: orderVals,
-            totals: orderVals,
-            createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
+        const summaryRef = db.collection('daily_summary').doc(dStr);
+        ops.push(b => b.set(summaryRef, {
+            date: dStr,
+            ...summaryUpdates
+        }, { merge: true }));
         
+        await commitInChunks(ops);
         return { success: true, message: 'Orders submitted' };
     }
 
     async function updateOrder(date, accountName, field, value, companyId) {
         init();
-        const docRef = db.collection('daily_orders').doc(`${companyId}_${date}`);
-        const docSnap = await docRef.get();
+        const dStr = String(date).split('T')[0];
+        const year = dStr.substring(0, 4);
+        const month = dStr.substring(5, 7);
+        const partition = `orders_${year}_${month}`;
         const numVal = parseInt(value) || 0;
         
-        if (!docSnap.exists) {
-            await docRef.set({
-                date,
-                companyId,
-                accounts: [accountName],
-                orders: [numVal],
-                totals: [numVal],
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            return { success: true, message: 'Order updated' };
-        }
-        
-        const d = docSnap.data();
-        const accounts = d.accounts || [];
-        const orders = d.orders || [];
-        
         const accId = accountNameIdMap[(accountName || '').trim()] || accountName;
+        const docId = `${date}_${accId}`;
+        const orderRef = db.collection(partition).doc(docId);
         
-        const idx = accounts.indexOf(accId);
-        if (idx === -1) {
-            accounts.push(accId);
-            orders.push(numVal);
-        } else {
-            orders[idx] = numVal;
-        }
-        
-        await docRef.update({
-            accounts,
-            orders,
-            totals: orders,
+        const ops = [];
+        ops.push(b => b.set(orderRef, {
+            orderId: docId,
+            accountId: accId,
+            masterCompany: companyId,
+            quantity: numVal,
+            date: dStr,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        });
+        }, { merge: true }));
         
+        const summaryRef = db.collection('daily_summary').doc(dStr);
+        ops.push(b => b.set(summaryRef, {
+            date: dStr,
+            [accId]: numVal
+        }, { merge: true }));
+        
+        await commitInChunks(ops);
         return { success: true, message: 'Order updated' };
     }
 
@@ -447,11 +453,9 @@ const FirebaseService = (() => {
             moneyBackups: []
         };
         
-        const [c1a, c2a, c1o, c2o, rem, kars, txs, dps, mbks] = await Promise.all([
+        const [c1a, c2a, rem, kars, txs, dps, mbks] = await Promise.all([
             db.collection('accounts').where('companyId', '==', 'company1').get(),
             db.collection('accounts').where('companyId', '==', 'company2').get(),
-            db.collection('daily_orders').where('companyId', '==', 'company1').get(),
-            db.collection('daily_orders').where('companyId', '==', 'company2').get(),
             db.collection('remarks').get(),
             db.collection('karigars').get(),
             db.collection('karigar_transactions').orderBy('date', 'desc').get(),
@@ -459,26 +463,16 @@ const FirebaseService = (() => {
             db.collection('money_backups').orderBy('timestamp', 'desc').get()
         ]);
 
-        c1a.forEach(d => result.company1.accounts.push(d.data()));
-        c2a.forEach(d => result.company2.accounts.push(d.data()));
+        c1a.forEach(d => result.company1.accounts.push({
+             ...d.data(), 
+             name: accountIdNameMap[d.id] || d.data().name 
+        }));
+        c2a.forEach(d => result.company2.accounts.push({
+             ...d.data(),
+             name: accountIdNameMap[d.id] || d.data().name 
+        }));
         result.company1.accounts.sort((a, b) => (a.position || 0) - (b.position || 0));
         result.company2.accounts.sort((a, b) => (a.position || 0) - (b.position || 0));
-        
-        const parseDailyOrders = (snap, arr, companyId) => {
-             snap.forEach(d => {
-                 const data = d.data();
-                 if (data.accounts && data.orders) {
-                     for(let i=0; i<data.accounts.length; i++) {
-                         // Swap ID to readable Name before sending to script
-                         const accIdOrName = data.accounts[i];
-                         const resolvedName = accountIdNameMap[accIdOrName] || accIdOrName;
-                         arr.push({ date: data.date, accountName: resolvedName, meesho: data.orders[i], total: data.orders[i], companyId });
-                     }
-                 }
-             });
-        };
-        parseDailyOrders(c1o, result.company1.orders, 'company1');
-        parseDailyOrders(c2o, result.company2.orders, 'company2');
         
         rem.forEach(d => { result.remarks[d.id] = d.data().remark; });
         kars.forEach(d => result.karigars.push(d.data()));
@@ -489,34 +483,52 @@ const FirebaseService = (() => {
         return result;
     }
 
-    async function clearOldOrders() {
+    async function backupAndArchiveMonthlyData(year, monthStr) {
         init();
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+        const partitionName = `orders_${year}_${monthStr}`;
+        const sheetTabName = `Archive_${year}_${monthStr}`;
 
-        console.log(`[VERIFY] Checking Firestore for records older than ${thirtyDaysAgoStr}...`);
-        const snap = await db.collection('daily_orders').where('date', '<', thirtyDaysAgoStr).get();
+        console.log(`[VERIFY] Checking Firestore partition ${partitionName} for backup...`);
+        const oldOrdersSnap = await db.collection(partitionName).get();
         
-        if (snap.empty) {
-            console.log('[VERIFY] No old data found. Storage is already optimized.');
-            return 0;
+        if (oldOrdersSnap.empty) {
+            console.log(`[VERIFY] No orders found in ${partitionName}. Nothing to archive.`);
+            return { success: true, count: 0, message: "No data to archive" };
         }
 
-        console.log(`[VERIFY] Found ${snap.size} records older than 30 days.`);
-        console.log('[VERIFY] Double confirming full backup was successful... Verified!');
-        console.log('[VERIFY] Starting one-by-one verified deletion...');
-        
-        let deletedCount = 0;
-        for (const doc of snap.docs) {
-            const data = doc.data();
-            console.log(`[DELETE] Action verified -> Deleting order data for ${data.companyId} from ${data.date}`);
-            await doc.ref.delete();
-            deletedCount++;
+        const rowsToExport = [];
+        oldOrdersSnap.forEach(doc => {
+            const o = doc.data();
+            rowsToExport.push([
+                o.orderId,
+                o.masterCompany || 'company1',
+                accountIdNameMap[o.accountId] || o.accountId,
+                o.quantity || 0,
+                o.date
+            ]);
+        });
+
+        console.log(`[NETWORK] Sending ${rowsToExport.length} rows to Google Sheets for archiving...`);
+        // We will call the global sheetsApiRequest dynamically because this is the frontend
+        const response = await window.sheetsApiRequest({
+            action: 'archiveMonthlyData',
+            sheetName: sheetTabName,
+            data: rowsToExport
+        });
+
+        if (response && response.success && response.rowsWritten === rowsToExport.length) {
+            console.log(`[VERIFY] Success! Sheets confirmed write of ${response.rowsWritten} rows. Commencing Firestore purge for partition ${partitionName}...`);
+            const ops = [];
+            oldOrdersSnap.forEach(doc => {
+                 ops.push(b => b.delete(doc.ref));
+            });
+            await commitInChunks(ops);
+            console.log(`[CLEANUP] Successfully backed up and purged ${rowsToExport.length} old orders!`);
+            return { success: true, count: rowsToExport.length, message: "Archive succeeded" };
+        } else {
+            console.error("[CRITICAL] Archival verification failed. No Firestore data was deleted to prevent data loss.", response);
+            return { success: false, message: response?.message || "Verification failed" };
         }
-        
-        console.log(`[CLEANUP] Finished. Precisely deleted ${deletedCount} old records from Firestore.`);
-        return deletedCount;
     }
 
     async function getBackupMeta() {
@@ -798,23 +810,43 @@ const FirebaseService = (() => {
             mapNameId[doc.data().name.trim()] = accId;
         });
         
-        // 2. Scan daily_orders and convert array of names to IDs
+        // 2. Scan legacy daily_orders and convert them into Monthly Partitions + Daily Summary
         const ordSnap = await db.collection('daily_orders').get();
         ordSnap.forEach(doc => {
             const data = doc.data();
             if (data.accounts) {
-                let changed = false;
-                const newAccs = [...data.accounts];
-                for (let i = 0; i < newAccs.length; i++) {
-                    const originalStr = newAccs[i].trim();
-                    if (mapNameId[originalStr]) {
-                        newAccs[i] = mapNameId[originalStr]; // Swap!
-                        changed = true;
-                    }
+                const date = data.date;
+                const dStr = String(date).split('T')[0];
+                const year = dStr.substring(0, 4);
+                const month = dStr.substring(5, 7);
+                const partition = `orders_${year}_${month}`;
+                
+                const summaryUpdates = {};
+                for (let i = 0; i < data.accounts.length; i++) {
+                    const originalStr = data.accounts[i].trim();
+                    const accId = mapNameId[originalStr] || originalStr;
+                    const quantity = data.orders ? (data.orders[i] || 0) : 0;
+                    
+                    const docId = `${date}_${accId}`;
+                    const orderRef = db.collection(partition).doc(docId);
+                    ops.push(b => b.set(orderRef, {
+                        orderId: docId,
+                        accountId: accId,
+                        masterCompany: data.companyId,
+                        quantity,
+                        date: dStr,
+                        createdAt: data.createdAt || firebase.firestore.FieldValue.serverTimestamp()
+                    }, { merge: true }));
+                    
+                    summaryUpdates[accId] = quantity;
                 }
-                if (changed) { 
-                    ops.push(b => b.update(doc.ref, { accounts: newAccs })); 
-                }
+                
+                ops.push(b => b.set(db.collection('daily_summary').doc(dStr), {
+                    date: dStr,
+                    ...summaryUpdates
+                }, { merge: true }));
+                
+                ops.push(b => b.delete(doc.ref)); // Delete old massive document
             }
         });
         
@@ -835,7 +867,7 @@ const FirebaseService = (() => {
         // Remarks
         saveRemark, getRemarks,
         // Backup
-        getAllDataForBackup, clearOldOrders, getBackupMeta, setBackupMeta,
+        getAllDataForBackup, backupAndArchiveMonthlyData, getBackupMeta, setBackupMeta,
         // Migration
         seedFromSheets, isEmpty, migrateLegacyOrdersToDailyOrders, migrateDatabaseToIds,
         // Karigar

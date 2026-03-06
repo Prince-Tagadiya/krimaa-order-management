@@ -1742,23 +1742,32 @@ async function backupToSheets(isAuto = false) {
             if (!isAuto) showToast('Full backup successful!', 'success');
             
             // Cleanup Firestore after successful backup
-            if (!isAuto) showToast('Maintaining 30-day window in Firestore…', 'info');
+            if (!isAuto) showToast('Archiving orders older than 60 days...', 'info');
             
-            if (!isAuto && btn) {
-                btn.innerHTML = `<i class='bx bx-check-double'></i> Saved ${response.totalRows || 0} Records`;
-                btn.classList.add('btn-success', 'text-white');
-                btn.classList.remove('btn-outline');
+            let dateCursor = new Date();
+            dateCursor.setMonth(dateCursor.getMonth() - 2); // Start 2 months ago
+            
+            let totalArchived = 0;
+            // Go back up to 6 months to find un-archived data chunks
+            for (let i = 0; i < 6; i++) {
+                const y = dateCursor.getFullYear();
+                const m = String(dateCursor.getMonth() + 1).padStart(2, '0');
+                
+                const result = await FirebaseService.backupAndArchiveMonthlyData(y, m);
+                if (result && result.success) {
+                    totalArchived += (result.count || 0);
+                }
+                
+                dateCursor.setMonth(dateCursor.getMonth() - 1); // step backward 1 month
             }
-            
-            await FirebaseService.clearOldOrders();
             
             if (!isAuto && btn) {
                 setTimeout(() => {
                     btn.disabled = false;
-                    btn.innerHTML = "<i class='bx bx-cloud-upload'></i> Backup to Sheets";
+                    btn.innerHTML = `<i class='bx bx-cloud-upload'></i> Backup to Sheets (${totalArchived} archived)`;
                     btn.classList.remove('btn-success', 'text-white');
                     btn.classList.add('btn-outline');
-                }, 3000);
+                }, 4000);
             }
         } else {
             throw new Error(response?.message || 'Backup failed at Sheets layer');

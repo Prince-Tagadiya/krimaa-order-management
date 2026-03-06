@@ -204,6 +204,8 @@ function doPost(e) {
       return output.setContent(JSON.stringify(saveFullBackup(data.data)));
     } else if (action === 'getGlobalReport') {
       return output.setContent(JSON.stringify(getGlobalReport(data.fromDate, data.toDate)));
+    } else if (action === 'archiveMonthlyData') {
+      return output.setContent(JSON.stringify(archiveMonthlyData(data.sheetName, data.data)));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid action: ' + action}));
@@ -649,6 +651,38 @@ function updateSingleOrder(dateStr, accountName, field, value, companyId) {
   return {success: false, message: 'Order row not found for ' + dateStr + ' / ' + accountName};
 }
 
+function archiveMonthlyData(sheetName, rows) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName);
+
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow(["OrderID", "CompanyID", "CompanyName", "Quantity", "Date"]);
+    sheet.getRange(1, 1, 1, 5).setFontWeight("bold").setBackground("#f3f4f6");
+    sheet.setFrozenRows(1);
+    Logger.log("Created missing archive sheet: " + sheetName);
+  }
+
+  if (rows && rows.length > 0) {
+    var existDates = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow()-1, 1).getValues().map(function(r){ return String(r[0]); }) : [];
+    var newRows = [];
+    
+    rows.forEach(function(row) {
+      // row structure: [OrderID, CompanyID, CompanyName, Quantity, Date]
+      if (existDates.indexOf(String(row[0])) === -1) {
+        newRows.push(row);
+      }
+    });
+
+    if (newRows.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+      return { success: true, rowsWritten: newRows.length, message: "Archived directly successfully." };
+    }
+  }
+  return { success: true, rowsWritten: 0, message: "No new rows to archive." };
+}
+
 // ===== BULK BACKUP (receives Firebase data and writes to Sheets) =====
 function saveFullBackup(data) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -778,11 +812,7 @@ function syncCompanyData(ss, companyId, compData) {
     count += rows.length;
   }
 
-  // Sync Orders (UPSERT)
-  if (compData.orders && compData.orders.length > 0) {
-    count += syncOrdersToSheet(ss.getSheetByName(company.ordersSheet), compData.orders);
-  }
-  
+  // Sync Orders is now handled by the new partition archive architecture
   return count;
 }
 
