@@ -675,10 +675,37 @@ const FirebaseService = (() => {
         return snap.empty;
     }
 
+    function buildActorMeta(actor, phase) {
+        const safe = actor || {};
+        const role = String(safe.role || '').trim() || 'unknown';
+        const username = String(safe.username || '').trim() || 'unknown';
+        const displayName = String(safe.displayName || '').trim() || username;
+        const dashboard = String(safe.dashboard || safe.source || 'web_app').trim();
+        const source = String(safe.source || dashboard || 'web_app').trim();
+        const dashboardId = String(safe.dashboardId || '').trim();
+        const base = {
+            source,
+            dashboard,
+            dashboardId,
+            [`${phase}ByRole`]: role,
+            [`${phase}ByUser`]: username,
+            [`${phase}ByName`]: displayName
+        };
+        return base;
+    }
+
+    function isAdminActor(actor) {
+        const role = String(actor?.role || '').trim().toLowerCase();
+        return role === 'admin';
+    }
+
     // ───── KARIGAR ─────
-    async function getKarigars() {
+    async function getKarigars(companyId = 'company1') {
         init();
-        const snap = await db.collection('karigars').get();
+        const safeCompanyId = String(companyId || 'company1').trim();
+        const snap = await db.collection('karigars')
+            .where('companyId', '==', safeCompanyId)
+            .get();
         const docs = snap.docs || [];
         const canonicalByName = {};
 
@@ -713,13 +740,13 @@ const FirebaseService = (() => {
             if (nameKey && !canonicalByName[nameKey]) canonicalByName[nameKey] = canonicalId;
 
             if (doc.id !== canonicalId) {
-                await db.collection('karigars').doc(canonicalId).set({ ...data, id: canonicalId, name }, { merge: true });
+                await db.collection('karigars').doc(canonicalId).set({ ...data, id: canonicalId, name, companyId: safeCompanyId }, { merge: true });
                 await doc.ref.delete();
-            } else if (dataId !== canonicalId) {
-                await doc.ref.update({ id: canonicalId });
+            } else if (dataId !== canonicalId || data.companyId !== safeCompanyId) {
+                await doc.ref.update({ id: canonicalId, companyId: safeCompanyId });
             }
 
-            const normalized = { ...data, id: canonicalId, name };
+            const normalized = { ...data, id: canonicalId, name, companyId: safeCompanyId };
             _allKarigarsMap[canonicalId] = normalized;
             resultMap.set(canonicalId, normalized);
         }
@@ -730,22 +757,23 @@ const FirebaseService = (() => {
         return { success: true, data: results };
     }
 
-    async function addKarigar(name) {
+    async function addKarigar(name, companyId = 'company1', actor = null) {
         init();
         name = name.trim();
+        const safeCompanyId = String(companyId || 'company1').trim();
         // Check if exists
         const snap = await db.collection('karigars')
-            .where('name', '==', name)
+            .where('name', '==', name).where('companyId', '==', safeCompanyId)
             .get();
         if (!snap.empty) {
             const data = snap.docs[0].data();
             let id = String(data.id || snap.docs[0].id || '').trim();
             if (!isPrefixedId(id, 'kar_')) {
                 id = buildPrefixedId('kar_');
-                await db.collection('karigars').doc(id).set({ ...data, id, name }, { merge: true });
+                await db.collection('karigars').doc(id).set({ ...data, id, name, companyId: safeCompanyId }, { merge: true });
                 await snap.docs[0].ref.delete();
-            } else if (data.id !== id) {
-                await snap.docs[0].ref.update({ id });
+            } else if (data.id !== id || data.companyId !== safeCompanyId) {
+                await snap.docs[0].ref.update({ id, companyId: safeCompanyId });
             }
             return { success: true, id };
         }
@@ -754,22 +782,90 @@ const FirebaseService = (() => {
         await db.collection('karigars').doc(karigarId).set({
             name: name,
             id: karigarId,
+            companyId: safeCompanyId,
+            ...buildActorMeta(actor, 'created'),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         return { success: true, id: karigarId };
     }
 
-    async function deleteKarigar(id) {
+    async function editKarigar(id, newName, companyId = 'company1', actor = null) {
         init();
-        await db.collection('karigars').doc(id).delete();
+        if (!isAdminActor(actor)) return { success: false, message: 'Only admin can edit karigar' };
+        const safeId = String(id || '').trim();
+        const safeName = String(newName || '').trim();
+        const safeCompanyId = String(companyId || 'company1').trim();
+        if (!safeId || !safeName) return { success: false, message: 'Karigar id and name required' };
+
+        const dup = await db.collection('karigars')
+            .where('companyId', '==', safeCompanyId)
+            .where('name', '==', safeName)
+            .limit(1).get();
+        if (!dup.empty && dup.docs[0].id !== safeId) {
+            return { success: false, message: 'Karigar name already exists in this company' };
+        }
+
+        const docRef = db.collection('karigars').doc(safeId);
+        const doc = await docRef.get();
+        if (!doc.exists) return { success: false, message: 'Karigar not found' };
+
+        await docRef.update({
+            name: safeName,
+            companyId: safeCompanyId,
+            ...buildActorMeta(actor, 'updated'),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+
+        const txSnap = await db.collection('karigar_transactions')
+            .where('karigarId', '==', safeId)
+            .where('companyId', '==', safeCompanyId)
+            .get();
+        if (!txSnap.empty) {
+            const ops = [];
+            txSnap.forEach(t => ops.push(b => b.update(t.ref, {
+                karigarName: safeName,
+                ...buildActorMeta(actor, 'updated'),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            })));
+            await commitInChunks(ops);
+        }
         return { success: true };
     }
 
-    async function getKarigarTransactions() {
+    async function deleteKarigar(id, companyId = 'company1', actor = null) {
         init();
+        if (!isAdminActor(actor)) return { success: false, message: 'Only admin can delete karigar' };
+        const safeId = String(id || '').trim();
+        const safeCompanyId = String(companyId || 'company1').trim();
+        if (!safeId) return { success: false, message: 'Karigar id required' };
+
+        const karDoc = await db.collection('karigars').doc(safeId).get();
+        if (karDoc.exists) {
+            const data = karDoc.data() || {};
+            if (!data.companyId || data.companyId === safeCompanyId) {
+                await karDoc.ref.delete();
+            }
+        }
+
+        // Also remove linked transactions for this company.
+        const txSnap = await db.collection('karigar_transactions')
+            .where('karigarId', '==', safeId)
+            .where('companyId', '==', safeCompanyId)
+            .get();
+        if (!txSnap.empty) {
+            const ops = [];
+            txSnap.forEach(doc => ops.push(b => b.delete(doc.ref)));
+            await commitInChunks(ops);
+        }
+        return { success: true };
+    }
+
+    async function getKarigarTransactions(companyId = 'company1') {
+        init();
+        const safeCompanyId = String(companyId || 'company1').trim();
         if (Object.keys(_allKarigarsMap).length === 0) {
             try {
-                await getKarigars();
+                await getKarigars(safeCompanyId);
             } catch (e) {
                 console.warn('Karigar map bootstrap failed:', e);
             }
@@ -786,7 +882,9 @@ const FirebaseService = (() => {
             if (name) karigarIdToName[id] = name;
         });
 
-        const snap = await db.collection('karigar_transactions').get();
+        const snap = await db.collection('karigar_transactions')
+            .where('companyId', '==', safeCompanyId)
+            .get();
         const results = [];
         for (const doc of snap.docs) {
             const data = doc.data() || {};
@@ -814,6 +912,7 @@ const FirebaseService = (() => {
             results.push({
                 id: doc.id,
                 ...data,
+                companyId: safeCompanyId,
                 karigarId: resolvedId || rawId,
                 karigarName: resolvedName || rawName
             });
@@ -822,15 +921,17 @@ const FirebaseService = (() => {
         return { success: true, data: results };
     }
 
-    async function resolveKarigarIdForWrite(karigarId, karigarName) {
+    async function resolveKarigarIdForWrite(karigarId, karigarName, companyId = 'company1', actor = null) {
         const rawId = String(karigarId || '').trim();
         if (isPrefixedId(rawId, 'kar_')) return rawId;
 
         const name = String(karigarName || '').trim();
+        const safeCompanyId = String(companyId || 'company1').trim();
         if (!name) return buildPrefixedId('kar_');
 
         const snap = await db.collection('karigars')
             .where('name', '==', name)
+            .where('companyId', '==', safeCompanyId)
             .limit(1).get();
 
         if (!snap.empty) {
@@ -842,10 +943,10 @@ const FirebaseService = (() => {
             }
 
             if (doc.id !== canonicalId) {
-                await db.collection('karigars').doc(canonicalId).set({ ...data, id: canonicalId, name }, { merge: true });
+                await db.collection('karigars').doc(canonicalId).set({ ...data, id: canonicalId, name, companyId: safeCompanyId }, { merge: true });
                 await doc.ref.delete();
-            } else if (data.id !== canonicalId) {
-                await doc.ref.update({ id: canonicalId });
+            } else if (data.id !== canonicalId || data.companyId !== safeCompanyId) {
+                await doc.ref.update({ id: canonicalId, companyId: safeCompanyId });
             }
             return canonicalId;
         }
@@ -854,6 +955,8 @@ const FirebaseService = (() => {
         await db.collection('karigars').doc(newId).set({
             name,
             id: newId,
+            companyId: safeCompanyId,
+            ...buildActorMeta(actor, 'created'),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
         return newId;
@@ -864,9 +967,11 @@ const FirebaseService = (() => {
         const docRef = db.collection('karigar_transactions').doc();
         const price = parseFloat(data.price) || 0;
         const pic = parseInt(data.pic) || 0;
-        const total = price * pic;
+        const total = Math.round(((price * pic) + Number.EPSILON) * 100) / 100;
         const upadAmount = parseFloat(data.upadAmount) || 0;
-        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName);
+        const safeCompanyId = String(data.companyId || 'company1').trim();
+        const actor = data.actor || null;
+        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName, safeCompanyId, actor);
         const safeDate = String(data.date || '').split('T')[0];
 
         await docRef.set({
@@ -880,8 +985,9 @@ const FirebaseService = (() => {
             price: price,
             total: total,
             upadAmount: upadAmount,
-            companyId: data.companyId || 'company1',
+            companyId: safeCompanyId,
             addedBy: data.addedBy || 'admin',
+            ...buildActorMeta(actor, 'created'),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
@@ -896,8 +1002,11 @@ const FirebaseService = (() => {
 
     async function addKarigarUpad(data) {
         init();
+        if (!isAdminActor(data.actor)) throw new Error('Only admin can add Borrow (Upad)');
         const docRef = db.collection('karigar_transactions').doc();
-        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName);
+        const safeCompanyId = String(data.companyId || 'company1').trim();
+        const actor = data.actor || null;
+        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName, safeCompanyId, actor);
         const safeDate = String(data.date || '').split('T')[0];
         await docRef.set({
             type: 'upad',
@@ -905,22 +1014,84 @@ const FirebaseService = (() => {
             karigarName: String(data.karigarName || '').trim(),
             date: safeDate,
             amount: parseFloat(data.amount),
-            companyId: data.companyId || 'company1',
+            companyId: safeCompanyId,
             addedBy: data.addedBy || 'admin',
+            ...buildActorMeta(actor, 'created'),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         return { success: true };
     }
 
-    async function deleteKarigarTransaction(id) {
+    async function updateKarigarTransaction(id, updates = {}, actor = null, companyId = 'company1') {
         init();
-        await db.collection('karigar_transactions').doc(id).delete();
+        if (!isAdminActor(actor)) return { success: false, message: 'Only admin can edit transaction' };
+        const safeId = String(id || '').trim();
+        const safeCompanyId = String(companyId || 'company1').trim();
+        if (!safeId) return { success: false, message: 'Transaction id required' };
+
+        const txRef = db.collection('karigar_transactions').doc(safeId);
+        const txDoc = await txRef.get();
+        if (!txDoc.exists) return { success: false, message: 'Transaction not found' };
+
+        const current = txDoc.data() || {};
+        if (current.companyId && current.companyId !== safeCompanyId) {
+            return { success: false, message: 'Company mismatch for transaction update' };
+        }
+
+        const patch = {
+            ...buildActorMeta(actor, 'updated'),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+
+        if (typeof updates.date !== 'undefined') patch.date = String(updates.date || '').split('T')[0];
+        if (typeof updates.designName !== 'undefined') patch.designName = String(updates.designName || '').trim();
+        if (typeof updates.size !== 'undefined') patch.size = String(updates.size || '').trim();
+        if (typeof updates.pic !== 'undefined') patch.pic = parseInt(updates.pic, 10) || 0;
+        if (typeof updates.price !== 'undefined') patch.price = parseFloat(updates.price) || 0;
+        if (typeof updates.upadAmount !== 'undefined') patch.upadAmount = parseFloat(updates.upadAmount) || 0;
+        if (typeof updates.amount !== 'undefined') patch.amount = parseFloat(updates.amount) || 0;
+
+        const finalType = String(updates.type || current.type || '').trim().toLowerCase();
+        if (finalType) patch.type = finalType;
+        if (typeof updates.karigarName !== 'undefined') patch.karigarName = String(updates.karigarName || '').trim();
+        if (typeof updates.karigarId !== 'undefined') {
+            const resolvedKId = await resolveKarigarIdForWrite(updates.karigarId, patch.karigarName || current.karigarName, safeCompanyId, actor);
+            patch.karigarId = resolvedKId;
+        }
+
+        const shouldRecalcTotal = patch.type === 'jama' || current.type === 'jama';
+        if (shouldRecalcTotal) {
+            const pic = typeof patch.pic !== 'undefined' ? patch.pic : (parseInt(current.pic, 10) || 0);
+            const price = typeof patch.price !== 'undefined' ? patch.price : (parseFloat(current.price) || 0);
+            patch.total = price * pic;
+        }
+
+        await txRef.update(patch);
         return { success: true };
     }
 
-    async function clearKarigarMonthlyData() {
+    async function deleteKarigarTransaction(id, companyId = 'company1', actor = null) {
         init();
-        const snap = await db.collection('karigar_transactions').get();
+        if (!isAdminActor(actor)) return { success: false, message: 'Only admin can delete transaction' };
+        const safeId = String(id || '').trim();
+        const safeCompanyId = String(companyId || 'company1').trim();
+        const txRef = db.collection('karigar_transactions').doc(safeId);
+        const txDoc = await txRef.get();
+        if (!txDoc.exists) return { success: true };
+        const tx = txDoc.data() || {};
+        if (!tx.companyId || tx.companyId === safeCompanyId) {
+            await txRef.delete();
+        }
+        return { success: true };
+    }
+
+    async function clearKarigarMonthlyData(companyId = 'company1', actor = null) {
+        init();
+        if (!isAdminActor(actor)) throw new Error('Only admin can run karigar monthly reset');
+        const safeCompanyId = String(companyId || 'company1').trim();
+        const snap = await db.collection('karigar_transactions')
+            .where('companyId', '==', safeCompanyId)
+            .get();
         if (snap.empty) return 0;
         let deletedCount = 0;
         for (const doc of snap.docs) {
@@ -1119,6 +1290,7 @@ const FirebaseService = (() => {
             const data = doc.data();
             let aid = data.accountId || (doc.id.startsWith('acc_') ? doc.id : null);
             const name = (data.name || '').trim();
+            const kCompanyId = String(data.companyId || 'company1').trim();
             
             if (!isRealId(aid)) {
                 aid = buildPrefixedId('acc_');
@@ -1143,20 +1315,21 @@ const FirebaseService = (() => {
             const data = doc.data();
             let kid = data.id || (doc.id.startsWith('kar_') ? doc.id : null);
             const name = (data.name || '').trim();
+            const kCompanyId = String(data.companyId || 'company1').trim();
             
             if (!isRealId(kid)) {
                 kid = buildPrefixedId('kar_');
             }
 
             if (doc.id !== kid) {
-                await db.collection('karigars').doc(kid).set({ ...data, id: kid });
+                await db.collection('karigars').doc(kid).set({ ...data, id: kid, companyId: kCompanyId });
                 await doc.ref.delete();
                 stats.karigars++;
             } else if (!data.id) {
-                await doc.ref.update({ id: kid });
+                await doc.ref.update({ id: kid, companyId: kCompanyId });
                 stats.karigars++;
             }
-            if (name) nameToKarigarId[name.toLowerCase()] = kid;
+            if (name) nameToKarigarId[`${kCompanyId}|${name.toLowerCase()}`] = kid;
             nameToKarigarId[doc.id] = kid;
             if (name) karigarIdToName[kid] = name;
         }
@@ -1167,9 +1340,10 @@ const FirebaseService = (() => {
             const data = doc.data();
             const currentKId = (data.karigarId || '').trim();
             const kName = (data.karigarName || '').trim();
+            const txCompanyId = String(data.companyId || 'company1').trim();
             
             let resolvedId = currentKId;
-            if (!isRealId(resolvedId) && kName) resolvedId = nameToKarigarId[kName.toLowerCase()] || resolvedId;
+            if (!isRealId(resolvedId) && kName) resolvedId = nameToKarigarId[`${txCompanyId}|${kName.toLowerCase()}`] || resolvedId;
             if (!isRealId(resolvedId) && currentKId) resolvedId = nameToKarigarId[currentKId] || nameToKarigarId[currentKId.toLowerCase()] || resolvedId;
 
             const resolvedName = kName || (resolvedId && karigarIdToName[resolvedId] ? karigarIdToName[resolvedId] : '');
@@ -1234,6 +1408,89 @@ const FirebaseService = (() => {
         }
 
         return { success: true, stats };
+    }
+
+    async function clearCollectionDocs(collectionName) {
+        init();
+        let totalDeleted = 0;
+        const PAGE_SIZE = 400;
+
+        while (true) {
+            const snap = await db.collection(collectionName).limit(PAGE_SIZE).get();
+            if (snap.empty) break;
+
+            const ops = [];
+            snap.forEach(doc => ops.push(b => b.delete(doc.ref)));
+            await commitInChunks(ops);
+            totalDeleted += snap.size;
+
+            if (snap.size < PAGE_SIZE) break;
+        }
+        return totalDeleted;
+    }
+
+    async function replaceFromSheets(sheetData) {
+        init();
+
+        const orderPartitions = new Set();
+
+        // Derive order partitions from existing Firebase summaries.
+        const summarySnap = await db.collection('daily_summary').get();
+        summarySnap.forEach(doc => {
+            const d = String(doc.id || '').trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                orderPartitions.add(`orders_${d.substring(0, 4)}_${d.substring(5, 7)}`);
+            }
+        });
+
+        // Derive order partitions from incoming sheet data too.
+        for (const cid of ['company1', 'company2']) {
+            const orders = (sheetData?.[cid]?.orders) || [];
+            for (const o of orders) {
+                const d = String(o?.date || '').trim();
+                if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                    orderPartitions.add(`orders_${d.substring(0, 4)}_${d.substring(5, 7)}`);
+                }
+            }
+        }
+
+        // Safety sweep for unknown historical monthly partitions.
+        const currentYear = new Date().getFullYear();
+        for (let y = 2018; y <= currentYear + 3; y++) {
+            for (let m = 1; m <= 12; m++) {
+                orderPartitions.add(`orders_${y}_${String(m).padStart(2, '0')}`);
+            }
+        }
+
+        const baseCollections = [
+            'accounts',
+            'remarks',
+            'karigars',
+            'karigar_transactions',
+            'design_prices',
+            'money_backups',
+            'money_records',
+            'daily_summary',
+            'daily_orders',
+            'orders'
+        ];
+
+        let deleted = 0;
+        for (const collectionName of baseCollections) {
+            deleted += await clearCollectionDocs(collectionName);
+        }
+        for (const partitionName of orderPartitions) {
+            deleted += await clearCollectionDocs(partitionName);
+        }
+
+        // Reset in-memory maps after purge.
+        accountNameIdMap = {};
+        accountIdNameMap = {};
+        _allAccountsMap = {};
+        _allKarigarsMap = {};
+
+        const syncResult = await syncFromSheets(sheetData || {});
+        return { ...syncResult, deleted };
     }
 
     /**
@@ -1355,8 +1612,17 @@ const FirebaseService = (() => {
         const karigarNameToId = {};
         for (const k of karigars) {
             if (!k.name) continue;
+            const kCompanyId = String(k.companyId || 'company1').trim();
+            const karigarAudit = {
+                createdByName: String(k.createdByName || '').trim(),
+                createdByUser: String(k.createdByUser || '').trim(),
+                createdByRole: String(k.createdByRole || '').trim(),
+                source: String(k.source || '').trim(),
+                dashboard: String(k.dashboard || '').trim()
+            };
             const snap = await db.collection('karigars')
                 .where('name', '==', k.name)
+                .where('companyId', '==', kCompanyId)
                 .limit(1).get();
             
             const sheetKarId = k.id && k.id.startsWith('kar_') ? k.id : null;
@@ -1366,19 +1632,21 @@ const FirebaseService = (() => {
                 const existingDoc = snap.docs[0];
                 const existingData = existingDoc.data();
                 if (existingDoc.id !== karId) {
-                    await db.collection('karigars').doc(karId).set({ ...existingData, id: karId });
+                    await db.collection('karigars').doc(karId).set({ ...existingData, ...karigarAudit, id: karId, companyId: kCompanyId });
                     await existingDoc.ref.delete();
                 } else {
-                    await existingDoc.ref.update({ id: karId });
+                    await existingDoc.ref.update({ ...karigarAudit, id: karId, companyId: kCompanyId });
                 }
             } else {
                 await db.collection('karigars').doc(karId).set({
                     name: k.name,
                     id: karId,
+                    companyId: kCompanyId,
+                    ...karigarAudit,
                     addedDate: parseFlexibleDateValue(k.addedAt || k.addedDate) || firebase.firestore.FieldValue.serverTimestamp()
                 });
             }
-            karigarNameToId[normalizeNameKey(k.name)] = karId;
+            karigarNameToId[`${kCompanyId}|${normalizeNameKey(k.name)}`] = karId;
             stats.karigars++;
         }
         
@@ -1388,36 +1656,62 @@ const FirebaseService = (() => {
             if (!tx.date) continue;
             const txName = String(tx.karigarName || '').trim();
             const txNameKey = normalizeNameKey(txName);
+            const txCompanyId = String(tx.companyId || 'company1').trim();
             const rawTxId = String(tx.karigarId || '').trim();
             let txKarigarId = rawTxId;
-            if (!isPrefixedId(txKarigarId, 'kar_') && txNameKey && karigarNameToId[txNameKey]) {
-                txKarigarId = karigarNameToId[txNameKey];
+            if (!isPrefixedId(txKarigarId, 'kar_') && txNameKey && karigarNameToId[`${txCompanyId}|${txNameKey}`]) {
+                txKarigarId = karigarNameToId[`${txCompanyId}|${txNameKey}`];
             }
             if (!isPrefixedId(txKarigarId, 'kar_')) continue;
 
             const safeDate = String(tx.date || '').split('T')[0];
 
-            // Dedup by date + karigarId + type + designName + pic
+            // Dedup safely with broad query, then strict local compare.
             const snap = await db.collection('karigar_transactions')
                 .where('date', '==', safeDate)
                 .where('karigarId', '==', txKarigarId)
+                .where('companyId', '==', txCompanyId)
                 .where('type', '==', tx.type || 'jama')
-                .where('designName', '==', tx.designName || '')
-                .limit(1).get();
+                .get();
+
+            const txDesign = String(tx.designName || '').trim();
+            const txSize = String(tx.size || '').trim();
+            const txPic = parseInt(tx.pic, 10) || 0;
+            const txPrice = parseFloat(tx.price) || 0;
+            const txTotal = parseFloat(tx.totalJama) || 0;
+            const txUpad = parseFloat(tx.upadAmount) || 0;
+            const isDuplicate = snap.docs.some(doc => {
+                const d = doc.data() || {};
+                return String(d.designName || '').trim() === txDesign &&
+                    String(d.size || '').trim() === txSize &&
+                    (parseInt(d.pic, 10) || 0) === txPic &&
+                    (parseFloat(d.price) || 0) === txPrice &&
+                    (parseFloat(d.total) || 0) === txTotal &&
+                    (parseFloat(d.upadAmount) || 0) === txUpad;
+            });
             
-            if (snap.empty) {
+            if (!isDuplicate) {
                 const createdAtDate = parseFlexibleDateValue(tx.createdAt);
                 await db.collection('karigar_transactions').add({
                     date: safeDate,
                     karigarId: txKarigarId,
                     karigarName: txName || '',
+                    companyId: txCompanyId,
                     type: tx.type || 'jama',
-                    designName: tx.designName || '',
-                    size: tx.size || '',
-                    pic: tx.pic || 0,
-                    price: tx.price || 0,
-                    total: tx.totalJama || 0,
-                    upadAmount: tx.upadAmount || 0,
+                    designName: txDesign,
+                    size: txSize,
+                    pic: txPic,
+                    price: txPrice,
+                    total: txTotal,
+                    upadAmount: txUpad,
+                    createdByName: String(tx.createdByName || '').trim(),
+                    createdByUser: String(tx.createdByUser || '').trim(),
+                    createdByRole: String(tx.createdByRole || '').trim(),
+                    updatedByName: String(tx.updatedByName || '').trim(),
+                    updatedByUser: String(tx.updatedByUser || '').trim(),
+                    updatedByRole: String(tx.updatedByRole || '').trim(),
+                    source: String(tx.source || '').trim(),
+                    dashboard: String(tx.dashboard || '').trim(),
                     createdAt: createdAtDate || firebase.firestore.FieldValue.serverTimestamp()
                 });
                 stats.karigarTxs++;
@@ -1453,9 +1747,10 @@ const FirebaseService = (() => {
         // Migration
         seedFromSheets, isEmpty, migrateLegacyOrdersToDailyOrders, migrateDatabaseToIds,
         // Karigar
-        getKarigars, addKarigar, deleteKarigar, getKarigarTransactions,
+        getKarigars, addKarigar, editKarigar, deleteKarigar, getKarigarTransactions,
         addKarigarJama,
         addKarigarUpad,
+        updateKarigarTransaction,
         deleteKarigarTransaction,
         clearKarigarMonthlyData,
         getDesignPrices,
@@ -1464,7 +1759,7 @@ const FirebaseService = (() => {
         // Integrity Fix
         fixHistoricalDataIntegrity,
         // Sync from Sheets
-        syncFromSheets,
+        syncFromSheets, replaceFromSheets,
         // Sync status
         onSyncStatusChange, getSyncStatus, setSyncStatus
     };

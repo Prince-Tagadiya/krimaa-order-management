@@ -8,8 +8,16 @@ var COMPANIES = {
 };
 var REMARKS_SHEET = 'Remarks';
 var MONEY_BACKUP_SHEET = 'Money_Backups';
-var KARIGAR_SHEET = 'Karigars';
-var KARIGAR_TX_SHEET = 'Karigar_Transactions';
+var KARIGAR_SHEET = 'Karigars'; // legacy fallback
+var KARIGAR_TX_SHEET = 'Karigar_Transactions'; // legacy fallback
+var KARIGAR_SHEETS = {
+  company1: 'Karigars_C1',
+  company2: 'Karigars_C2'
+};
+var KARIGAR_TX_SHEETS = {
+  company1: 'Karigar_Transactions_C1',
+  company2: 'Karigar_Transactions_C2'
+};
 var DESIGN_PRICES_SHEET = 'Design_Prices';
 var _sheetsInitialised = {};
 
@@ -88,6 +96,29 @@ function parseFlexibleDateTime(value, fallbackDateStr) {
   return new Date();
 }
 
+function getKarigarSheetName(companyId) {
+  var cid = normalizeCompanyId(companyId);
+  return KARIGAR_SHEETS[cid] || KARIGAR_SHEET;
+}
+
+function getKarigarTxSheetName(companyId) {
+  var cid = normalizeCompanyId(companyId);
+  return KARIGAR_TX_SHEETS[cid] || KARIGAR_TX_SHEET;
+}
+
+function getKarigarHeaderRow() {
+  return ['Karigar ID', 'Name', 'Added At', 'Created By Name', 'Created By User', 'Created By Role', 'Source', 'Dashboard'];
+}
+
+function getKarigarTxHeaderRow() {
+  return [
+    'Date', 'Karigar ID', 'Karigar Name', 'Type', 'Design', 'Size', 'Pic', 'Price', 'Total Jama', 'Upad Amount', 'Created At',
+    'Created By Name', 'Created By User', 'Created By Role',
+    'Updated By Name', 'Updated By User', 'Updated By Role',
+    'Source', 'Dashboard'
+  ];
+}
+
 // Function to automatically create the required Google Sheets if missing
 function setupSheets(companyId) {
   companyId = normalizeCompanyId(companyId);
@@ -110,25 +141,39 @@ function setupSheets(companyId) {
 }
 
 function setupKarigarSheets(ss) {
-  var kSheet = ss.getSheetByName(KARIGAR_SHEET);
-  if (!kSheet) {
-    kSheet = ss.insertSheet(KARIGAR_SHEET);
-  }
-  // Always ensure correct headers
-  var firstVal = kSheet.getRange('A1').getValue();
-  if (firstVal !== 'Karigar ID') {
-    kSheet.getRange('A1:C1').setValues([['Karigar ID', 'Name', 'Added At']]);
-    kSheet.getRange('A1:C1').setFontWeight('bold');
-    kSheet.setFrozenRows(1);
+  function ensureKarigarSheet(sheetName) {
+    var sheet = ss.getSheetByName(sheetName);
+    if (!sheet) sheet = ss.insertSheet(sheetName);
+    var headers = getKarigarHeaderRow();
+    if (sheet.getMaxColumns() < headers.length) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
+    }
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
   }
 
-  var txSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
-  if (!txSheet) {
-    txSheet = ss.insertSheet(KARIGAR_TX_SHEET);
-    txSheet.appendRow(['Date', 'Karigar ID', 'Karigar Name', 'Type', 'Design', 'Size', 'Pic', 'Price', 'Total Jama', 'Upad Amount', 'Created At']);
-    txSheet.getRange('A1:K1').setFontWeight('bold');
+  function ensureKarigarTxSheet(sheetName) {
+    var txSheet = ss.getSheetByName(sheetName);
+    if (!txSheet) txSheet = ss.insertSheet(sheetName);
+    var headers = getKarigarTxHeaderRow();
+    if (txSheet.getMaxColumns() < headers.length) {
+      txSheet.insertColumnsAfter(txSheet.getMaxColumns(), headers.length - txSheet.getMaxColumns());
+    }
+    txSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    txSheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
     txSheet.setFrozenRows(1);
   }
+
+  // New per-company sheets
+  ensureKarigarSheet(KARIGAR_SHEETS.company1);
+  ensureKarigarSheet(KARIGAR_SHEETS.company2);
+  ensureKarigarTxSheet(KARIGAR_TX_SHEETS.company1);
+  ensureKarigarTxSheet(KARIGAR_TX_SHEETS.company2);
+
+  // Keep legacy sheets available for old backups/migrations
+  ensureKarigarSheet(KARIGAR_SHEET);
+  ensureKarigarTxSheet(KARIGAR_TX_SHEET);
 
   var dpSheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
   if (!dpSheet) {
@@ -754,6 +799,9 @@ function saveFullBackup(data) {
   setupSheets('all');
   
   var totalRows = 0;
+  var companyIds = ['company1', 'company2'];
+  var karigarCols = getKarigarHeaderRow().length;
+  var karigarTxCols = getKarigarTxHeaderRow().length;
   
   // 1. Sync Remarks
   if (data.remarks) {
@@ -772,61 +820,84 @@ function saveFullBackup(data) {
     }
   }
 
-  var karigarNameToId = {};
-  var legacyKarigarIdToPrefixedId = {};
+  var karigarNameToIdByCompany = { company1: {}, company2: {} };
+  var legacyKarigarIdToPrefixedIdByCompany = { company1: {}, company2: {} };
 
-  // 2. Sync Karigars (overwrite style while preserving proper kar_ IDs)
+  // 2. Sync Karigars (overwrite style by company while preserving proper kar_ IDs)
   if (data.karigars) {
-    var sheet = ss.getSheetByName(KARIGAR_SHEET);
-    sheet.getRange(2, 1, Math.max(1, sheet.getLastRow()), 3).clearContent();
-    var rows = data.karigars.map(function(k) {
+    var karigarRowsByCompany = { company1: [], company2: [] };
+    companyIds.forEach(function(cid) {
+      var sheet = ss.getSheetByName(getKarigarSheetName(cid));
+      if (sheet && sheet.getLastRow() > 1) {
+        sheet.getRange(2, 1, sheet.getLastRow() - 1, karigarCols).clearContent();
+      }
+    });
+
+    data.karigars.forEach(function(k) {
+      var cid = normalizeCompanyId(k.companyId || 'company1');
       var kName = String(k.name || '').trim();
       var rawId = String(k.id || '').trim();
       var kId = isPrefixedId(rawId, 'kar_') ? rawId : generatePrefixedId('kar_');
       var addedAt = parseFlexibleDateTime(k.addedDate || k.addedAt || k.createdAt, Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
 
-      if (kName) karigarNameToId[kName.toLowerCase()] = kId;
-      if (rawId && !isPrefixedId(rawId, 'kar_')) legacyKarigarIdToPrefixedId[rawId] = kId;
-
-      return [kId, kName, addedAt];
+      if (kName) karigarNameToIdByCompany[cid][kName.toLowerCase()] = kId;
+      if (rawId && !isPrefixedId(rawId, 'kar_')) legacyKarigarIdToPrefixedIdByCompany[cid][rawId] = kId;
+      karigarRowsByCompany[cid].push([
+        kId, kName, addedAt,
+        String(k.createdByName || '').trim(),
+        String(k.createdByUser || '').trim(),
+        String(k.createdByRole || '').trim(),
+        String(k.source || '').trim(),
+        String(k.dashboard || '').trim()
+      ]);
     });
-    if (rows.length > 0) {
-      sheet.getRange(2, 1, rows.length, 3).setValues(rows);
+
+    companyIds.forEach(function(cid) {
+      var rows = karigarRowsByCompany[cid];
+      if (!rows || rows.length === 0) return;
+      var sheet = ss.getSheetByName(getKarigarSheetName(cid));
+      sheet.getRange(2, 1, rows.length, karigarCols).setValues(rows);
       totalRows += rows.length;
-    }
+    });
   }
 
-  // 3. Sync Karigar Transactions (UPSERT logic + legacy ID normalization)
+  // 3. Sync Karigar Transactions (UPSERT logic + company-wise ID normalization)
   if (data.karigarTransactions) {
-    var sheet = ss.getSheetByName(KARIGAR_TX_SHEET);
-    var existData = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow()-1, 11).getValues() : [];
-    var existMap = {};
-    existData.forEach(function(r) {
-      var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(r[0]).split(' ')[0];
-      var key = dStr + "_" + r[1] + "_" + r[3] + "_" + r[4] + "_" + r[6]; // Date_ID_Type_Design_Pic
-      existMap[key] = true;
+    var existMapByCompany = { company1: {}, company2: {} };
+    var newRowsByCompany = { company1: [], company2: [] };
+
+    companyIds.forEach(function(cid) {
+      var sheet = ss.getSheetByName(getKarigarTxSheetName(cid));
+      var existData = (sheet && sheet.getLastRow() > 1) ? sheet.getRange(2, 1, sheet.getLastRow() - 1, karigarTxCols).getValues() : [];
+      existData.forEach(function(r) {
+        var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(r[0]).split(' ')[0];
+        var key = dStr + "_" + r[1] + "_" + r[3] + "_" + r[4] + "_" + r[6];
+        existMapByCompany[cid][key] = true;
+      });
     });
 
-    var newRows = [];
     data.karigarTransactions.forEach(function(tx) {
+      var txCompanyId = normalizeCompanyId(tx.companyId || 'company1');
       var txName = String(tx.karigarName || '').trim();
       var txNameKey = txName.toLowerCase();
       var rawTxId = String(tx.karigarId || '').trim();
       var normalizedTxId = rawTxId;
 
       if (!isPrefixedId(normalizedTxId, 'kar_')) {
-        if (txNameKey && karigarNameToId[txNameKey]) {
-          normalizedTxId = karigarNameToId[txNameKey];
-        } else if (rawTxId && legacyKarigarIdToPrefixedId[rawTxId]) {
-          normalizedTxId = legacyKarigarIdToPrefixedId[rawTxId];
+        if (txNameKey && karigarNameToIdByCompany[txCompanyId][txNameKey]) {
+          normalizedTxId = karigarNameToIdByCompany[txCompanyId][txNameKey];
+        } else if (rawTxId && legacyKarigarIdToPrefixedIdByCompany[txCompanyId][rawTxId]) {
+          normalizedTxId = legacyKarigarIdToPrefixedIdByCompany[txCompanyId][rawTxId];
         } else {
           normalizedTxId = generatePrefixedId('kar_');
-          if (txNameKey) karigarNameToId[txNameKey] = normalizedTxId;
-          if (rawTxId) legacyKarigarIdToPrefixedId[rawTxId] = normalizedTxId;
+          if (txNameKey) karigarNameToIdByCompany[txCompanyId][txNameKey] = normalizedTxId;
+          if (rawTxId) legacyKarigarIdToPrefixedIdByCompany[txCompanyId][rawTxId] = normalizedTxId;
         }
       }
 
-      if (txNameKey && !karigarNameToId[txNameKey]) karigarNameToId[txNameKey] = normalizedTxId;
+      if (txNameKey && !karigarNameToIdByCompany[txCompanyId][txNameKey]) {
+        karigarNameToIdByCompany[txCompanyId][txNameKey] = normalizedTxId;
+      }
 
       var parsedTxDate = parseFlexibleDateTime(tx.date, Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
       var dStr = Utilities.formatDate(parsedTxDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -834,8 +905,8 @@ function saveFullBackup(data) {
       var dateWithTime = Utilities.formatDate(createdAtDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
       var key = dStr + "_" + normalizedTxId + "_" + tx.type + "_" + (tx.designName || '') + "_" + (tx.pic || '0');
-      if (!existMap[key]) {
-        newRows.push([
+      if (!existMapByCompany[txCompanyId][key]) {
+        newRowsByCompany[txCompanyId].push([
           dateWithTime,
           normalizedTxId,
           txName,
@@ -846,15 +917,27 @@ function saveFullBackup(data) {
           tx.price || 0, 
           tx.total || 0, 
           tx.amount || tx.upadAmount || 0,
-          createdAtDate
+          createdAtDate,
+          String(tx.createdByName || '').trim(),
+          String(tx.createdByUser || '').trim(),
+          String(tx.createdByRole || tx.addedBy || '').trim(),
+          String(tx.updatedByName || '').trim(),
+          String(tx.updatedByUser || '').trim(),
+          String(tx.updatedByRole || '').trim(),
+          String(tx.source || '').trim(),
+          String(tx.dashboard || '').trim()
         ]);
       }
     });
-    if (newRows.length > 0) {
-      sheet.insertRowsAfter(1, newRows.length);
-      sheet.getRange(2, 1, newRows.length, 11).setValues(newRows);
-      totalRows += newRows.length;
-    }
+
+    companyIds.forEach(function(cid) {
+      var rows = newRowsByCompany[cid];
+      if (!rows || rows.length === 0) return;
+      var sheet = ss.getSheetByName(getKarigarTxSheetName(cid));
+      sheet.insertRowsAfter(1, rows.length);
+      sheet.getRange(2, 1, rows.length, karigarTxCols).setValues(rows);
+      totalRows += rows.length;
+    });
   }
 
   // 4. Sync Design Prices
@@ -1018,10 +1101,11 @@ function getGlobalReport(fromDate, toDate) {
     }
   });
 
-  // 2. Fetch Karigar Transactions
-  var kxSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
-  if (kxSheet && kxSheet.getLastRow() > 1) {
-    var data = kxSheet.getRange(2, 1, kxSheet.getLastRow()-1, 11).getValues();
+  // 2. Fetch Karigar Transactions from C1 and C2 sheets
+  ['company1', 'company2'].forEach(function(cid) {
+    var kxSheet = ss.getSheetByName(getKarigarTxSheetName(cid));
+    if (!kxSheet || kxSheet.getLastRow() <= 1) return;
+    var data = kxSheet.getRange(2, 1, kxSheet.getLastRow() - 1, 11).getValues();
     data.forEach(function(r) {
       var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(r[0]).split(' ')[0];
       if (dStr >= fromDate && dStr <= toDate) {
@@ -1030,16 +1114,16 @@ function getGlobalReport(fromDate, toDate) {
           karigarId: r[1],
           karigarName: r[2],
           type: r[3],
-          amount: parseFloat(r[8]) > 0 ? r[8] : r[9], 
+          amount: parseFloat(r[8]) > 0 ? r[8] : r[9],
           total: r[8],
           date: dStr,
           designName: r[4],
-          companyId: 'History',
+          companyId: cid,
           addedBy: 'Archive'
         });
       }
     });
-  }
+  });
 
   // Sort by date
   result.orders.sort(function(a, b) { return a.date > b.date ? 1 : -1; });
@@ -1082,56 +1166,55 @@ function backfillMissingIds() {
   // ==========================================
   // 1. KARIGARS: Generate real IDs
   // ==========================================
-  var karigarNameToId = {}; // name -> new real ID
-  var kSheet = ss.getSheetByName(KARIGAR_SHEET);
-  if (kSheet && kSheet.getLastRow() > 1) {
+  var karigarNameToIdByCompany = { company1: {}, company2: {} };
+  ['company1', 'company2'].forEach(function(cid) {
+    var kSheet = ss.getSheetByName(getKarigarSheetName(cid));
+    if (!kSheet || kSheet.getLastRow() <= 1) return;
+    var karigarNameToId = karigarNameToIdByCompany[cid];
     var kData = kSheet.getDataRange().getValues();
+
     for (var i = 1; i < kData.length; i++) {
       var colA = kData[i][0] ? String(kData[i][0]).trim() : '';
       var colB = kData[i][1] ? String(kData[i][1]).trim() : '';
-      
-      if (!colA && !colB) continue; // Empty row
-      
+
+      if (!colA && !colB) continue;
+
       if (isRealId(colA)) {
-        // Already has a proper ID
         if (colB) karigarNameToId[colB.toLowerCase()] = colA;
         continue;
       }
-      
-      // Column A may be old Firebase doc ID; prefer Column B as real name when available.
+
       var realName = pickBestName(colB, colA);
       var newId = generatePrefixedId('kar_');
       var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-      
-      // Rewrite entire row: [ID, Name, AddedAt]
       kSheet.getRange(i + 1, 1, 1, 3).setValues([[newId, realName, now]]);
-      
+
       if (realName) karigarNameToId[realName.toLowerCase()] = newId;
-      if (colA) karigarNameToId[colA.toLowerCase()] = newId; // map legacy id/name too
+      if (colA) karigarNameToId[colA.toLowerCase()] = newId;
       if (colB) karigarNameToId[colB.toLowerCase()] = newId;
       results.karigars++;
     }
-  }
+  });
 
   // ==========================================
   // 2. KARIGAR TRANSACTIONS: Fix IDs
   // ==========================================
-  var kTxSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
-  if (kTxSheet && kTxSheet.getLastRow() > 1) {
+  ['company1', 'company2'].forEach(function(cid) {
+    var kTxSheet = ss.getSheetByName(getKarigarTxSheetName(cid));
+    if (!kTxSheet || kTxSheet.getLastRow() <= 1) return;
+    var karigarNameToId = karigarNameToIdByCompany[cid];
     var kTxData = kTxSheet.getDataRange().getValues();
+
     for (var j = 1; j < kTxData.length; j++) {
       var txColB = kTxData[j][1] ? String(kTxData[j][1]).trim() : '';
       var txColC = kTxData[j][2] ? String(kTxData[j][2]).trim() : '';
-      
-      if (isRealId(txColB)) continue; // Already has a proper ID, skip
-      
-      // txColB might be a karigar name
+
+      if (isRealId(txColB)) continue;
+
       var resolvedKId = karigarNameToId[txColB.toLowerCase()];
       if (resolvedKId) {
-        // Name is in the ID column — need to shift everything right
         var types = ['jama', 'upad', 'penalty', 'bonus'];
         if (types.indexOf(txColC.toLowerCase()) !== -1) {
-          // Misaligned: [Date, Name, Type, Design, ...] -> [Date, ID, Name, Type, Design, ...]
           var kName = txColB;
           var kType = txColC;
           var kDesign = kTxData[j][3] || '';
@@ -1143,17 +1226,15 @@ function backfillMissingIds() {
           var kCreated = kTxData[j][9] || '';
           kTxSheet.getRange(j + 1, 2, 1, 10).setValues([[resolvedKId, kName, kType, kDesign, kSize, kPic, kPrice, kTotal, kUpad, kCreated]]);
         } else {
-          // Just replace the ID column, rest is aligned
           kTxSheet.getRange(j + 1, 2).setValue(resolvedKId);
         }
         results.transactions++;
       } else if (!txColB && txColC && karigarNameToId[txColC.toLowerCase()]) {
-        // ID is empty but name is in col C
         kTxSheet.getRange(j + 1, 2).setValue(karigarNameToId[txColC.toLowerCase()]);
         results.transactions++;
       }
     }
-  }
+  });
 
   // ==========================================
   // 3. ACCOUNTS + ORDERS: Generate real IDs per company
@@ -1341,20 +1422,25 @@ function repairFromFirebase(fbData) {
   
   var results = { accounts: 0, karigars: 0, orders: 0, transactions: 0 };
   
-  // Fix sheet headers first
-  var kSheet = ss.getSheetByName(KARIGAR_SHEET);
-  if (kSheet) {
+  // Fix karigar sheet headers first
+  ['company1', 'company2'].forEach(function(cid) {
+    var kSheet = ss.getSheetByName(getKarigarSheetName(cid));
+    if (!kSheet) return;
+    var kHeaders = getKarigarHeaderRow();
     var h = kSheet.getRange('A1').getValue();
     if (h !== 'Karigar ID') {
-      kSheet.getRange('A1:C1').setValues([['Karigar ID', 'Name', 'Added At']]);
-      kSheet.getRange('A1:C1').setFontWeight('bold');
+      if (kSheet.getMaxColumns() < kHeaders.length) {
+        kSheet.insertColumnsAfter(kSheet.getMaxColumns(), kHeaders.length - kSheet.getMaxColumns());
+      }
+      kSheet.getRange(1, 1, 1, kHeaders.length).setValues([kHeaders]);
+      kSheet.getRange(1, 1, 1, kHeaders.length).setFontWeight('bold');
     }
-  }
+  });
   
   // Build Firebase doc ID -> real name maps
   var fbAccIdToName = {};   // Firebase doc id -> real account name
   var fbAccIdToCompany = {}; // Firebase doc id -> companyId
-  var fbKarIdToName = {};   // Firebase doc id -> real karigar name
+  var fbKarIdToNameByCompany = { company1: {}, company2: {} };
   
   if (fbData.accounts) {
     fbData.accounts.forEach(function(a) {
@@ -1368,7 +1454,8 @@ function repairFromFirebase(fbData) {
   if (fbData.karigars) {
     fbData.karigars.forEach(function(k) {
       if (k.docId && k.name) {
-        fbKarIdToName[k.docId] = k.name;
+        var cid = normalizeCompanyId(k.companyId || 'company1');
+        fbKarIdToNameByCompany[cid][k.docId] = k.name;
       }
     });
   }
@@ -1407,12 +1494,15 @@ function repairFromFirebase(fbData) {
   // ==========================================  
   // 2. FIX KARIGARS: Replace Firebase doc IDs with real names
   // ==========================================
-  if (kSheet && kSheet.getLastRow() > 1) {
+  ['company1', 'company2'].forEach(function(cid) {
+    var kSheet = ss.getSheetByName(getKarigarSheetName(cid));
+    if (!kSheet || kSheet.getLastRow() <= 1) return;
+    var fbKarIdToName = fbKarIdToNameByCompany[cid];
     var kData = kSheet.getDataRange().getValues();
     for (var i = 1; i < kData.length; i++) {
       var colA = String(kData[i][0] || '').trim();
       var colB = String(kData[i][1] || '').trim();
-      
+
       if (colB && fbKarIdToName[colB]) {
         kSheet.getRange(i + 1, 2).setValue(fbKarIdToName[colB]);
         results.karigars++;
@@ -1425,7 +1515,7 @@ function repairFromFirebase(fbData) {
         results.karigars++;
       }
     }
-  }
+  });
   
   // ==========================================
   // 3. FIX ORDERS: Fill missing data, fix formats, remove duplicates
@@ -1549,35 +1639,36 @@ function repairFromFirebase(fbData) {
   // ==========================================
   // 4. FIX KARIGAR TRANSACTIONS: Fill missing names
   // ==========================================
-  var globalKarIdToName = {};
-  if (kSheet && kSheet.getLastRow() > 1) {
-    var kData2 = kSheet.getDataRange().getValues();
-    for (var ki = 1; ki < kData2.length; ki++) {
-      var kid = String(kData2[ki][0] || '').trim();
-      var kname = String(kData2[ki][1] || '').trim();
-      if (kid && kname) globalKarIdToName[kid] = kname;
+  ['company1', 'company2'].forEach(function(cid) {
+    var globalKarIdToName = {};
+    var kSheet = ss.getSheetByName(getKarigarSheetName(cid));
+    if (kSheet && kSheet.getLastRow() > 1) {
+      var kData2 = kSheet.getDataRange().getValues();
+      for (var ki = 1; ki < kData2.length; ki++) {
+        var kid = String(kData2[ki][0] || '').trim();
+        var kname = String(kData2[ki][1] || '').trim();
+        if (kid && kname) globalKarIdToName[kid] = kname;
+      }
     }
-  }
-  
-  var kTxSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
-  if (kTxSheet && kTxSheet.getLastRow() > 1) {
+
+    var fbKarIdToName = fbKarIdToNameByCompany[cid];
+    var kTxSheet = ss.getSheetByName(getKarigarTxSheetName(cid));
+    if (!kTxSheet || kTxSheet.getLastRow() <= 1) return;
     var kTxData = kTxSheet.getDataRange().getValues();
     for (var ti = 1; ti < kTxData.length; ti++) {
       var txId = String(kTxData[ti][1] || '').trim();
       var txName = String(kTxData[ti][2] || '').trim();
-      
-      // Fix name if it's a Firebase doc ID
+
       if (txName && fbKarIdToName[txName]) {
         kTxSheet.getRange(ti + 1, 3).setValue(fbKarIdToName[txName]);
         results.transactions++;
       }
-      // Fill missing name from ID
       else if (!txName && txId && globalKarIdToName[txId]) {
         kTxSheet.getRange(ti + 1, 3).setValue(globalKarIdToName[txId]);
         results.transactions++;
       }
     }
-  }
+  });
   
   return { success: true, message: 'Repair from Firebase completed.', stats: results };
 }
@@ -1597,6 +1688,8 @@ function getAllSheetData() {
     karigarTransactions: [],
     designPrices: {}
   };
+  var karigarCols = getKarigarHeaderRow().length;
+  var karigarTxCols = getKarigarTxHeaderRow().length;
   
   // Read Accounts + Orders per company
   ['company1', 'company2'].forEach(function(cid) {
@@ -1638,46 +1731,62 @@ function getAllSheetData() {
     }
   });
   
-  // Read Karigars
-  var kSheet = ss.getSheetByName(KARIGAR_SHEET);
-  if (kSheet && kSheet.getLastRow() > 1) {
-    var data = kSheet.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++) {
-      var kid = String(data[i][0] || '').trim();
-      var kname = String(data[i][1] || '').trim();
-      if (!kname) continue;
-      result.karigars.push({
-        id: kid,
-        name: kname,
-        addedAt: data[i][2] ? String(data[i][2]) : ''
-      });
+  // Read Karigars + Karigar Transactions per company
+  ['company1', 'company2'].forEach(function(cid) {
+    var kSheet = ss.getSheetByName(getKarigarSheetName(cid));
+    if (kSheet && kSheet.getLastRow() > 1) {
+      var data = kSheet.getRange(2, 1, kSheet.getLastRow() - 1, karigarCols).getValues();
+      for (var i = 0; i < data.length; i++) {
+        var kid = String(data[i][0] || '').trim();
+        var kname = String(data[i][1] || '').trim();
+        if (!kname) continue;
+        result.karigars.push({
+          id: kid,
+          name: kname,
+          companyId: cid,
+          addedAt: data[i][2] ? String(data[i][2]) : '',
+          createdByName: String(data[i][3] || '').trim(),
+          createdByUser: String(data[i][4] || '').trim(),
+          createdByRole: String(data[i][5] || '').trim(),
+          source: String(data[i][6] || '').trim(),
+          dashboard: String(data[i][7] || '').trim()
+        });
+      }
     }
-  }
-  
-  // Read Karigar Transactions
-  var ktSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
-  if (ktSheet && ktSheet.getLastRow() > 1) {
-    var data = ktSheet.getRange(2, 1, ktSheet.getLastRow() - 1, 11).getValues();
-    for (var i = 0; i < data.length; i++) {
-      var parsedDate = parseFlexibleDateTime(data[i][0], Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
-      var dateOnly = Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-      var createdAtDate = parseFlexibleDateTime(data[i][10] || data[i][0], dateOnly);
-      var createdAtStr = Utilities.formatDate(createdAtDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
-      result.karigarTransactions.push({
-        date: dateOnly,
-        karigarId: String(data[i][1] || '').trim(),
-        karigarName: String(data[i][2] || '').trim(),
-        type: String(data[i][3] || '').trim(),
-        designName: String(data[i][4] || '').trim(),
-        size: String(data[i][5] || '').trim(),
-        pic: parseInt(data[i][6]) || 0,
-        price: parseInt(data[i][7]) || 0,
-        totalJama: parseInt(data[i][8]) || 0,
-        upadAmount: parseInt(data[i][9]) || 0,
-        createdAt: createdAtStr
-      });
+
+    var ktSheet = ss.getSheetByName(getKarigarTxSheetName(cid));
+    if (ktSheet && ktSheet.getLastRow() > 1) {
+      var txData = ktSheet.getRange(2, 1, ktSheet.getLastRow() - 1, karigarTxCols).getValues();
+      for (var j = 0; j < txData.length; j++) {
+        var parsedDate = parseFlexibleDateTime(txData[j][0], Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+        var dateOnly = Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        var createdAtDate = parseFlexibleDateTime(txData[j][10] || txData[j][0], dateOnly);
+        var createdAtStr = Utilities.formatDate(createdAtDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+        result.karigarTransactions.push({
+          date: dateOnly,
+          karigarId: String(txData[j][1] || '').trim(),
+          karigarName: String(txData[j][2] || '').trim(),
+          type: String(txData[j][3] || '').trim(),
+          designName: String(txData[j][4] || '').trim(),
+          size: String(txData[j][5] || '').trim(),
+          pic: parseInt(txData[j][6]) || 0,
+          price: parseInt(txData[j][7]) || 0,
+          totalJama: parseInt(txData[j][8]) || 0,
+          upadAmount: parseInt(txData[j][9]) || 0,
+          companyId: cid,
+          createdAt: createdAtStr,
+          createdByName: String(txData[j][11] || '').trim(),
+          createdByUser: String(txData[j][12] || '').trim(),
+          createdByRole: String(txData[j][13] || '').trim(),
+          updatedByName: String(txData[j][14] || '').trim(),
+          updatedByUser: String(txData[j][15] || '').trim(),
+          updatedByRole: String(txData[j][16] || '').trim(),
+          source: String(txData[j][17] || '').trim(),
+          dashboard: String(txData[j][18] || '').trim()
+        });
+      }
     }
-  }
+  });
   
   // Read Design Prices
   var dpSheet = ss.getSheetByName(DESIGN_PRICES_SHEET);

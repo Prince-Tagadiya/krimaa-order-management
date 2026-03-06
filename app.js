@@ -2,8 +2,9 @@
 
 // ===== Multi-User Auth System =====
 const USERS = [
-    { username: 'Krimaa', password: 'Krimaa4484', role: 'admin', displayName: 'Admin' },
-    { username: 'Krimaa_Users', password: 'Krimaa123', role: 'order', displayName: 'Order Entry' }
+    { username: 'Krimaa', password: 'Krimaa4484', role: 'admin', displayName: 'Admin', allowedCompanies: ['company1', 'company2'] },
+    { username: 'Krimaa_Users', password: 'Krimaa123', role: 'order', displayName: 'Order Entry', allowedCompanies: ['company1', 'company2'] },
+    { username: 'Dhyan_Order', password: 'Dhyan123', role: 'order_c2', displayName: 'Dhyan Order', allowedCompanies: ['company2'] }
 ];
 
 const AppState = {
@@ -25,7 +26,7 @@ const AppState = {
     designPrices: {},
     currentSection: 'data-sheet',
     currentCompany: 'company1',
-    currentUser: null, // { username, role, displayName }
+    currentUser: null, // { username, role, displayName, allowedCompanies }
     heatmapMonth: new Date().getMonth(),
     heatmapYear: new Date().getFullYear(),
     isSwitchingCompany: false
@@ -195,6 +196,46 @@ function getCompanyDisplayName(companyId = AppState.currentCompany) {
     return companyId;
 }
 
+function getAllowedCompanies() {
+    const allowed = AppState.currentUser?.allowedCompanies;
+    if (Array.isArray(allowed) && allowed.length > 0) return allowed;
+    return ['company1', 'company2'];
+}
+
+function isCompanyAllowed(companyId) {
+    return getAllowedCompanies().includes(companyId);
+}
+
+function isAdminUser() {
+    return String(AppState.currentUser?.role || '').trim() === 'admin';
+}
+
+function getCurrentDashboardLabel() {
+    const labels = {
+        dashboard: 'Dashboard',
+        'daily-order': 'Daily Order',
+        'add-account': 'Manage Accounts',
+        'money-management': 'Money Management',
+        'money-backup': 'Money Backup',
+        'data-sheet': 'Data Sheet',
+        karigar: 'Karigar Management'
+    };
+    const key = String(AppState.currentSection || '').trim();
+    return labels[key] || key || 'Web App';
+}
+
+function buildAuditActor() {
+    return {
+        role: AppState.currentUser?.role || 'unknown',
+        username: AppState.currentUser?.username || 'unknown',
+        displayName: AppState.currentUser?.displayName || 'unknown',
+        source: getCurrentDashboardLabel(),
+        dashboard: getCurrentDashboardLabel(),
+        dashboardId: AppState.currentSection || '',
+        companyId: AppState.currentCompany || ''
+    };
+}
+
 function setCompanyButtonsDisabled(disabled) {
     document.querySelectorAll('.company-btn').forEach(btn => {
         btn.disabled = disabled;
@@ -276,17 +317,21 @@ function initApp() {
         try {
             // Step 1: Get all real names from Firebase (source of truth)
             showToast("Reading data from Firebase...", "info");
-            const [c1Acc, c2Acc, karResult] = await Promise.all([
+            const [c1Acc, c2Acc, karResC1, karResC2] = await Promise.all([
                 FirebaseService.getAccounts('company1'),
                 FirebaseService.getAccounts('company2'),
-                FirebaseService.getKarigars()
+                FirebaseService.getKarigars('company1'),
+                FirebaseService.getKarigars('company2')
             ]);
             
             const allAccounts = [
                 ...((c1Acc.details || []).map(a => ({ docId: a.accountId, name: a.name, companyId: 'company1' }))),
                 ...((c2Acc.details || []).map(a => ({ docId: a.accountId, name: a.name, companyId: 'company2' })))
             ];
-            const allKarigars = (karResult.data || []).map(k => ({ docId: k.id, name: k.name }));
+            const allKarigars = [
+                ...((karResC1.data || []).map(k => ({ docId: k.id, name: k.name, companyId: 'company1' }))),
+                ...((karResC2.data || []).map(k => ({ docId: k.id, name: k.name, companyId: 'company2' })))
+            ];
             
             // Step 2: Send Firebase data to Sheets to fix corrupted names
             showToast("Repairing names in Google Sheets...", "info");
@@ -326,19 +371,20 @@ function initApp() {
 
     const syncToFirebaseBtn = document.getElementById('sync-to-firebase-btn');
     if (syncToFirebaseBtn) syncToFirebaseBtn.addEventListener('click', async () => {
-        if (!confirm("This will push ALL current Google Sheet data into Firebase, making the Sheet the source of truth. Any data in Sheet will update or create records in Firebase. Continue?")) return;
+        if (!confirm("This will DELETE all current Firebase app data and then import full Google Sheet data. Firebase will be replaced by Sheet data. Continue?")) return;
         showLoader();
         try {
             showToast("Reading all data from Google Sheets...", "info");
             const sheetRes = await sheetsApiRequest({ action: 'getAllSheetData' });
             if (!sheetRes.success) throw new Error(sheetRes.message || "Failed to read sheets");
 
-            showToast("Pushing data to Firebase. Please wait...", "info");
-            const syncRes = await FirebaseService.syncFromSheets(sheetRes.data);
+            showToast("Deleting old Firebase data, then importing Sheet data...", "info");
+            const syncRes = await FirebaseService.replaceFromSheets(sheetRes.data);
             
             if (syncRes.success) {
                 const s = syncRes.stats;
-                showToast(`Sync Complete! Accounts: ${s.accounts}, Orders: ${s.orders}, Karigars: ${s.karigars}, Txs: ${s.karigarTxs}`, "success");
+                const deleted = syncRes.deleted || 0;
+                showToast(`Replace Sync Complete! Deleted: ${deleted} | Accounts: ${s.accounts}, Orders: ${s.orders}, Karigars: ${s.karigars}, Txs: ${s.karigarTxs}`, "success");
                 setTimeout(() => window.location.reload(), 2000);
             } else {
                 throw new Error(syncRes.message || "Firebase sync failed");
@@ -357,10 +403,14 @@ function initApp() {
     const savedCompany = localStorage.getItem('selectedCompany');
     if (savedCompany) {
         AppState.currentCompany = savedCompany;
-        document.querySelectorAll('.company-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.company === savedCompany);
-        });
     }
+    if (AppState.currentUser && !isCompanyAllowed(AppState.currentCompany)) {
+        AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
+        localStorage.setItem('selectedCompany', AppState.currentCompany);
+    }
+    document.querySelectorAll('.company-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.company === AppState.currentCompany);
+    });
     updateOrderCompanyLabel();
     
     // Dashboard filter listeners
@@ -389,6 +439,10 @@ function initApp() {
     document.querySelectorAll('.company-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const companyId = btn.dataset.company;
+            if (!isCompanyAllowed(companyId)) {
+                showToast("You don't have access to this company", "error");
+                return;
+            }
             if (companyId === AppState.currentCompany || AppState.isSwitchingCompany) return;
             const previousCompany = AppState.currentCompany;
             document.querySelectorAll('.company-btn').forEach(b => b.classList.remove('active'));
@@ -531,9 +585,30 @@ function checkAuth() {
     const isLogged = localStorage.getItem('isLogged');
     const savedRole = localStorage.getItem('userRole');
     const savedName = localStorage.getItem('userName');
+    const savedUsername = localStorage.getItem('userUsername');
+    const savedAllowedCompanies = localStorage.getItem('userAllowedCompanies');
     
     if (isLogged && savedRole) {
-        AppState.currentUser = { role: savedRole, displayName: savedName || savedRole };
+        let allowedCompanies = null;
+        try {
+            allowedCompanies = savedAllowedCompanies ? JSON.parse(savedAllowedCompanies) : null;
+        } catch (e) {}
+        if (!Array.isArray(allowedCompanies) || allowedCompanies.length === 0) {
+            const matched = USERS.find(u => u.role === savedRole && (!savedUsername || u.username === savedUsername));
+            allowedCompanies = matched?.allowedCompanies || ['company1', 'company2'];
+        }
+
+        AppState.currentUser = {
+            role: savedRole,
+            displayName: savedName || savedRole,
+            username: savedUsername || savedName || savedRole,
+            allowedCompanies
+        };
+
+        if (!isCompanyAllowed(AppState.currentCompany)) {
+            AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
+            localStorage.setItem('selectedCompany', AppState.currentCompany);
+        }
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.remove('hidden');
         applyRolePermissions();
@@ -552,7 +627,7 @@ function applyRolePermissions() {
     // Show user info in sidebar - Simplified as requested (Removed avatar with "A")
     userInfo.innerHTML = `<span>${AppState.currentUser.displayName}</span>`;
     
-    if (role === 'order') {
+    if (role === 'order' || role === 'order_c2') {
         // Hide Dashboard, Data Sheet and Manage Accounts for order role
         document.getElementById('nav-dashboard').style.display = 'none';
         document.getElementById('nav-data-sheet').style.display = 'none';
@@ -564,6 +639,13 @@ function applyRolePermissions() {
         document.getElementById('nav-manage-accounts').style.display = '';
         document.getElementById('nav-money-management').style.display = '';
     }
+
+    const allowedSet = new Set(getAllowedCompanies());
+    document.querySelectorAll('.company-btn').forEach(btn => {
+        const allowed = allowedSet.has(btn.dataset.company);
+        btn.style.display = allowed ? '' : 'none';
+        btn.disabled = !allowed;
+    });
 }
 
 function attachEventListeners() {
@@ -578,7 +660,18 @@ function attachEventListeners() {
             localStorage.setItem('isLogged', 'true');
             localStorage.setItem('userRole', foundUser.role);
             localStorage.setItem('userName', foundUser.displayName);
-            AppState.currentUser = { role: foundUser.role, displayName: foundUser.displayName };
+            localStorage.setItem('userUsername', foundUser.username);
+            localStorage.setItem('userAllowedCompanies', JSON.stringify(foundUser.allowedCompanies || ['company1', 'company2']));
+            AppState.currentUser = {
+                role: foundUser.role,
+                displayName: foundUser.displayName,
+                username: foundUser.username,
+                allowedCompanies: foundUser.allowedCompanies || ['company1', 'company2']
+            };
+            if (!isCompanyAllowed(AppState.currentCompany)) {
+                AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
+                localStorage.setItem('selectedCompany', AppState.currentCompany);
+            }
             checkAuth();
             showToast(`Welcome, ${foundUser.displayName}!`, "success");
         } else {
@@ -594,6 +687,8 @@ function attachEventListeners() {
                 localStorage.removeItem('isLogged');
                 localStorage.removeItem('userRole');
                 localStorage.removeItem('userName');
+                localStorage.removeItem('userUsername');
+                localStorage.removeItem('userAllowedCompanies');
                 AppState.currentUser = null;
                 checkAuth();
                 return;
@@ -602,7 +697,7 @@ function attachEventListeners() {
             const target = btn.getAttribute('data-target');
             
             // Check permissions
-            if (target === 'add-account' && AppState.currentUser?.role === 'order') {
+            if (target === 'add-account' && (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2')) {
                 showToast("You don't have permission to manage accounts", "error");
                 return;
             }
@@ -668,7 +763,7 @@ function attachEventListeners() {
             await fetchDashboardData();
             try { await fetchAllCompaniesData(); } catch (e) { console.warn('Non-blocking: failed to refresh all-company data after submit', e); }
             // Order role stays on daily-order, admin goes to dashboard
-            if (AppState.currentUser?.role === 'order') {
+            if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
                 showToast('Orders saved! You can enter more orders.', 'success');
             } else {
                 navigateTo('dashboard');
@@ -721,7 +816,7 @@ function attachEventListeners() {
 function navigateTo(sectionId) {
     
     // Permission check for order role
-    if (AppState.currentUser?.role === 'order' && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'data-sheet' || sectionId === 'money-management' || sectionId === 'money-backup')) {
+    if ((AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'data-sheet' || sectionId === 'money-management' || sectionId === 'money-backup')) {
         showToast("Access denied", "error"); return;
     }
     
@@ -908,7 +1003,7 @@ async function loadInitialData() {
         checkAutoBackup();
         
         console.log("🚀 [INITIALIZATION] Finished completely. Routing to UI.");
-        if (AppState.currentUser?.role === 'order') {
+        if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
             navigateTo('daily-order');
         } else {
             navigateTo('data-sheet');
@@ -3114,9 +3209,9 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ===== KARIGAR MANAGEMENT ===== */
 async function loadKarigarData() {
     try {
-        const kRes = await FirebaseService.getKarigars();
+        const kRes = await FirebaseService.getKarigars(AppState.currentCompany);
         const [tRes, pRes] = await Promise.all([
-            FirebaseService.getKarigarTransactions(),
+            FirebaseService.getKarigarTransactions(AppState.currentCompany),
             FirebaseService.getDesignPrices()
         ]);
         
@@ -3175,16 +3270,22 @@ function resolveKarigarIdFromState(karigarId, karigarName) {
 function calculateKarigarBalance(karigarId, karigarName) {
     if (!karigarId && !karigarName) return { totalJama: 0, totalUpad: 0, balance: 0, lastTx: null };
     const tx = getKarigarTransactionsFor(karigarId, karigarName);
+    const toAmount = (v) => {
+        const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+    };
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     let totalJama = 0;
     let totalUpad = 0;
     tx.forEach(t => {
         if (t.type === 'jama') {
-            totalJama += (parseFloat(t.total) || 0);
-            totalUpad += (parseFloat(t.upadAmount) || 0);
+            totalJama = round2(totalJama + toAmount(t.total));
+            totalUpad = round2(totalUpad + toAmount(t.upadAmount));
         }
-        if (t.type === 'upad') totalUpad += (parseFloat(t.amount) || 0);
+        if (t.type === 'upad') totalUpad = round2(totalUpad + toAmount(t.amount));
     });
-    return { totalJama, totalUpad, balance: totalJama - totalUpad, lastTx: tx[0] };
+    const balance = round2(totalJama - totalUpad);
+    return { totalJama, totalUpad, balance, lastTx: tx[0] };
 }
 
 function renderKarigarGrid() {
@@ -3192,6 +3293,7 @@ function renderKarigarGrid() {
     const searchInput = document.getElementById('karigar-search-input');
     const query = (searchInput.value || '').trim().toLowerCase();
     const btnCreate = document.getElementById('btn-create-karigar');
+    const isAdmin = isAdminUser();
     
     if (!grid) return;
     grid.innerHTML = '';
@@ -3220,7 +3322,9 @@ function renderKarigarGrid() {
     const resetBtn = document.getElementById('btn-reset-karigar');
     
     if (resetBtn) {
-        if (lastResetMonth !== currentMonth) {
+        if (!isAdmin) {
+            resetBtn.style.display = 'none';
+        } else if (lastResetMonth !== currentMonth) {
             resetBtn.style.display = 'block';
             resetBtn.classList.remove('btn-outline-primary', 'text-primary');
             resetBtn.classList.add('btn-danger', 'text-white');
@@ -3273,7 +3377,7 @@ function renderKarigarGrid() {
                 </div>
 
                 <div class="flex gap-2 w-100" style="margin-top: auto; display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
-                    <button class="btn btn-outline btn-karigar-upad" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}">
+                    <button class="btn btn-outline btn-karigar-upad ${isAdmin ? '' : 'disabled'}" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" ${isAdmin ? '' : 'disabled title="Only admin can add Borrow (Upad)"'}>
                         <i class='bx bx-minus-circle'></i> Borrow (Upad)
                     </button>
                     <button class="btn btn-primary btn-karigar-jama" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}">
@@ -3297,6 +3401,10 @@ function renderKarigarGrid() {
     // Bind buttons
     grid.querySelectorAll('.btn-karigar-upad').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            if (!isAdminUser()) {
+                showToast('Only admin can add Borrow (Upad)', 'error');
+                return;
+            }
             const el = e.currentTarget;
             openKarigarUpadModal(el.dataset.id, el.dataset.name);
         });
@@ -3415,7 +3523,7 @@ function setupKarigarListeners() {
             if (!name) return;
             showLoader();
             try {
-                await FirebaseService.addKarigar(name);
+                await FirebaseService.addKarigar(name, AppState.currentCompany, buildAuditActor());
                 document.getElementById('karigar-search-input').value = '';
                 document.getElementById('karigar-create-modal').classList.remove('show');
                 showToast("Karigar created successfully!", "success");
@@ -3438,14 +3546,15 @@ function setupKarigarListeners() {
             const size = document.getElementById('karigar-jama-size').value;
             const pic = document.getElementById('karigar-jama-pic').value;
             const price = document.getElementById('karigar-jama-price').value;
-            const upadAmount = document.getElementById('karigar-jama-upad').value || 0;
+            const upadAmount = isAdminUser() ? (document.getElementById('karigar-jama-upad').value || 0) : 0;
             
             showLoader();
             try {
                 await FirebaseService.addKarigarJama({ 
                     karigarId, karigarName, date, designName, size, pic, price, upadAmount, 
                     companyId: AppState.currentCompany,
-                    addedBy: AppState.currentUser?.role || 'admin'
+                    addedBy: AppState.currentUser?.role || 'admin',
+                    actor: buildAuditActor()
                 });
                 document.getElementById('karigar-jama-modal').classList.remove('show');
                 showToast("Maal (Jama) added successfully!", "success");
@@ -3466,6 +3575,7 @@ function setupKarigarListeners() {
     if (upadForm && !upadForm.dataset.bound) {
         upadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (!isAdminUser()) return showToast('Only admin can add Borrow (Upad)', 'error');
             const rawKarigarId = document.getElementById('karigar-upad-id').value;
             const karigarName = document.getElementById('karigar-upad-name-display').textContent;
             const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
@@ -3477,7 +3587,8 @@ function setupKarigarListeners() {
                 await FirebaseService.addKarigarUpad({ 
                     karigarId, karigarName, date, amount, 
                     companyId: AppState.currentCompany,
-                    addedBy: AppState.currentUser?.role || 'admin'
+                    addedBy: AppState.currentUser?.role || 'admin',
+                    actor: buildAuditActor()
                 });
                 document.getElementById('karigar-upad-modal').classList.remove('show');
                 showToast("Borrow (Upad) added successfully!", "success");
@@ -3498,11 +3609,23 @@ function openKarigarJamaModal(id, name) {
     document.getElementById('karigar-jama-pic').value = '';
     document.getElementById('karigar-jama-price').value = '';
     document.getElementById('karigar-jama-upad').value = '';
+    const jamaUpadInput = document.getElementById('karigar-jama-upad');
+    if (jamaUpadInput) {
+        if (!isAdminUser()) {
+            jamaUpadInput.value = '0';
+            jamaUpadInput.disabled = true;
+            jamaUpadInput.placeholder = 'Only admin can add upad from Jama';
+        } else {
+            jamaUpadInput.disabled = false;
+            jamaUpadInput.placeholder = 'Any money taken today';
+        }
+    }
     document.getElementById('karigar-jama-total-display').textContent = '0';
     document.getElementById('karigar-jama-modal').classList.add('show');
 }
 
 function openKarigarUpadModal(id, name) {
+    if (!isAdminUser()) return showToast('Only admin can add Borrow (Upad)', 'error');
     const stats = calculateKarigarBalance(id, name);
     document.getElementById('karigar-upad-id').value = id;
     document.getElementById('karigar-upad-name-display').textContent = name;
@@ -3536,7 +3659,7 @@ function openKarigarHistoryModal(id, name) {
     let totalUpad = 0;
     
     if (txs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-muted">No transactions recorded for this karigar.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-muted">No transactions recorded for this karigar.</td></tr>';
     } else {
         txs.forEach(t => {
             const isJama = t.type === 'jama';
@@ -3550,9 +3673,16 @@ function openKarigarHistoryModal(id, name) {
             if (t.companyId === 'company1') companyTag = `<span class="badge badge-primary badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C1</span>`;
             if (t.companyId === 'company2') companyTag = `<span class="badge badge-success badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C2</span>`;
             
-            let addedByTag = '';
-            if (t.addedBy === 'admin') addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> Admin</span>`;
-            if (t.addedBy === 'order') addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> Order</span>`;
+            const createdByName = t.createdByName || t.createdByUser || '-';
+            const createdByRole = t.createdByRole || t.addedBy || '-';
+            const updatedByName = t.updatedByName || '';
+            const updatedByRole = t.updatedByRole || '';
+            const source = t.dashboard || t.source || 'web_app';
+            let addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> ${createdByName} (${createdByRole})</span>`;
+            if (updatedByName || updatedByRole) {
+                addedByTag += `<span class="text-xs text-muted block"><i class='bx bx-edit'></i> Edited: ${updatedByName || '-'} (${updatedByRole || '-'})</span>`;
+            }
+            addedByTag += `<span class="text-xs text-muted block"><i class='bx bx-link-alt'></i> ${source}</span>`;
             
             const txDateObj = parseFlexibleDateTime(t.createdAt) || parseFlexibleDateTime(t.date);
             const hasTimeInfo = !!t.createdAt || /\d{1,2}:\d{2}/.test(String(t.date || ''));
@@ -3570,9 +3700,10 @@ function openKarigarHistoryModal(id, name) {
                     <td class="p-2 text-sm text-right font-mono">${t.price ? '₹'+parseFloat(t.price).toFixed(2) : '-'}</td>
                     <td class="p-2 text-sm text-right text-success font-bold">${isJama ? '₹'+jamaVal.toFixed(2) : '-'}</td>
                     <td class="p-2 text-sm text-right text-danger font-bold">${upadVal > 0 ? '₹'+upadVal.toFixed(2) : '-'}</td>
-                    <td class="p-2 text-sm text-center">
+                    <td class="p-2 text-sm text-center">${isAdminUser() ? `
+                        <button onclick="editKarigarHistory('${t.id}', '${resolvedId}', '${name}')" class="btn-icon text-primary" title="Edit record"><i class='bx bx-edit'></i></button>
                         <button onclick="deleteKarigarHistory('${t.id}', '${resolvedId}', '${name}')" class="btn-icon text-danger" title="Delete record"><i class='bx bx-trash'></i></button>
-                    </td>
+                    ` : `<span class="text-muted">-</span>`}</td>
                 </tr>
             `;
             tbody.insertAdjacentHTML('beforeend', row);
@@ -3593,17 +3724,24 @@ function openKarigarHistoryModal(id, name) {
     }
     
     const deleteBtn = document.getElementById('btn-delete-employee');
-    deleteBtn.onclick = () => deleteCompleteKarigar(id, name);
+    deleteBtn.onclick = () => deleteCompleteKarigar(resolvedId, name);
+    const editKarigarBtn = document.getElementById('btn-edit-employee');
+    if (editKarigarBtn) {
+        editKarigarBtn.onclick = () => editKarigarName(resolvedId, name);
+    }
+    if (deleteBtn) deleteBtn.style.display = isAdminUser() ? '' : 'none';
+    if (editKarigarBtn) editKarigarBtn.style.display = isAdminUser() ? '' : 'none';
     
     document.getElementById('karigar-history-modal').classList.add('show');
 }
 
 async function deleteCompleteKarigar(id, name) {
+    if (!isAdminUser()) return showToast('Only admin can delete karigar', 'error');
     if (!confirm(`!! WARNING !!\nAre you sure you want to completely delete "${name}"? This will permanently remove them from the system.`)) return;
     
     showLoader();
     try {
-        await FirebaseService.deleteKarigar(id);
+        await FirebaseService.deleteKarigar(id, AppState.currentCompany, buildAuditActor());
         showToast(`Employee ${name} deleted`, 'success');
         
         document.getElementById('karigar-history-modal').classList.remove('show');
@@ -3620,11 +3758,12 @@ async function deleteCompleteKarigar(id, name) {
 }
 
 async function deleteKarigarHistory(txId, karigarId, karigarName) {
+    if (!isAdminUser()) return showToast('Only admin can delete transaction', 'error');
     if (!confirm('Are you certain you want to specifically delete this record? This cannot be undone.')) return;
     
     showLoader();
     try {
-        await FirebaseService.deleteKarigarTransaction(txId);
+        await FirebaseService.deleteKarigarTransaction(txId, AppState.currentCompany, buildAuditActor());
         showToast('Record deleted successfully', 'success');
         
         // Remove locally without full fetch
@@ -3641,11 +3780,85 @@ async function deleteKarigarHistory(txId, karigarId, karigarName) {
     }
 }
 
+async function editKarigarName(karigarId, currentName) {
+    if (!isAdminUser()) return showToast('Only admin can edit karigar', 'error');
+    const newName = prompt('Edit Karigar name:', currentName || '');
+    if (newName === null) return;
+    const trimmed = String(newName || '').trim();
+    if (!trimmed) return showToast('Name is required', 'error');
+    if (trimmed === String(currentName || '').trim()) return;
+
+    showLoader();
+    try {
+        const res = await FirebaseService.editKarigar(karigarId, trimmed, AppState.currentCompany, buildAuditActor());
+        if (res?.success === false) throw new Error(res.message || 'Failed to edit karigar');
+        showToast('Karigar updated', 'success');
+        await renderKarigarPage();
+        openKarigarHistoryModal(karigarId, trimmed);
+    } catch (e) {
+        console.error('Failed to edit karigar:', e);
+        showToast(e.message || 'Failed to edit karigar', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+async function editKarigarHistory(txId, karigarId, karigarName) {
+    if (!isAdminUser()) return showToast('Only admin can edit transaction', 'error');
+    const tx = (AppState.karigarTransactions || []).find(t => t.id === txId);
+    if (!tx) return showToast('Transaction not found', 'error');
+
+    const updates = {};
+    const newDate = prompt('Date (YYYY-MM-DD):', normalizeToISODate(tx.date) || '');
+    if (newDate === null) return;
+    updates.date = normalizeToISODate(newDate) || normalizeToISODate(tx.date);
+
+    if (tx.type === 'jama') {
+        const newDesign = prompt('Design:', tx.designName || '');
+        if (newDesign === null) return;
+        const newSize = prompt('Size:', tx.size || '');
+        if (newSize === null) return;
+        const newPic = prompt('Pics:', String(tx.pic || 0));
+        if (newPic === null) return;
+        const newPrice = prompt('Price:', String(tx.price || 0));
+        if (newPrice === null) return;
+        const newUpad = prompt('Upad Amount:', String(tx.upadAmount || 0));
+        if (newUpad === null) return;
+
+        updates.designName = String(newDesign || '').trim();
+        updates.size = String(newSize || '').trim();
+        updates.pic = parseInt(newPic, 10) || 0;
+        updates.price = parseFloat(newPrice) || 0;
+        updates.upadAmount = parseFloat(newUpad) || 0;
+        updates.type = 'jama';
+    } else {
+        const newAmount = prompt('Borrow Amount:', String(tx.amount || 0));
+        if (newAmount === null) return;
+        updates.amount = parseFloat(newAmount) || 0;
+        updates.type = 'upad';
+    }
+
+    showLoader();
+    try {
+        const res = await FirebaseService.updateKarigarTransaction(txId, updates, buildAuditActor(), AppState.currentCompany);
+        if (res?.success === false) throw new Error(res.message || 'Failed to edit transaction');
+        showToast('Transaction updated', 'success');
+        await renderKarigarPage();
+        openKarigarHistoryModal(karigarId, karigarName);
+    } catch (e) {
+        console.error('Failed to update transaction:', e);
+        showToast(e.message || 'Failed to update transaction', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
 window.onload = function() {
     checkAuth();
 };
 
 async function confirmKarigarMonthlyReset() {
+    if (!isAdminUser()) return showToast('Only admin can run monthly reset', 'error');
     if (!confirm("This will backup ALL current Karigar data to Google Sheets and instantly clear it from the app for the new month.\n\nAre you sure you want to proceed?")) return;
     
     showLoader();
@@ -3663,7 +3876,7 @@ async function confirmKarigarMonthlyReset() {
             showToast('Backup successful. Clearing local database...', 'info');
             
             // Delete from firestore
-            const deleted = await FirebaseService.clearKarigarMonthlyData();
+            const deleted = await FirebaseService.clearKarigarMonthlyData(AppState.currentCompany, buildAuditActor());
             
             // Update UI & memory state
             AppState.karigarTransactions = [];
