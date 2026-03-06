@@ -51,6 +51,9 @@
                 <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
             </ul>
             <div class="sidebar-footer">
+                <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-primary bg-white" id="global-export-btn" title="Export complete PDF report">
+                    <i class='bx bxs-file-pdf'></i> Export Report
+                </button>
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="backup-btn" title="Backup to Google Sheets">
                     <i class='bx bx-cloud-upload'></i> Backup to Sheets
                 </button>
@@ -90,8 +93,14 @@
                     <div class="dash-header mb-2">
                         <h1 class="page-title" id="page-title">Dashboard Overview</h1>
                         <div class="filter-controls">
-                            <!-- Moved from card for better access -->
-                            <button class="btn btn-export btn-sm" id="export-csv-btn" title="Export to CSV">
+                            <!-- Switcher to view ALL data -->
+                            <button class="btn btn-outline btn-sm" id="load-all-data-btn" title="Load historical data from Google Sheets">
+                                <i class='bx bx-history'></i> Load Complete History
+                            </button>
+                            <button class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-sheet-btn" title="Export to PDF">
+                                <i class='bx bxs-file-pdf'></i> Export PDF
+                            </button>
+                            <button class="btn btn-export btn-sm" id="export-csv-sheet-btn" title="Export to CSV">
                                 <i class='bx bx-download'></i> Export CSV
                             </button>
                         </div>
@@ -317,6 +326,7 @@
                                 <p class="text-sm text-muted mt-1">Track money and expenses across all company accounts.</p>
                             </div>
                             <div class="flex gap-2 items-center">
+                                <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-money-btn" title="Export to PDF"><i class='bx bxs-file-pdf'></i> Export PDF</button>
                                 <button type="button" class="btn btn-outline btn-sm" id="money-backup-open-btn"><i class='bx bx-archive'></i> Backup History</button>
                                 <input type="date" id="money-date" class="date-input hidden" style="padding: 0.5rem; font-weight: 600;">
                                 <button type="button" class="btn btn-primary btn-sm hidden" id="money-save-btn"><i class='bx bx-save'></i> Save Changes</button>
@@ -405,9 +415,13 @@
                             <h2 class="page-title font-bold text-xl"><i class='bx bx-user-circle'></i> Karigar Management</h2>
                             <button id="btn-reset-karigar" class="btn btn-outline btn-sm text-danger" style="display: none;"><i class='bx bx-refresh'></i> Monthly Reset Due</button>
                         </div>
-                        <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                            <span class="text-xs text-muted uppercase font-bold mr-2">Total Payable Balance</span>
-                            <strong id="karigar-overall-balance" class="text-lg text-primary">₹0.00</strong>
+                        <div class="flex gap-2 items-center">
+                            <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Export to PDF"><i class='bx bxs-file-pdf'></i> Export PDF</button>
+                            <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn"><i class='bx bx-archive'></i> View History</button>
+                            <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                                <span class="text-xs text-muted uppercase font-bold mr-2">Total Payable Balance</span>
+                                <strong id="karigar-overall-balance" class="text-lg text-primary">₹0.00</strong>
+                            </div>
                         </div>
                     </div>
 
@@ -696,10 +710,35 @@
         </div>
     </div>
 
+    <!-- Global Export Modal -->
+    <div id="global-export-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:90%;max-width:500px;border-radius:12px;padding:25px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
+            <div class="flex-between mb-2">
+                <h3 class="font-bold text-lg"><i class='bx bxs-file-pdf text-danger'></i> Generate PDF Report</h3>
+                <button id="close-global-export-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <p class="text-sm text-muted mb-2">Construct a full detailed report for the selected date range.</p>
+            <div class="input-group mb-2">
+                <label>From Date</label>
+                <input type="date" id="export-from-date" class="date-input w-100" style="padding: 0.5rem;" required>
+            </div>
+            <div class="input-group mb-2">
+                <label>To Date</label>
+                <input type="date" id="export-to-date" class="date-input w-100" style="padding: 0.5rem;" required>
+            </div>
+            <div class="flex justify-end gap-2 mt-2 pt-2" style="border-top:1px solid #e2e8f0;">
+                <button type="button" id="cancel-global-export" class="btn btn-outline">Cancel</button>
+                <button type="button" id="confirm-global-export" class="btn btn-primary"><i class='bx bx-download'></i> Generate Report</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Firebase SDK (compat for vanilla JS) -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <script src="config.js"></script>
     <script src="firebase-service.js"></script>

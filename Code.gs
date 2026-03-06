@@ -202,6 +202,8 @@ function doPost(e) {
       return output.setContent(JSON.stringify(saveMoneyBackup(data.date, data.rows, data.reason)));
     } else if (action === 'saveFullBackup') {
       return output.setContent(JSON.stringify(saveFullBackup(data.data)));
+    } else if (action === 'getGlobalReport') {
+      return output.setContent(JSON.stringify(getGlobalReport(data.fromDate, data.toDate)));
     }
     
     return output.setContent(JSON.stringify({success: false, message: 'Invalid action: ' + action}));
@@ -825,4 +827,57 @@ function bulkBackup(orders, accounts, companyId) {
     company2: companyId === 'company2' ? { orders: orders, accounts: accounts } : { orders: [], accounts: [] }
   };
   return saveFullBackup(data);
+}
+
+function getGlobalReport(fromDate, toDate) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets('all');
+  
+  var result = {
+    success: true,
+    orders: [],
+    karigarTransactions: []
+  };
+
+  // 1. Fetch Orders from C1 and C2
+  ['company1', 'company2'].forEach(function(cid) {
+    var cSheet = ss.getSheetByName(COMPANIES[cid].ordersSheet);
+    if(cSheet && cSheet.getLastRow() > 1) {
+      var data = cSheet.getRange(2, 1, cSheet.getLastRow()-1, 5).getValues();
+      data.forEach(function(r) {
+        var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : r[0];
+        if (dStr >= fromDate && dStr <= toDate) {
+          result.orders.push({ date: dStr, companyId: cid, accountName: r[1], meesho: r[2], total: r[3] });
+        }
+      });
+    }
+  });
+
+  // 2. Fetch Karigar Transactions
+  var kxSheet = ss.getSheetByName(KARIGAR_TX_SHEET);
+  if (kxSheet && kxSheet.getLastRow() > 1) {
+    var data = kxSheet.getRange(2, 1, kxSheet.getLastRow()-1, 10).getValues();
+    data.forEach(function(r) {
+      var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : r[0]; // Date is col 0
+      if (dStr >= fromDate && dStr <= toDate) {
+        result.karigarTransactions.push({
+          id: 'gs_' + Math.random().toString(36).substr(2, 9),
+          karigarName: r[1],
+          type: r[2],
+          amount: parseFloat(r[7]) > 0 ? r[7] : r[8], // Jama total or Upad amount
+          total: r[7],
+          date: dStr,
+          designName: r[3],
+          companyId: 'History',
+          addedBy: 'Archive'
+        });
+      }
+    });
+  }
+
+  // Sort by date
+  result.orders.sort(function(a, b) { return a.date > b.date ? 1 : -1; });
+  result.karigarTransactions.sort(function(a, b) { return a.date > b.date ? 1 : -1; });
+
+  return result;
 }

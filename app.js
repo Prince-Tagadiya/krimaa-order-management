@@ -3194,3 +3194,147 @@ async function confirmKarigarMonthlyReset() {
         hideLoader();
     }
 }
+function exportTableToPDF(title, headers, bodyData, filename) {
+    if (!window.jspdf) { showToast('PDF Library not loaded', 'error'); return; }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    doc.text(title, 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
+    
+    doc.autoTable({
+        startY: 25,
+        head: [headers],
+        body: bodyData,
+        theme: 'grid',
+        headStyles: { fillColor: [19, 91, 236] },
+        styles: { fontSize: 8, cellPadding: 2 }
+    });
+    doc.save(filename);
+    showToast('PDF Exported!', 'success');
+}
+
+document.getElementById('export-pdf-sheet-btn')?.addEventListener('click', () => {
+    const table = document.getElementById('sheet-table');
+    if (!table) return;
+    const headers = [];
+    table.querySelectorAll('thead th').forEach(th => {
+        const text = th.textContent.trim();
+        if(text && text !== '#' && text !== '') headers.push(text);
+    });
+    
+    // Custom logic to parse Data Sheet since it has inputs
+    const rows = [];
+    table.querySelectorAll('tbody tr:not(.sheet-grand-row)').forEach(tr => {
+        const rowData = [];
+        tr.querySelectorAll('td').forEach((td, idx) => {
+            if(idx === 0 || idx === 1) return; // skip drag handle and #
+            const input = td.querySelector('input');
+            rowData.push(input ? input.value : td.textContent.trim());
+        });
+        if(rowData.length > 0) rows.push(rowData);
+    });
+    
+    exportTableToPDF('Combined Data Sheet', headers, rows, `Data_Sheet_${getTodayISODate()}.pdf`);
+});
+
+document.getElementById('export-pdf-money-btn')?.addEventListener('click', () => {
+    const rows = [];
+    document.querySelectorAll('#money-management-tbody tr').forEach(tr => {
+        const rowData = [
+            tr.children[2].textContent.trim(), // Company
+            tr.children[3].textContent.trim(), // Name
+            tr.querySelector('.inp-money')?.value || '0',
+            tr.querySelector('.inp-expense')?.value || '0',
+            tr.querySelector('.row-total')?.textContent.trim() || '0'
+        ];
+        rows.push(rowData);
+    });
+    exportTableToPDF('Money Management Report', ['Company', 'Account', 'Money', 'Expense', 'Balance'], rows, `Money_Report_${getTodayISODate()}.pdf`);
+});
+
+document.getElementById('export-pdf-karigar-btn')?.addEventListener('click', () => {
+    const rows = [];
+    document.querySelectorAll('#karigar-grid .card').forEach(card => {
+        const name = card.querySelector('.font-bold.text-lg')?.textContent.trim() || '';
+        const jama = card.querySelector('.text-success.font-bold')?.textContent.replace('₹', '').trim() || '0';
+        const upad = card.querySelector('.text-danger.font-bold')?.textContent.replace('₹', '').trim() || '0';
+        const balance = card.querySelector('.text-primary, .text-danger')?.textContent.replace('₹', '').trim() || '0';
+        rows.push([name, jama, upad, balance]);
+    });
+    exportTableToPDF('Karigar Management Report', ['Name', 'Total Jama', 'Total Upad', 'Balance'], rows, `Karigar_Report_${getTodayISODate()}.pdf`);
+});
+
+document.getElementById('global-export-btn')?.addEventListener('click', () => {
+    document.getElementById('global-export-modal').classList.add('show');
+    document.getElementById('export-from-date').value = getTodayISODate();
+    document.getElementById('export-to-date').value = getTodayISODate();
+});
+document.getElementById('karigar-backup-open-btn')?.addEventListener('click', () => {
+    document.getElementById('global-export-modal').classList.add('show');
+    document.getElementById('export-from-date').value = getTodayISODate();
+    document.getElementById('export-to-date').value = getTodayISODate();
+});
+document.getElementById('close-global-export-modal')?.addEventListener('click', () => {
+    document.getElementById('global-export-modal').classList.remove('show');
+});
+document.getElementById('cancel-global-export')?.addEventListener('click', () => {
+    document.getElementById('global-export-modal').classList.remove('show');
+});
+
+document.getElementById('confirm-global-export')?.addEventListener('click', async () => {
+    const fromDate = document.getElementById('export-from-date').value;
+    const toDate = document.getElementById('export-to-date').value;
+    if (!fromDate || !toDate) { showToast('Please select both dates', 'error'); return; }
+    
+    document.getElementById('global-export-modal').classList.remove('show');
+    showLoader();
+    try {
+        showToast('Generating Multi-Page PDF...', 'info');
+        
+        // Actually fetch the real data here directly from API.
+        const res = await apiRequest({ action: 'getGlobalReport', fromDate, toDate });
+        if(!res || !res.success) throw new Error(res?.message || 'Failed to generate report');
+        
+        if (!window.jspdf) { throw new Error('PDF Library not loaded'); }
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        
+        doc.setFontSize(20);
+        doc.text('Krimaa Global Report', 14, 20);
+        doc.setFontSize(10);
+        doc.text(`Report Period: ${fromDate} to ${toDate}`, 14, 28);
+        doc.text(`Generated exactly at: ${new Date().toLocaleString()}`, 14, 34);
+        
+        // Data Sheet Table
+        doc.setFontSize(14);
+        doc.text('Daily Orders Overview', 14, 45);
+        doc.autoTable({
+            startY: 50,
+            head: [['Date', 'Company', 'Account', 'Orders', 'Amount']],
+            body: res.orders.map(o => [o.date, o.companyId, o.accountName, o.meesho, o.total]),
+            theme: 'grid',
+            headStyles: { fillColor: [40, 40, 40] }
+        });
+        
+        // Karigars Table
+        doc.addPage();
+        doc.text('Karigar Transactions Snapshot', 14, 15);
+        doc.autoTable({
+            startY: 20,
+            head: [['Date', 'Type', 'Karigar', 'Design', 'Amount']],
+            body: res.karigarTransactions.map(k => [k.date || '-', k.type || '-', k.karigarName || '-', k.designName || '-', k.amount || k.total || '0']),
+            theme: 'grid',
+            headStyles: { fillColor: [19, 91, 236] }
+        });
+        
+        doc.save(`Krimaa_Global_Report_${fromDate}_to_${toDate}.pdf`);
+        showToast('Global Report downloaded!', 'success');
+        
+    } catch(e) {
+        console.error(e);
+        showToast('Error generating global report', 'error');
+    } finally {
+        hideLoader();
+    }
+});
