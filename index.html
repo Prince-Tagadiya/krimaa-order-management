@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Krimaa App</title>
+    <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <link rel="stylesheet" href="style.css">
@@ -50,14 +51,15 @@
                 <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
                 <li id="nav-money-management"><a href="#" class="nav-btn" data-target="money-management"><i class='bx bx-money'></i> Money Management</a></li>
                 <li id="nav-karigar"><a href="#" class="nav-btn" data-target="karigar"><i class='bx bx-user-circle'></i> Karigar Management</a></li>
+                <li id="nav-size-prices"><a href="#" class="nav-btn" data-target="size-prices"><i class='bx bx-ruler'></i> Size Prices</a></li>
                 <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
             </ul>
             <div class="sidebar-footer">
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-primary bg-white" id="global-export-btn" title="Export complete PDF report">
                     <i class='bx bxs-file-pdf'></i> Export Report
                 </button>
-                <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="backup-btn" title="Backup to Google Sheets">
-                    <i class='bx bx-cloud-upload'></i> Backup to Sheets
+                <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="backup-btn" title="Refresh latest app data">
+                    <i class='bx bx-refresh'></i> Refresh Data
                 </button>
                 <div id="last-backup-time" class="text-xs text-muted text-center mb-2" style="font-size: 0.65rem;"></div>
                 <a href="#" id="logout-btn" class="nav-btn logout-link" data-target="logout"><i class='bx bx-log-out'></i> Logout</a>
@@ -78,6 +80,10 @@
                     <div class="sync-indicator" id="sync-indicator" title="Data sync status">
                         <i class='bx bx-check-circle'></i>
                         <span>Synced</span>
+                    </div>
+                    <div class="sync-indicator sync-idle hidden" id="sheet-backup-indicator" title="Background Google Sheet backup status">
+                        <i class='bx bx-cloud-upload'></i>
+                        <span>Sheet idle</span>
                     </div>
                     <div class="sidebar-user-info" id="sidebar-user-info"></div>
                 </div>
@@ -302,8 +308,8 @@
                             <button type="button" class="btn btn-outline btn-sm text-primary" id="fix-integrity-btn" title="Generate missing IDs for legacy spreadsheet data">
                                 <i class='bx bx-shield-check'></i> Fix Integrity
                             </button>
-                            <button type="button" class="btn btn-outline btn-sm text-accent" id="sync-to-firebase-btn" title="Push ALL Sheet data to Firebase (Sheet is Source of Truth)">
-                                <i class='bx bx-cloud-upload'></i> Sync to Firebase
+                            <button type="button" class="btn btn-outline btn-sm text-accent" id="sync-sheet-btn" title="Delete Firebase data and replace from Google Sheets">
+                                <i class='bx bx-refresh'></i> Replace from Sheet
                             </button>
                         </div>
                     </div>
@@ -427,7 +433,7 @@
                     <div class="flex-between mb-2">
                         <div style="display: flex; align-items: center; gap: 1rem;">
                             <h2 class="page-title font-bold text-xl"><i class='bx bx-user-circle'></i> Karigar Management</h2>
-                            <button id="btn-reset-karigar" class="btn btn-outline btn-sm text-danger" style="display: none;"><i class='bx bx-refresh'></i> Monthly Reset Due</button>
+                            <button id="btn-reset-karigar" class="btn btn-outline btn-sm text-danger" style="display: none;"><i class='bx bx-refresh'></i> Reset Karigar Data</button>
                         </div>
                         <div class="flex gap-2 items-center">
                             <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Export to PDF"><i class='bx bxs-file-pdf'></i> Export PDF</button>
@@ -453,6 +459,46 @@
                     <!-- Karigar Grid -->
                     <div id="karigar-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
                         <!-- JS injected cards -->
+                    </div>
+                </section>
+
+                <section id="size-prices" class="content-section">
+                    <div class="card">
+                        <div class="flex-between mb-2">
+                            <div>
+                                <h2 class="page-title font-bold text-xl"><i class='bx bx-ruler'></i> Size Price Management</h2>
+                                <p class="text-sm text-muted">Saved Size/Design prices used in Jama auto-fill.</p>
+                            </div>
+                        </div>
+                        <form id="size-price-form" class="mb-2" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:0.75rem;align-items:end;">
+                            <div class="input-group" style="margin:0;">
+                                <label>Size / Design</label>
+                                <input id="size-price-key" type="text" placeholder="e.g. 1128 or XL" required>
+                            </div>
+                            <div class="input-group" style="margin:0;">
+                                <label>Price</label>
+                                <input id="size-price-value" type="number" step="0.01" min="0" placeholder="e.g. 90" required>
+                            </div>
+                            <div class="input-group" style="margin:0;">
+                                <label>Active From</label>
+                                <input id="size-price-effective-date" type="datetime-local" required>
+                            </div>
+                            <button id="size-price-save-btn" class="btn btn-primary" type="submit"><i class='bx bx-save'></i> Save Price</button>
+                        </form>
+                        <div id="size-price-chart" style="display:grid;grid-template-columns:1fr;gap:0.5rem;" class="mb-2"></div>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th class="text-left">Size/Design</th>
+                                        <th class="text-right">Price</th>
+                                        <th class="text-center">Active From</th>
+                                        <th class="text-center">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="size-price-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </section>
 
@@ -610,6 +656,10 @@
                     <input type="date" id="karigar-jama-date" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>
                 </div>
                 <div class="input-group">
+                    <label>Time</label>
+                    <input type="time" id="karigar-jama-time" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>
+                </div>
+                <div class="input-group">
                     <label>Design Name / No.</label>
                     <input type="text" id="karigar-jama-design" required placeholder="Enter design name or number">
                 </div>
@@ -655,6 +705,10 @@
                 <div class="input-group">
                     <label>Date</label>
                     <input type="date" id="karigar-upad-date" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>
+                </div>
+                <div class="input-group">
+                    <label>Time</label>
+                    <input type="time" id="karigar-upad-time" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>
                 </div>
                 <div class="input-group">
                     <label>Upad Amount</label>
@@ -722,6 +776,72 @@
                     <div style="width: 1px; background: var(--border-color);"></div>
                     <div class="text-right"><span class="text-xs text-muted block">Net Balance</span><strong id="history-net-balance" class="text-primary text-xl">₹0.00</strong></div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="karigar-reset-backups-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:95%;max-width:980px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;display:flex;flex-direction:column;">
+            <div class="flex-between mb-2" style="gap: 0.75rem;">
+                <div>
+                    <h3 class="font-bold text-lg">Karigar Reset Backups</h3>
+                    <p class="text-xs text-muted">Read-only snapshot cards by employee.</p>
+                </div>
+                <div style="display:flex; gap: 0.5rem; align-items:center;">
+                    <select id="karigar-reset-backup-select" class="date-input" style="min-width: 280px;"></select>
+                    <button type="button" class="btn btn-outline btn-sm" id="karigar-reset-backup-refresh-btn"><i class='bx bx-refresh'></i> Refresh</button>
+                    <button id="close-karigar-reset-backups-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+                </div>
+            </div>
+            <div id="karigar-reset-backup-summary" class="mb-2 p-2" style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:0.75rem;background:#f8fafc;border:1px solid var(--border-color);border-radius:10px;">
+                <div><span class="text-xs text-muted block">Employees</span><strong id="karigar-reset-summary-employees">0</strong></div>
+                <div><span class="text-xs text-muted block">Total Jama</span><strong id="karigar-reset-summary-jama" class="text-success">₹0.00</strong></div>
+                <div><span class="text-xs text-muted block">Total Upad</span><strong id="karigar-reset-summary-upad" class="text-danger">₹0.00</strong></div>
+                <div><span class="text-xs text-muted block">Net Balance</span><strong id="karigar-reset-summary-balance" class="text-primary">₹0.00</strong></div>
+            </div>
+            <div style="overflow:auto; flex:1;" class="custom-scrollbar">
+                <div id="karigar-reset-backup-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0.75rem;"></div>
+            </div>
+            <div id="karigar-reset-backup-empty" class="hidden text-center p-3 text-muted">
+                No reset backup records found.
+            </div>
+        </div>
+    </div>
+    <div id="karigar-reset-employee-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10001;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:96%;max-width:1100px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;display:flex;flex-direction:column;">
+            <div class="flex-between mb-2" style="gap:0.75rem;">
+                <div>
+                    <h3 class="font-bold text-lg">Full Transactions: <span id="karigar-reset-employee-name-display" class="text-primary"></span></h3>
+                    <p id="karigar-reset-employee-subtitle" class="text-xs text-muted">-</p>
+                </div>
+                <button id="close-karigar-reset-employee-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <div class="mb-2 p-2" style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:0.75rem;background:#f8fafc;border:1px solid var(--border-color);border-radius:10px;">
+                <div><span class="text-xs text-muted block">Entries</span><strong id="karigar-reset-employee-summary-entries">0</strong></div>
+                <div><span class="text-xs text-muted block">Total Jama</span><strong id="karigar-reset-employee-summary-jama" class="text-success">₹0.00</strong></div>
+                <div><span class="text-xs text-muted block">Total Upad</span><strong id="karigar-reset-employee-summary-upad" class="text-danger">₹0.00</strong></div>
+                <div><span class="text-xs text-muted block">Net Balance</span><strong id="karigar-reset-employee-summary-balance" class="text-primary">₹0.00</strong></div>
+            </div>
+            <div style="overflow:auto; flex:1;" class="custom-scrollbar">
+                <table class="table" style="width:100%; border-collapse:collapse;">
+                    <thead style="position: sticky; top: 0; background: #f8fafc; z-index: 1;">
+                        <tr style="border-bottom: 2px solid var(--border-color);">
+                            <th class="text-left p-2">Date/Time</th>
+                            <th class="text-left p-2">Type</th>
+                            <th class="text-left p-2">Design</th>
+                            <th class="text-center p-2">Size</th>
+                            <th class="text-right p-2">Pics</th>
+                            <th class="text-right p-2">Price</th>
+                            <th class="text-right p-2">Jama</th>
+                            <th class="text-right p-2">Upad</th>
+                            <th class="text-left p-2">Created From</th>
+                        </tr>
+                    </thead>
+                    <tbody id="karigar-reset-employee-tbody"></tbody>
+                </table>
+            </div>
+            <div id="karigar-reset-employee-empty" class="hidden text-center p-3 text-muted">
+                No transactions available for this employee in selected backup.
             </div>
         </div>
     </div>

@@ -20,10 +20,7 @@ const FirebaseService = (() => {
         firebase.initializeApp(FIREBASE_CONFIG);
         db = firebase.firestore();
         
-        // Enable offline persistence for anti-data loss
-        db.enablePersistence({ synchronizeTabs: true })
-          .catch(err => console.warn('Persistence error:', err));
-          
+        // Keep default online mode to avoid deprecated persistence API warnings.
         _initialized = true;
     }
 
@@ -58,6 +55,77 @@ const FirebaseService = (() => {
         return [date, companyId, accountId]
             .map(v => encodeURIComponent(String(v || '').trim()))
             .join('_');
+    }
+
+    function buildDesignPriceDocId(companyId, designKey) {
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        const safeKey = String(designKey || '').trim().toUpperCase();
+        return `${safeCompanyId}__${safeKey}`;
+    }
+
+    function buildDesignPriceHistoryDocId(companyId, designKey, effectiveFrom) {
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        const safeKey = String(designKey || '').trim().toUpperCase();
+        const safeDateTime = normalizeISODateTime(effectiveFrom) || normalizeISODateTime(new Date());
+        return `${safeCompanyId}__${safeKey}__${safeDateTime.replace(/[:]/g, '-')}`;
+    }
+
+    async function saveDesignPricePoint(companyId, designKey, price, effectiveFrom, actor = null) {
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        const safeKey = String(designKey || '').trim().toUpperCase();
+        const safePrice = Math.round(((parseFloat(price) || 0) + Number.EPSILON) * 100) / 100;
+        const safeEffectiveFrom = normalizeISODateTime(effectiveFrom) || normalizeISODateTime(new Date());
+        const docId = buildDesignPriceDocId(safeCompanyId, safeKey);
+        await db.collection('design_prices').doc(docId).set({
+            companyId: safeCompanyId,
+            key: safeKey,
+            price: safePrice,
+            effectiveFromLatest: safeEffectiveFrom,
+            ...buildActorMeta(actor, 'updated'),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        const historyDocId = buildDesignPriceHistoryDocId(safeCompanyId, safeKey, safeEffectiveFrom);
+        await db.collection('design_price_history').doc(historyDocId).set({
+            companyId: safeCompanyId,
+            key: safeKey,
+            price: safePrice,
+            effectiveFrom: safeEffectiveFrom,
+            ...buildActorMeta(actor, 'updated'),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        return { safeCompanyId, safeKey, safePrice, safeEffectiveFrom };
+    }
+
+    async function deleteDesignPricePoint(companyId, designKey, effectiveFrom) {
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        const safeKey = String(designKey || '').trim().toUpperCase();
+        const safeEffectiveFrom = normalizeISODateTime(effectiveFrom);
+        if (!safeKey || !safeEffectiveFrom) return 0;
+
+        let deleted = 0;
+        const deterministicDocId = buildDesignPriceHistoryDocId(safeCompanyId, safeKey, safeEffectiveFrom);
+        const directRef = db.collection('design_price_history').doc(deterministicDocId);
+        const directDoc = await directRef.get();
+        if (directDoc.exists) {
+            await directRef.delete();
+            deleted += 1;
+        }
+
+        const snap = await db.collection('design_price_history')
+            .where('companyId', '==', safeCompanyId)
+            .where('key', '==', safeKey)
+            .where('effectiveFrom', '==', safeEffectiveFrom)
+            .get();
+        if (!snap.empty) {
+            const ops = [];
+            snap.forEach(doc => ops.push(b => b.delete(doc.ref)));
+            if (ops.length > 0) {
+                await commitInChunks(ops);
+                deleted += ops.length;
+            }
+        }
+        return deleted;
     }
 
     function buildPrefixedId(prefix) {
@@ -117,6 +185,34 @@ const FirebaseService = (() => {
         const parsed = new Date(str);
         if (!isNaN(parsed.getTime())) return parsed;
         return null;
+    }
+
+    function normalizeISODate(rawValue) {
+        if (!rawValue) return '';
+        const d = parseFlexibleDateValue(rawValue);
+        if (!d) return '';
+        const local = new Date(d.getTime() - (d.getTimezoneOffset() * 60000));
+        return local.toISOString().split('T')[0];
+    }
+
+    function normalizeISODateTime(rawValue, fallbackDate = '') {
+        if (!rawValue && fallbackDate) return `${normalizeISODate(fallbackDate)}T00:00:00`;
+        if (!rawValue) return '';
+        if (typeof rawValue === 'string') {
+            const str = rawValue.trim().replace(' ', 'T');
+            const match = str.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(:\d{2})?$/);
+            if (match) {
+                const secs = match[3] ? match[3] : ':00';
+                return `${match[1]}T${match[2]}${secs}`;
+            }
+            if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+                return `${str}T00:00:00`;
+            }
+        }
+        const d = parseFlexibleDateValue(rawValue);
+        if (!d) return '';
+        const local = new Date(d.getTime() - (d.getTimezoneOffset() * 60000));
+        return local.toISOString().slice(0, 19);
     }
 
     async function getAccounts(companyId) {
@@ -210,28 +306,14 @@ const FirebaseService = (() => {
 
     async function deleteAccount(id, companyId) {
         init();
-        if (id) {
-            // Prioritize ID-based deletion
-            await db.collection('accounts').doc(id).delete();
-            return { success: true, message: 'Account deleted successfully' };
-        }
-        // Fallback for name-based delete if no ID provided (legacy)
-        // Note: The original function accepted 'name' as the first argument.
-        // If 'id' is actually a name, this fallback will handle it.
-        const snap = await db.collection('accounts')
-            .where('companyId', '==', companyId)
-            .where('name', '==', String(id || '').trim()) // Assuming 'id' might be a name in legacy calls
-            .get();
-        if (!snap.empty) {
-            // If multiple accounts with the same name exist (shouldn't happen with current addAccount logic),
-            // this will only delete the first one found. The original code deleted all.
-            // For refactoring, we'll delete all found by name for consistency with original behavior.
-            const ops = [];
-            snap.forEach(doc => ops.push(b => b.delete(doc.ref)));
-            await commitInChunks(ops);
-            return { success: true, message: 'Account deleted successfully' };
-        }
-        return { success: false, message: 'Account not found' };
+        const safeId = String(id || '').trim();
+        if (!isPrefixedId(safeId, 'acc_')) return { success: false, message: 'Valid account ID required' };
+        const doc = await db.collection('accounts').doc(safeId).get();
+        if (!doc.exists) return { success: false, message: 'Account not found' };
+        const data = doc.data() || {};
+        if (data.companyId && data.companyId !== companyId) return { success: false, message: 'Company mismatch' };
+        await doc.ref.delete();
+        return { success: true, message: 'Account deleted successfully' };
     }
 
     async function updateAccountOrder(orderedAccounts, companyId) {
@@ -240,7 +322,8 @@ const FirebaseService = (() => {
         const snap = await db.collection('accounts').where('companyId', '==', companyId).get();
         const ops = [];
         snap.forEach(doc => {
-            const idx = orderedAccounts.indexOf(doc.data().name);
+            const accountId = String(doc.data().accountId || doc.id || '').trim();
+            const idx = orderedAccounts.indexOf(accountId);
             if (idx !== -1) ops.push(b => b.update(doc.ref, { position: idx }));
         });
         await commitInChunks(ops);
@@ -382,6 +465,100 @@ const FirebaseService = (() => {
             console.error('Error deleting money backup:', e);
             return { success: false, message: 'Failed to delete money backup: ' + e.message };
         }
+    }
+
+    async function createKarigarResetBackup(payload = {}) {
+        init();
+        const safeCompanyId = String(payload.companyId || 'company1').trim();
+        const actor = payload.actor || null;
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        const normalizedRows = rows.map(tx => {
+            const safeType = String(tx.type || 'jama').trim().toLowerCase();
+            return {
+                id: String(tx.id || '').trim(),
+                companyId: String(tx.companyId || safeCompanyId).trim(),
+                karigarId: String(tx.karigarId || '').trim(),
+                karigarName: String(tx.karigarName || '').trim(),
+                type: safeType || 'jama',
+                date: normalizeISODate(tx.date) || '',
+                transactionDateTime: normalizeISODateTime(tx.transactionDateTime || tx.dateTime || tx.createdAt || tx.date) || '',
+                designName: String(tx.designName || '').trim(),
+                size: String(tx.size || '').trim(),
+                pic: parseInt(tx.pic, 10) || 0,
+                price: parseFloat(tx.price) || 0,
+                total: parseFloat(tx.total) || 0,
+                upadAmount: parseFloat(tx.upadAmount) || 0,
+                amount: parseFloat(tx.amount) || 0,
+                createdFrom: String(tx.createdFrom || tx.source || tx.dashboard || tx.addedBy || '').trim(),
+                source: String(tx.source || tx.createdFrom || tx.dashboard || tx.addedBy || '').trim(),
+                addedBy: String(tx.addedBy || '').trim()
+            };
+        });
+
+        const summary = normalizedRows.reduce((acc, tx) => {
+            if (tx.type === 'jama') {
+                acc.totalJama += parseFloat(tx.total) || 0;
+                acc.totalUpad += parseFloat(tx.upadAmount) || 0;
+            } else {
+                acc.totalUpad += parseFloat(tx.amount) || 0;
+            }
+            return acc;
+        }, { totalJama: 0, totalUpad: 0, count: normalizedRows.length });
+        summary.netBalance = Math.round(((summary.totalJama - summary.totalUpad) + Number.EPSILON) * 100) / 100;
+        summary.totalJama = Math.round((summary.totalJama + Number.EPSILON) * 100) / 100;
+        summary.totalUpad = Math.round((summary.totalUpad + Number.EPSILON) * 100) / 100;
+
+        const snapshotAt = new Date().toISOString();
+        const docRef = await db.collection('karigar_reset_backups').add({
+            companyId: safeCompanyId,
+            rows: normalizedRows,
+            summary,
+            snapshotAt,
+            ...buildActorMeta(actor, 'created'),
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        return { success: true, id: docRef.id, snapshotAt };
+    }
+
+    async function getKarigarResetBackups(companyId = 'company1', limitCount = 60) {
+        init();
+        const safeCompanyId = String(companyId || 'company1').trim();
+        const safeLimit = Math.max(1, parseInt(limitCount, 10) || 60);
+
+        let snap;
+        try {
+            snap = await db.collection('karigar_reset_backups')
+                .where('companyId', '==', safeCompanyId)
+                .orderBy('createdAt', 'desc')
+                .limit(safeLimit)
+                .get();
+        } catch (e) {
+            snap = await db.collection('karigar_reset_backups')
+                .where('companyId', '==', safeCompanyId)
+                .limit(safeLimit)
+                .get();
+        }
+
+        const data = [];
+        snap.forEach(doc => {
+            const d = doc.data() || {};
+            data.push({
+                id: doc.id,
+                companyId: String(d.companyId || safeCompanyId).trim(),
+                rows: Array.isArray(d.rows) ? d.rows : [],
+                summary: d.summary || { totalJama: 0, totalUpad: 0, netBalance: 0, count: 0 },
+                snapshotAt: d.snapshotAt || '',
+                createdAt: d.createdAt || null,
+                createdFrom: String(d.createdFrom || d.source || '').trim()
+            });
+        });
+
+        data.sort((a, b) => {
+            const ad = String(a.snapshotAt || '').trim();
+            const bd = String(b.snapshotAt || '').trim();
+            return bd.localeCompare(ad);
+        });
+        return { success: true, data };
     }
 
     // ───── ORDERS ─────
@@ -529,16 +706,18 @@ const FirebaseService = (() => {
             karigars: [],
             karigarTransactions: [],
             designPrices: {},
+            designPriceHistory: [],
             moneyBackups: []
         };
         
-        const [c1a, c2a, rem, kars, txs, dps, mbks] = await Promise.all([
+        const [c1a, c2a, rem, kars, txs, dps, dph, mbks] = await Promise.all([
             db.collection('accounts').where('companyId', '==', 'company1').get(),
             db.collection('accounts').where('companyId', '==', 'company2').get(),
             db.collection('remarks').get(),
             db.collection('karigars').get(),
             db.collection('karigar_transactions').orderBy('date', 'desc').get(),
             db.collection('design_prices').get(),
+            db.collection('design_price_history').get(),
             db.collection('money_backups').get()
         ]);
 
@@ -572,7 +751,63 @@ const FirebaseService = (() => {
         rem.forEach(d => { result.remarks[d.id] = d.data().remark; });
         kars.forEach(d => result.karigars.push(d.data()));
         txs.forEach(d => result.karigarTransactions.push(d.data()));
-        dps.forEach(d => result.designPrices[d.id] = d.data().price);
+        const historyMap = new Map();
+        dph.forEach(d => {
+            const raw = d.data() || {};
+            const key = String(raw.key || '').trim().toUpperCase();
+            if (!key) return;
+            const effectiveFrom = normalizeISODateTime(raw.effectiveFrom || raw.effectiveFromLatest || raw.updatedAt || raw.createdAt || new Date());
+            if (!effectiveFrom) return;
+            const price = parseFloat(raw.price) || 0;
+            const updatedAtIso = serializeTs(raw.updatedAt || raw.createdAt || new Date());
+            const uniq = `global|${key}|${effectiveFrom}`;
+            const prev = historyMap.get(uniq);
+            const prevMs = prev ? (parseFlexibleDateValue(prev.updatedAt)?.getTime() || 0) : -1;
+            const curMs = parseFlexibleDateValue(raw.updatedAt || raw.createdAt)?.getTime() || 0;
+            if (!prev || curMs >= prevMs) {
+                historyMap.set(uniq, {
+                    companyId: 'global',
+                    key,
+                    price,
+                    effectiveFrom,
+                    updatedAt: updatedAtIso
+                });
+            }
+        });
+        result.designPriceHistory = Array.from(historyMap.values())
+            .sort((a, b) => {
+                const k = String(a.key || '').localeCompare(String(b.key || ''));
+                if (k !== 0) return k;
+                return String(a.effectiveFrom || '').localeCompare(String(b.effectiveFrom || ''));
+            });
+
+        const nowIso = normalizeISODateTime(new Date());
+        const historyByKey = {};
+        result.designPriceHistory.forEach(point => {
+            const key = String(point.key || '').trim().toUpperCase();
+            if (!key) return;
+            if (!historyByKey[key]) historyByKey[key] = [];
+            historyByKey[key].push(point);
+        });
+        Object.keys(historyByKey).forEach(key => {
+            const points = historyByKey[key].sort((a, b) => String(a.effectiveFrom).localeCompare(String(b.effectiveFrom)));
+            let selected = points[points.length - 1];
+            points.forEach(p => {
+                if (String(p.effectiveFrom || '') <= nowIso) selected = p;
+            });
+            if (selected) result.designPrices[key] = parseFloat(selected.price) || 0;
+        });
+
+        dps.forEach(d => {
+            const raw = d.data() || {};
+            const cid = String(raw.companyId || '').trim().toLowerCase();
+            if (cid && cid !== 'global') return;
+            const key = String(raw.key || '').trim().toUpperCase() || String(d.id || '').split('__').slice(1).join('__').trim().toUpperCase();
+            if (!key) return;
+            if (typeof result.designPrices[key] === 'undefined') {
+                result.designPrices[key] = parseFloat(raw.price) || 0;
+            }
+        });
         mbks.forEach(d => result.moneyBackups.push(d.data()));
         
         return result;
@@ -626,6 +861,58 @@ const FirebaseService = (() => {
         }
     }
 
+    async function clearOldOrders(keepDays = 30) {
+        init();
+        const safeKeepDays = Math.max(1, parseInt(keepDays, 10) || 30);
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - safeKeepDays);
+        const cutoffISO = new Date(cutoff.getTime() - (cutoff.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+
+        let totalDeleted = 0;
+        const oldDates = [];
+        const summarySnap = await db.collection('daily_summary').where('date', '<', cutoffISO).get();
+        if (!summarySnap.empty) {
+            const ops = [];
+            summarySnap.forEach(doc => {
+                oldDates.push(String(doc.id || '').trim());
+                ops.push(b => b.delete(doc.ref));
+            });
+            await commitInChunks(ops);
+            totalDeleted += summarySnap.size;
+        }
+
+        const partitions = new Set();
+        oldDates.forEach(d => {
+            if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                partitions.add(`orders_${d.substring(0, 4)}_${d.substring(5, 7)}`);
+            }
+        });
+
+        for (const partition of partitions) {
+            const snap = await db.collection(partition).where('date', '<', cutoffISO).get();
+            if (snap.empty) continue;
+            const ops = [];
+            snap.forEach(doc => ops.push(b => b.delete(doc.ref)));
+            await commitInChunks(ops);
+            totalDeleted += snap.size;
+        }
+
+        // Legacy fallback collection
+        try {
+            const legacySnap = await db.collection('daily_orders').where('date', '<', cutoffISO).get();
+            if (!legacySnap.empty) {
+                const ops = [];
+                legacySnap.forEach(doc => ops.push(b => b.delete(doc.ref)));
+                await commitInChunks(ops);
+                totalDeleted += legacySnap.size;
+            }
+        } catch (e) {
+            console.warn('clearOldOrders legacy cleanup skipped:', e);
+        }
+
+        return totalDeleted;
+    }
+
     async function getBackupMeta() {
         init();
         const doc = await db.collection('system').doc('backupMeta').get();
@@ -677,21 +964,16 @@ const FirebaseService = (() => {
 
     function buildActorMeta(actor, phase) {
         const safe = actor || {};
-        const role = String(safe.role || '').trim() || 'unknown';
-        const username = String(safe.username || '').trim() || 'unknown';
-        const displayName = String(safe.displayName || '').trim() || username;
-        const dashboard = String(safe.dashboard || safe.source || 'web_app').trim();
-        const source = String(safe.source || dashboard || 'web_app').trim();
+        const actorAccount = String(safe.actorAccount || safe.source || '').trim();
+        const dashboard = String(safe.dashboard || '').trim();
         const dashboardId = String(safe.dashboardId || '').trim();
-        const base = {
-            source,
-            dashboard,
+        const fromValue = actorAccount || dashboard || 'unknown';
+        return {
+            source: fromValue,
+            dashboard: fromValue,
             dashboardId,
-            [`${phase}ByRole`]: role,
-            [`${phase}ByUser`]: username,
-            [`${phase}ByName`]: displayName
+            [`${phase}From`]: fromValue
         };
-        return base;
     }
 
     function isAdminActor(actor) {
@@ -865,37 +1147,57 @@ const FirebaseService = (() => {
         const safeCompanyId = String(companyId || 'company1').trim();
         if (Object.keys(_allKarigarsMap).length === 0) {
             try {
-                await getKarigars(safeCompanyId);
+                await Promise.all([getKarigars('company1'), getKarigars('company2')]);
             } catch (e) {
                 console.warn('Karigar map bootstrap failed:', e);
             }
         }
 
-        const karigarNameToId = {};
+        const karigarNameToIdByCompany = { company1: {}, company2: {} };
         const karigarIdToName = {};
         Object.values(_allKarigarsMap).forEach(k => {
             if (!k || typeof k !== 'object') return;
             const id = String(k.id || '').trim();
             const name = String(k.name || '').trim();
+            const cid = String(k.companyId || 'company1').trim();
             if (!id) return;
-            if (name) karigarNameToId[normalizeNameKey(name)] = id;
+            if (name) karigarNameToIdByCompany[cid][normalizeNameKey(name)] = id;
             if (name) karigarIdToName[id] = name;
         });
 
-        const snap = await db.collection('karigar_transactions')
-            .where('companyId', '==', safeCompanyId)
-            .get();
+        const snap = await db.collection('karigar_transactions').get();
         const results = [];
         for (const doc of snap.docs) {
             const data = doc.data() || {};
             const rawId = String(data.karigarId || '').trim();
             const rawName = String(data.karigarName || '').trim();
+            const rawCompanyId = String(data.companyId || '').trim();
             const nameKey = normalizeNameKey(rawName);
 
             let resolvedId = rawId;
-            if (!isPrefixedId(resolvedId, 'kar_') && nameKey && karigarNameToId[nameKey]) {
-                resolvedId = karigarNameToId[nameKey];
+            let resolvedCompanyId = rawCompanyId;
+
+            if (!isPrefixedId(resolvedId, 'kar_')) {
+                if (resolvedCompanyId && karigarNameToIdByCompany[resolvedCompanyId] && nameKey) {
+                    resolvedId = karigarNameToIdByCompany[resolvedCompanyId][nameKey] || resolvedId;
+                } else if (nameKey) {
+                    const c1Id = karigarNameToIdByCompany.company1[nameKey] || '';
+                    const c2Id = karigarNameToIdByCompany.company2[nameKey] || '';
+                    if (c1Id && !c2Id) {
+                        resolvedId = c1Id;
+                        resolvedCompanyId = 'company1';
+                    } else if (c2Id && !c1Id) {
+                        resolvedId = c2Id;
+                        resolvedCompanyId = 'company2';
+                    }
+                }
             }
+
+            if (!resolvedCompanyId && isPrefixedId(resolvedId, 'kar_')) {
+                resolvedCompanyId = String(_allKarigarsMap[resolvedId]?.companyId || '').trim();
+            }
+            if (!resolvedCompanyId) resolvedCompanyId = safeCompanyId;
+            if (resolvedCompanyId !== safeCompanyId) continue;
 
             let resolvedName = rawName;
             if (!resolvedName && resolvedId && karigarIdToName[resolvedId]) {
@@ -905,6 +1207,7 @@ const FirebaseService = (() => {
             const patch = {};
             if (resolvedId && resolvedId !== rawId) patch.karigarId = resolvedId;
             if (resolvedName && resolvedName !== rawName) patch.karigarName = resolvedName;
+            if (resolvedCompanyId && resolvedCompanyId !== rawCompanyId) patch.companyId = resolvedCompanyId;
             if (Object.keys(patch).length > 0) {
                 await doc.ref.update(patch);
             }
@@ -912,12 +1215,11 @@ const FirebaseService = (() => {
             results.push({
                 id: doc.id,
                 ...data,
-                companyId: safeCompanyId,
+                companyId: resolvedCompanyId,
                 karigarId: resolvedId || rawId,
                 karigarName: resolvedName || rawName
             });
         }
-        // Sorting will be done locally for better performance
         return { success: true, data: results };
     }
 
@@ -965,20 +1267,33 @@ const FirebaseService = (() => {
     async function addKarigarJama(data) {
         init();
         const docRef = db.collection('karigar_transactions').doc();
-        const price = parseFloat(data.price) || 0;
-        const pic = parseInt(data.pic) || 0;
-        const total = Math.round(((price * pic) + Number.EPSILON) * 100) / 100;
-        const upadAmount = parseFloat(data.upadAmount) || 0;
+        const pic = parseInt(data.pic, 10) || 0;
         const safeCompanyId = String(data.companyId || 'company1').trim();
         const actor = data.actor || null;
-        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName, safeCompanyId, actor);
         const safeDate = String(data.date || '').split('T')[0];
+        const transactionDateTime = normalizeISODateTime(data.transactionDateTime || data.date, safeDate) || `${safeDate}T00:00:00`;
+        const safeTxDate = normalizeISODate(transactionDateTime) || safeDate;
+        const designKey = String(data.designName || '').trim().toUpperCase();
+        let price = parseFloat(data.price);
+        if (!Number.isFinite(price) || price < 0) price = 0;
+        if (!isAdminActor(actor)) {
+            const resolvedPrices = await getDesignPrices('global', transactionDateTime);
+            const autoPrice = parseFloat(resolvedPrices?.data?.[designKey]);
+            if (!Number.isFinite(autoPrice) || autoPrice < 0) {
+                throw new Error('Saved design price is required for non-admin Jama entry');
+            }
+            price = autoPrice;
+        }
+        const total = Math.round(((price * pic) + Number.EPSILON) * 100) / 100;
+        const upadAmount = isAdminActor(actor) ? (parseFloat(data.upadAmount) || 0) : 0;
+        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName, safeCompanyId, actor);
 
         await docRef.set({
             type: 'jama',
             karigarId: resolvedKarigarId,
             karigarName: String(data.karigarName || '').trim(),
-            date: safeDate,
+            date: safeTxDate,
+            transactionDateTime: transactionDateTime,
             designName: data.designName,
             size: data.size || '',
             pic: pic,
@@ -991,11 +1306,9 @@ const FirebaseService = (() => {
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
-        if (data.designName && data.price) {
-            await db.collection('design_prices').doc(data.designName.toString().trim().toUpperCase()).set({
-                price: price,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
+        if (data.designName && Number.isFinite(price) && price >= 0) {
+            const key = data.designName.toString().trim().toUpperCase();
+            await saveDesignPricePoint('global', key, price, transactionDateTime, actor);
         }
         return { success: true };
     }
@@ -1008,11 +1321,14 @@ const FirebaseService = (() => {
         const actor = data.actor || null;
         const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName, safeCompanyId, actor);
         const safeDate = String(data.date || '').split('T')[0];
+        const transactionDateTime = normalizeISODateTime(data.transactionDateTime || data.date, safeDate) || `${safeDate}T00:00:00`;
+        const safeTxDate = normalizeISODate(transactionDateTime) || safeDate;
         await docRef.set({
             type: 'upad',
             karigarId: resolvedKarigarId,
             karigarName: String(data.karigarName || '').trim(),
-            date: safeDate,
+            date: safeTxDate,
+            transactionDateTime: transactionDateTime,
             amount: parseFloat(data.amount),
             companyId: safeCompanyId,
             addedBy: data.addedBy || 'admin',
@@ -1043,7 +1359,17 @@ const FirebaseService = (() => {
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         };
 
-        if (typeof updates.date !== 'undefined') patch.date = String(updates.date || '').split('T')[0];
+        if (typeof updates.transactionDateTime !== 'undefined') {
+            const normalizedDT = normalizeISODateTime(updates.transactionDateTime, updates.date || current.date);
+            if (normalizedDT) {
+                patch.transactionDateTime = normalizedDT;
+                patch.date = normalizeISODate(normalizedDT);
+            }
+        } else if (typeof updates.date !== 'undefined') {
+            patch.date = String(updates.date || '').split('T')[0];
+            const currentTime = String(current.transactionDateTime || '').split('T')[1] || '00:00:00';
+            patch.transactionDateTime = `${patch.date}T${currentTime}`;
+        }
         if (typeof updates.designName !== 'undefined') patch.designName = String(updates.designName || '').trim();
         if (typeof updates.size !== 'undefined') patch.size = String(updates.size || '').trim();
         if (typeof updates.pic !== 'undefined') patch.pic = parseInt(updates.pic, 10) || 0;
@@ -1101,12 +1427,83 @@ const FirebaseService = (() => {
         return deletedCount;
     }
 
-    async function getDesignPrices() {
+    async function getDesignPrices(companyId = 'global', asOfDate = '') {
         init();
-        const snap = await db.collection('design_prices').get();
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        const safeAsOfDate = normalizeISODateTime(asOfDate) || normalizeISODateTime(new Date());
         const map = {};
-        snap.forEach(doc => { map[doc.id] = doc.data().price; });
-        return { success: true, data: map };
+        const historyByKey = {};
+        const pointMapByKey = {};
+        const historySnap = safeCompanyId === 'global'
+            ? await db.collection('design_price_history').get()
+            : await db.collection('design_price_history').where('companyId', '==', safeCompanyId).get();
+        historySnap.forEach(doc => {
+            const data = doc.data() || {};
+            if (safeCompanyId !== 'global' && String(data.companyId || '').trim() !== safeCompanyId) return;
+            const key = String(data.key || '').trim().toUpperCase();
+            const eff = normalizeISODateTime(data.effectiveFrom || data.updatedAt) || '';
+            if (!key || !eff) return;
+            const price = parseFloat(data.price) || 0;
+            const updatedAtMs = parseFlexibleDateValue(data.updatedAt)?.getTime() || 0;
+            if (!pointMapByKey[key]) pointMapByKey[key] = {};
+            const prev = pointMapByKey[key][eff];
+            if (!prev || updatedAtMs >= (prev.updatedAtMs || 0)) {
+                pointMapByKey[key][eff] = { effectiveFrom: eff, price, updatedAtMs };
+            }
+        });
+
+        Object.keys(pointMapByKey).forEach(key => {
+            historyByKey[key] = Object.values(pointMapByKey[key])
+                .map(p => ({ effectiveFrom: p.effectiveFrom, price: p.price }))
+                .sort((a, b) => String(a.effectiveFrom).localeCompare(String(b.effectiveFrom)));
+            let chosen = null;
+            historyByKey[key].forEach(point => {
+                if (point.effectiveFrom <= safeAsOfDate) chosen = point;
+            });
+            if (chosen) map[key] = chosen.price;
+        });
+
+        const scopedSnap = safeCompanyId === 'global'
+            ? await db.collection('design_prices').get()
+            : await db.collection('design_prices').where('companyId', '==', safeCompanyId).get();
+        scopedSnap.forEach(doc => {
+            const data = doc.data() || {};
+            if (safeCompanyId !== 'global' && String(data.companyId || '').trim() !== safeCompanyId) return;
+            const key = String(data.key || '').trim().toUpperCase() || String(doc.id || '').split('__').slice(1).join('__').trim().toUpperCase();
+            if (!key) return;
+            if (typeof map[key] === 'undefined') map[key] = parseFloat(data.price) || 0;
+        });
+
+        // Backward compatibility for old global records.
+        if (Object.keys(map).length === 0) {
+            const legacySnap = await db.collection('design_prices').get();
+            legacySnap.forEach(doc => {
+                const data = doc.data() || {};
+                if (data.companyId) return;
+                const key = String(doc.id || '').trim().toUpperCase();
+                if (!key) return;
+                if (typeof map[key] === 'undefined') map[key] = parseFloat(data.price) || 0;
+            });
+        }
+        return { success: true, data: map, history: historyByKey, companyId: safeCompanyId, asOfDate: safeAsOfDate };
+    }
+
+    async function upsertDesignPrice(designKey, price, actor = null, companyId = 'global', effectiveFrom = '', options = null) {
+        init();
+        if (!isAdminActor(actor)) return { success: false, message: 'Only admin can update prices' };
+        const safeKey = String(designKey || '').trim().toUpperCase();
+        const safePrice = parseFloat(price);
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        if (!safeKey) return { success: false, message: 'Design/Size key required' };
+        if (!Number.isFinite(safePrice) || safePrice < 0) return { success: false, message: 'Invalid price' };
+        const safeOptions = (options && typeof options === 'object') ? options : {};
+        const replaceFromEffectiveFrom = normalizeISODateTime(safeOptions.replaceFromEffectiveFrom || '');
+        if (replaceFromEffectiveFrom) {
+            const replaceFromKey = String(safeOptions.replaceFromKey || safeKey).trim().toUpperCase();
+            await deleteDesignPricePoint(safeCompanyId, replaceFromKey, replaceFromEffectiveFrom);
+        }
+        const point = await saveDesignPricePoint(safeCompanyId, safeKey, safePrice, effectiveFrom, actor);
+        return { success: true, companyId: safeCompanyId, key: safeKey, effectiveFrom: point.safeEffectiveFrom };
     }
 
     // ───── MIGRATE LEGACY ORDERS ─────
@@ -1429,8 +1826,9 @@ const FirebaseService = (() => {
         return totalDeleted;
     }
 
-    async function replaceFromSheets(sheetData) {
+    async function replaceFromSheets(sheetData, opts = {}) {
         init();
+        const fastMode = opts.fast !== false;
 
         const orderPartitions = new Set();
 
@@ -1454,11 +1852,14 @@ const FirebaseService = (() => {
             }
         }
 
-        // Safety sweep for unknown historical monthly partitions.
-        const currentYear = new Date().getFullYear();
-        for (let y = 2018; y <= currentYear + 3; y++) {
-            for (let m = 1; m <= 12; m++) {
-                orderPartitions.add(`orders_${y}_${String(m).padStart(2, '0')}`);
+        // Fast mode avoids brute-force sweeping hundreds of monthly collections.
+        // It clears only partitions discoverable from existing summaries + incoming sheet rows.
+        if (!fastMode) {
+            const currentYear = new Date().getFullYear();
+            for (let y = 2018; y <= currentYear + 3; y++) {
+                for (let m = 1; m <= 12; m++) {
+                    orderPartitions.add(`orders_${y}_${String(m).padStart(2, '0')}`);
+                }
             }
         }
 
@@ -1468,6 +1869,7 @@ const FirebaseService = (() => {
             'karigars',
             'karigar_transactions',
             'design_prices',
+            'design_price_history',
             'money_backups',
             'money_records',
             'daily_summary',
@@ -1490,7 +1892,7 @@ const FirebaseService = (() => {
         _allKarigarsMap = {};
 
         const syncResult = await syncFromSheets(sheetData || {});
-        return { ...syncResult, deleted };
+        return { ...syncResult, deleted, fastMode };
     }
 
     /**
@@ -1613,12 +2015,13 @@ const FirebaseService = (() => {
         for (const k of karigars) {
             if (!k.name) continue;
             const kCompanyId = String(k.companyId || 'company1').trim();
+            const createdFrom = String(k.createdFrom || k.dashboard || k.source || k.addedBy || '').trim();
+            const updatedFrom = String(k.updatedFrom || '').trim();
             const karigarAudit = {
-                createdByName: String(k.createdByName || '').trim(),
-                createdByUser: String(k.createdByUser || '').trim(),
-                createdByRole: String(k.createdByRole || '').trim(),
-                source: String(k.source || '').trim(),
-                dashboard: String(k.dashboard || '').trim()
+                createdFrom: createdFrom,
+                updatedFrom: updatedFrom,
+                source: createdFrom || '',
+                dashboard: createdFrom || ''
             };
             const snap = await db.collection('karigars')
                 .where('name', '==', k.name)
@@ -1658,20 +2061,30 @@ const FirebaseService = (() => {
             const txNameKey = normalizeNameKey(txName);
             const txCompanyId = String(tx.companyId || 'company1').trim();
             const rawTxId = String(tx.karigarId || '').trim();
+            const normalizedTxType = String(tx.type || 'jama').trim().toLowerCase() || 'jama';
             let txKarigarId = rawTxId;
             if (!isPrefixedId(txKarigarId, 'kar_') && txNameKey && karigarNameToId[`${txCompanyId}|${txNameKey}`]) {
                 txKarigarId = karigarNameToId[`${txCompanyId}|${txNameKey}`];
             }
+            if (!isPrefixedId(txKarigarId, 'kar_') && txName) {
+                // Never drop valid sheet rows just because old IDs are malformed.
+                txKarigarId = await resolveKarigarIdForWrite(rawTxId, txName, txCompanyId, null);
+                if (isPrefixedId(txKarigarId, 'kar_')) {
+                    karigarNameToId[`${txCompanyId}|${txNameKey}`] = txKarigarId;
+                }
+            }
             if (!isPrefixedId(txKarigarId, 'kar_')) continue;
 
             const safeDate = String(tx.date || '').split('T')[0];
+            const safeDateTime = normalizeISODateTime(tx.transactionDateTime || tx.dateTime || tx.createdAt || tx.date, safeDate) || `${safeDate}T00:00:00`;
+            const createdAtDate = parseFlexibleDateValue(tx.createdAt);
 
             // Dedup safely with broad query, then strict local compare.
             const snap = await db.collection('karigar_transactions')
                 .where('date', '==', safeDate)
                 .where('karigarId', '==', txKarigarId)
                 .where('companyId', '==', txCompanyId)
-                .where('type', '==', tx.type || 'jama')
+                .where('type', '==', normalizedTxType)
                 .get();
 
             const txDesign = String(tx.designName || '').trim();
@@ -1682,50 +2095,62 @@ const FirebaseService = (() => {
             const txUpad = parseFloat(tx.upadAmount) || 0;
             const isDuplicate = snap.docs.some(doc => {
                 const d = doc.data() || {};
+                const existingCreatedAt = parseFlexibleDateValue(d.createdAt);
+                const createdAtMatches = createdAtDate && existingCreatedAt
+                    ? Math.abs(existingCreatedAt.getTime() - createdAtDate.getTime()) < 1000
+                    : false;
                 return String(d.designName || '').trim() === txDesign &&
                     String(d.size || '').trim() === txSize &&
                     (parseInt(d.pic, 10) || 0) === txPic &&
                     (parseFloat(d.price) || 0) === txPrice &&
                     (parseFloat(d.total) || 0) === txTotal &&
-                    (parseFloat(d.upadAmount) || 0) === txUpad;
+                    (parseFloat(d.upadAmount) || 0) === txUpad &&
+                    createdAtMatches;
             });
             
             if (!isDuplicate) {
-                const createdAtDate = parseFlexibleDateValue(tx.createdAt);
+                const txCreatedFrom = String(tx.createdFrom || tx.dashboard || tx.source || tx.addedBy || '').trim();
                 await db.collection('karigar_transactions').add({
                     date: safeDate,
+                    transactionDateTime: safeDateTime,
                     karigarId: txKarigarId,
                     karigarName: txName || '',
                     companyId: txCompanyId,
-                    type: tx.type || 'jama',
+                    type: normalizedTxType,
                     designName: txDesign,
                     size: txSize,
                     pic: txPic,
                     price: txPrice,
                     total: txTotal,
                     upadAmount: txUpad,
-                    createdByName: String(tx.createdByName || '').trim(),
-                    createdByUser: String(tx.createdByUser || '').trim(),
-                    createdByRole: String(tx.createdByRole || '').trim(),
-                    updatedByName: String(tx.updatedByName || '').trim(),
-                    updatedByUser: String(tx.updatedByUser || '').trim(),
-                    updatedByRole: String(tx.updatedByRole || '').trim(),
-                    source: String(tx.source || '').trim(),
-                    dashboard: String(tx.dashboard || '').trim(),
+                    createdFrom: txCreatedFrom,
+                    updatedFrom: String(tx.updatedFrom || '').trim(),
+                    source: txCreatedFrom,
+                    dashboard: txCreatedFrom,
                     createdAt: createdAtDate || firebase.firestore.FieldValue.serverTimestamp()
                 });
                 stats.karigarTxs++;
             }
         }
         
-        // 5. Sync Design Prices
+        // 5. Sync Design Price History (date-effective, key-based)
+        const priceHistory = sheetData.designPriceHistory || [];
+        for (const point of priceHistory) {
+            const key = String(point.key || point.designKey || '').trim().toUpperCase();
+            const eff = normalizeISODateTime(point.effectiveFrom || point.updatedAt) || normalizeISODateTime(new Date());
+            const price = parseFloat(point.price) || 0;
+            if (!key) continue;
+            await saveDesignPricePoint('global', key, price, eff, null);
+            stats.designPrices++;
+        }
+
+        // 6. Sync latest Design Prices (legacy map)
         const prices = sheetData.designPrices || {};
         for (const [name, price] of Object.entries(prices)) {
-            await db.collection('design_prices').doc(name).set({
-                price: parseInt(price) || 0,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-            stats.designPrices++;
+            const key = String(name || '').trim().toUpperCase();
+            if (!key) continue;
+            await saveDesignPricePoint('global', key, parseFloat(price) || 0, normalizeISODateTime(new Date()), null);
+            stats.designPrices += 1;
         }
         
         return { success: true, stats };
@@ -1738,12 +2163,13 @@ const FirebaseService = (() => {
         init, getDb,
         // Accounts
         getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney, createMoneyBackup, getMoneyBackups, deleteMoneyBackup,
+        createKarigarResetBackup, getKarigarResetBackups,
         // Orders
         getOrders, submitOrders, updateOrder,
         // Remarks
         saveRemark, getRemarks,
         // Backup
-        getAllDataForBackup, backupAndArchiveMonthlyData, getBackupMeta, setBackupMeta,
+        getAllDataForBackup, backupAndArchiveMonthlyData, clearOldOrders, getBackupMeta, setBackupMeta,
         // Migration
         seedFromSheets, isEmpty, migrateLegacyOrdersToDailyOrders, migrateDatabaseToIds,
         // Karigar
@@ -1754,6 +2180,7 @@ const FirebaseService = (() => {
         deleteKarigarTransaction,
         clearKarigarMonthlyData,
         getDesignPrices,
+        upsertDesignPrice,
         // Write buffer
         bufferWrite, flushWrites, getPendingCount,
         // Integrity Fix

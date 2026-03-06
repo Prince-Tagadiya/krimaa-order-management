@@ -807,6 +807,18 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     background: #f1f5f9;
     color: var(--text-muted);
 }
+.sync-indicator.sync-queued {
+    background: #fef3c7;
+    color: #92400e;
+}
+.sync-indicator.sync-running {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+.sync-indicator.sync-success {
+    background: #dcfce7;
+    color: #15803d;
+}
 .sync-indicator i {
     font-size: 1rem;
 }

@@ -8,8 +8,6 @@ var COMPANIES = {
 };
 var REMARKS_SHEET = 'Remarks';
 var MONEY_BACKUP_SHEET = 'Money_Backups';
-var KARIGAR_SHEET = 'Karigars'; // legacy fallback
-var KARIGAR_TX_SHEET = 'Karigar_Transactions'; // legacy fallback
 var KARIGAR_SHEETS = {
   company1: 'Karigars_C1',
   company2: 'Karigars_C2'
@@ -19,6 +17,7 @@ var KARIGAR_TX_SHEETS = {
   company2: 'Karigar_Transactions_C2'
 };
 var DESIGN_PRICES_SHEET = 'Design_Prices';
+var DESIGN_PRICE_HISTORY_SHEET = 'Design_Price_History';
 var _sheetsInitialised = {};
 
 function normalizeCompanyId(companyId) {
@@ -98,24 +97,22 @@ function parseFlexibleDateTime(value, fallbackDateStr) {
 
 function getKarigarSheetName(companyId) {
   var cid = normalizeCompanyId(companyId);
-  return KARIGAR_SHEETS[cid] || KARIGAR_SHEET;
+  return KARIGAR_SHEETS[cid] || KARIGAR_SHEETS.company1;
 }
 
 function getKarigarTxSheetName(companyId) {
   var cid = normalizeCompanyId(companyId);
-  return KARIGAR_TX_SHEETS[cid] || KARIGAR_TX_SHEET;
+  return KARIGAR_TX_SHEETS[cid] || KARIGAR_TX_SHEETS.company1;
 }
 
 function getKarigarHeaderRow() {
-  return ['Karigar ID', 'Name', 'Added At', 'Created By Name', 'Created By User', 'Created By Role', 'Source', 'Dashboard'];
+  return ['Karigar ID', 'Name', 'Added At', 'Created From', 'Updated From'];
 }
 
 function getKarigarTxHeaderRow() {
   return [
     'Date', 'Karigar ID', 'Karigar Name', 'Type', 'Design', 'Size', 'Pic', 'Price', 'Total Jama', 'Upad Amount', 'Created At',
-    'Created By Name', 'Created By User', 'Created By Role',
-    'Updated By Name', 'Updated By User', 'Updated By Role',
-    'Source', 'Dashboard'
+    'Created From', 'Updated From'
   ];
 }
 
@@ -145,8 +142,11 @@ function setupKarigarSheets(ss) {
     var sheet = ss.getSheetByName(sheetName);
     if (!sheet) sheet = ss.insertSheet(sheetName);
     var headers = getKarigarHeaderRow();
-    if (sheet.getMaxColumns() < headers.length) {
-      sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
+    var maxCols = sheet.getMaxColumns();
+    if (maxCols < headers.length) {
+      sheet.insertColumnsAfter(maxCols, headers.length - maxCols);
+    } else if (maxCols > headers.length) {
+      sheet.deleteColumns(headers.length + 1, maxCols - headers.length);
     }
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
@@ -157,8 +157,11 @@ function setupKarigarSheets(ss) {
     var txSheet = ss.getSheetByName(sheetName);
     if (!txSheet) txSheet = ss.insertSheet(sheetName);
     var headers = getKarigarTxHeaderRow();
-    if (txSheet.getMaxColumns() < headers.length) {
-      txSheet.insertColumnsAfter(txSheet.getMaxColumns(), headers.length - txSheet.getMaxColumns());
+    var maxCols = txSheet.getMaxColumns();
+    if (maxCols < headers.length) {
+      txSheet.insertColumnsAfter(maxCols, headers.length - maxCols);
+    } else if (maxCols > headers.length) {
+      txSheet.deleteColumns(headers.length + 1, maxCols - headers.length);
     }
     txSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     txSheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
@@ -171,16 +174,20 @@ function setupKarigarSheets(ss) {
   ensureKarigarTxSheet(KARIGAR_TX_SHEETS.company1);
   ensureKarigarTxSheet(KARIGAR_TX_SHEETS.company2);
 
-  // Keep legacy sheets available for old backups/migrations
-  ensureKarigarSheet(KARIGAR_SHEET);
-  ensureKarigarTxSheet(KARIGAR_TX_SHEET);
-
   var dpSheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
   if (!dpSheet) {
     dpSheet = ss.insertSheet(DESIGN_PRICES_SHEET);
     dpSheet.appendRow(['Design Name', 'Latest Price', 'Updated At']);
     dpSheet.getRange('A1:C1').setFontWeight('bold');
     dpSheet.setFrozenRows(1);
+  }
+
+  var dphSheet = ss.getSheetByName(DESIGN_PRICE_HISTORY_SHEET);
+  if (!dphSheet) {
+    dphSheet = ss.insertSheet(DESIGN_PRICE_HISTORY_SHEET);
+    dphSheet.appendRow(['Company ID', 'Design Key', 'Price', 'Effective From', 'Updated At']);
+    dphSheet.getRange('A1:E1').setFontWeight('bold');
+    dphSheet.setFrozenRows(1);
   }
 }
 
@@ -844,11 +851,8 @@ function saveFullBackup(data) {
       if (rawId && !isPrefixedId(rawId, 'kar_')) legacyKarigarIdToPrefixedIdByCompany[cid][rawId] = kId;
       karigarRowsByCompany[cid].push([
         kId, kName, addedAt,
-        String(k.createdByName || '').trim(),
-        String(k.createdByUser || '').trim(),
-        String(k.createdByRole || '').trim(),
-        String(k.source || '').trim(),
-        String(k.dashboard || '').trim()
+        String(k.createdFrom || k.dashboard || k.source || '').trim(),
+        String(k.updatedFrom || '').trim()
       ]);
     });
 
@@ -899,10 +903,10 @@ function saveFullBackup(data) {
         karigarNameToIdByCompany[txCompanyId][txNameKey] = normalizedTxId;
       }
 
-      var parsedTxDate = parseFlexibleDateTime(tx.date, Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
-      var dStr = Utilities.formatDate(parsedTxDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-      var createdAtDate = parseFlexibleDateTime(tx.createdAt || tx.addedAt || tx.updatedAt, dStr);
-      var dateWithTime = Utilities.formatDate(createdAtDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+      var parsedTxDateTime = parseFlexibleDateTime(tx.transactionDateTime || tx.date || tx.createdAt, Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var dStr = Utilities.formatDate(parsedTxDateTime, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      var createdAtDate = parseFlexibleDateTime(tx.createdAt || tx.addedAt || tx.updatedAt || tx.transactionDateTime, dStr);
+      var dateWithTime = Utilities.formatDate(parsedTxDateTime, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
 
       var key = dStr + "_" + normalizedTxId + "_" + tx.type + "_" + (tx.designName || '') + "_" + (tx.pic || '0');
       if (!existMapByCompany[txCompanyId][key]) {
@@ -918,14 +922,8 @@ function saveFullBackup(data) {
           tx.total || 0, 
           tx.amount || tx.upadAmount || 0,
           createdAtDate,
-          String(tx.createdByName || '').trim(),
-          String(tx.createdByUser || '').trim(),
-          String(tx.createdByRole || tx.addedBy || '').trim(),
-          String(tx.updatedByName || '').trim(),
-          String(tx.updatedByUser || '').trim(),
-          String(tx.updatedByRole || '').trim(),
-          String(tx.source || '').trim(),
-          String(tx.dashboard || '').trim()
+          String(tx.createdFrom || tx.dashboard || tx.source || '').trim(),
+          String(tx.updatedFrom || '').trim()
         ]);
       }
     });
@@ -953,6 +951,42 @@ function saveFullBackup(data) {
     if (rows.length > 0) {
       sheet.getRange(2, 1, rows.length, 3).setValues(rows);
       totalRows += rows.length;
+    }
+  }
+
+  // 5. Sync Design Price History
+  if (data.designPriceHistory) {
+    var dphSheet = ss.getSheetByName(DESIGN_PRICE_HISTORY_SHEET);
+    dphSheet.clear();
+    dphSheet.appendRow(['Company ID', 'Design Key', 'Price', 'Effective From', 'Updated At']);
+    dphSheet.getRange('A1:E1').setFontWeight('bold');
+    var dphMap = {};
+    (data.designPriceHistory || []).forEach(function(h) {
+      var rawCid = String(h.companyId || 'global').toLowerCase().trim();
+      var cid = rawCid === 'global' ? 'global' : normalizeCompanyId(rawCid || 'company1');
+      var key = String(h.key || h.designKey || '').trim().toUpperCase();
+      if (!key) return;
+      // Keep canonical global scope and second-level precision for integrity.
+      cid = 'global';
+      var effDate = parseFlexibleDateTime(h.effectiveFrom || h.updatedAt || new Date(), Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var updDate = parseFlexibleDateTime(h.updatedAt || h.createdAt || effDate, Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var eff = Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+      var upd = Utilities.formatDate(updDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+      var mapKey = cid + '|' + key + '|' + eff;
+      var prev = dphMap[mapKey];
+      if (!prev || upd > prev[4]) {
+        dphMap[mapKey] = [cid, key, parseFloat(h.price) || 0, eff, upd];
+      }
+    });
+    var dphRows = Object.keys(dphMap).map(function(k) { return dphMap[k]; });
+    dphRows.sort(function(a, b) {
+      if (a[1] !== b[1]) return a[1] > b[1] ? 1 : -1;
+      return a[3] > b[3] ? 1 : -1;
+    });
+    if (dphRows.length > 0) {
+      dphSheet.getRange(2, 1, dphRows.length, 5).setValues(dphRows);
+      dphSheet.getRange(2, 4, dphRows.length, 2).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+      totalRows += dphRows.length;
     }
   }
 
@@ -1686,10 +1720,12 @@ function getAllSheetData() {
     company2: { accounts: [], orders: [] },
     karigars: [],
     karigarTransactions: [],
-    designPrices: {}
+    designPrices: {},
+    designPriceHistory: []
   };
   var karigarCols = getKarigarHeaderRow().length;
   var karigarTxCols = getKarigarTxHeaderRow().length;
+  var karigarNameMap = { company1: {}, company2: {} };
   
   // Read Accounts + Orders per company
   ['company1', 'company2'].forEach(function(cid) {
@@ -1740,16 +1776,14 @@ function getAllSheetData() {
         var kid = String(data[i][0] || '').trim();
         var kname = String(data[i][1] || '').trim();
         if (!kname) continue;
+        if (kid) karigarNameMap[cid][kid] = kname;
         result.karigars.push({
           id: kid,
           name: kname,
           companyId: cid,
           addedAt: data[i][2] ? String(data[i][2]) : '',
-          createdByName: String(data[i][3] || '').trim(),
-          createdByUser: String(data[i][4] || '').trim(),
-          createdByRole: String(data[i][5] || '').trim(),
-          source: String(data[i][6] || '').trim(),
-          dashboard: String(data[i][7] || '').trim()
+          createdFrom: String(data[i][3] || '').trim(),
+          updatedFrom: String(data[i][4] || '').trim()
         });
       }
     }
@@ -1760,13 +1794,22 @@ function getAllSheetData() {
       for (var j = 0; j < txData.length; j++) {
         var parsedDate = parseFlexibleDateTime(txData[j][0], Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
         var dateOnly = Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        var txDateTime = Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
         var createdAtDate = parseFlexibleDateTime(txData[j][10] || txData[j][0], dateOnly);
         var createdAtStr = Utilities.formatDate(createdAtDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+        var txKarigarId = String(txData[j][1] || '').trim();
+        var txKarigarName = String(txData[j][2] || '').trim();
+        if (!txKarigarName && txKarigarId && karigarNameMap[cid][txKarigarId]) {
+          txKarigarName = karigarNameMap[cid][txKarigarId];
+        }
+        var txType = String(txData[j][3] || '').trim().toLowerCase();
+        if (!txType) txType = 'jama';
         result.karigarTransactions.push({
           date: dateOnly,
-          karigarId: String(txData[j][1] || '').trim(),
-          karigarName: String(txData[j][2] || '').trim(),
-          type: String(txData[j][3] || '').trim(),
+          transactionDateTime: txDateTime.replace(' ', 'T'),
+          karigarId: txKarigarId,
+          karigarName: txKarigarName,
+          type: txType,
           designName: String(txData[j][4] || '').trim(),
           size: String(txData[j][5] || '').trim(),
           pic: parseInt(txData[j][6]) || 0,
@@ -1775,14 +1818,11 @@ function getAllSheetData() {
           upadAmount: parseInt(txData[j][9]) || 0,
           companyId: cid,
           createdAt: createdAtStr,
-          createdByName: String(txData[j][11] || '').trim(),
-          createdByUser: String(txData[j][12] || '').trim(),
-          createdByRole: String(txData[j][13] || '').trim(),
-          updatedByName: String(txData[j][14] || '').trim(),
-          updatedByUser: String(txData[j][15] || '').trim(),
-          updatedByRole: String(txData[j][16] || '').trim(),
-          source: String(txData[j][17] || '').trim(),
-          dashboard: String(txData[j][18] || '').trim()
+          createdFrom: String(txData[j][11] || '').trim(),
+          updatedFrom: String(txData[j][12] || '').trim(),
+          source: String(txData[j][11] || '').trim(),
+          dashboard: String(txData[j][11] || '').trim(),
+          sourceRow: j + 2
         });
       }
     }
@@ -1794,8 +1834,38 @@ function getAllSheetData() {
     var data = dpSheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
       var designName = String(data[i][0] || '').trim();
-      if (designName) result.designPrices[designName] = parseInt(data[i][1]) || 0;
+      if (designName) result.designPrices[designName] = parseFloat(data[i][1]) || 0;
     }
+  }
+
+  // Read Design Price History
+  var dphSheet = ss.getSheetByName(DESIGN_PRICE_HISTORY_SHEET);
+  if (dphSheet && dphSheet.getLastRow() > 1) {
+    var dphData = dphSheet.getDataRange().getValues();
+    var dphMap = {};
+    for (var i = 1; i < dphData.length; i++) {
+      var rawCid = String(dphData[i][0] || 'global').toLowerCase().trim();
+      var cid = rawCid === 'global' ? 'global' : normalizeCompanyId(rawCid || 'company1');
+      var key = String(dphData[i][1] || '').trim().toUpperCase();
+      if (!key) continue;
+      var effDate = parseFlexibleDateTime(dphData[i][3], Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var updDate = parseFlexibleDateTime(dphData[i][4], Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var eff = Utilities.formatDate(effDate, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+      var upd = Utilities.formatDate(updDate, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+      var item = {
+        companyId: cid,
+        key: key,
+        price: parseFloat(dphData[i][2]) || 0,
+        effectiveFrom: eff,
+        updatedAt: upd
+      };
+      var mapKey = cid + '|' + key + '|' + eff;
+      var prev = dphMap[mapKey];
+      if (!prev || upd > prev.updatedAt) dphMap[mapKey] = item;
+    }
+    Object.keys(dphMap).sort().forEach(function(k) {
+      result.designPriceHistory.push(dphMap[k]);
+    });
   }
   
   return { success: true, data: result };
