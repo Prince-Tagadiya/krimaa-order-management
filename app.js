@@ -577,6 +577,59 @@ async function ensureLegacyOrdersMigrated() {
     }
 }
 
+async function autoFixMismatchedAccountNames() {
+    if (localStorage.getItem('mismatched_accounts_fixed_v1')) return;
+    try {
+        console.log("Checking for mismatched account names in historical daily_orders...");
+        let changed = false;
+        
+        const accountsC1Snap = await FirebaseService.db.collection('accounts').where('companyId', '==', 'company1').get();
+        const accountsC2Snap = await FirebaseService.db.collection('accounts').where('companyId', '==', 'company2').get();
+        
+        const accountsC1 = [];
+        const accountsC2 = [];
+        accountsC1Snap.forEach(d => accountsC1.push(d.data().name));
+        accountsC2Snap.forEach(d => accountsC2.push(d.data().name));
+        
+        const ordSnap = await FirebaseService.db.collection('daily_orders').get();
+        const ops = [];
+        
+        ordSnap.forEach(doc => {
+            const data = doc.data();
+            const companyId = data.companyId;
+            const validAccounts = companyId === 'company1' ? accountsC1 : accountsC2;
+            
+            let docChanged = false;
+            const newAccs = [...(data.accounts || [])];
+            
+            for(let i=0; i<newAccs.length; i++) {
+                const oldName = newAccs[i];
+                if (!validAccounts.includes(oldName)) {
+                    // Try to find a fuzzy match inside validAccounts
+                    const fuzzyMatch = validAccounts.find(v => oldName.toLowerCase().startsWith(v.toLowerCase()) || v.toLowerCase().startsWith(oldName.toLowerCase()) || (oldName.length > 5 && v.length > 5 && oldName.substring(0, 5).toLowerCase() === v.substring(0, 5).toLowerCase()));
+                    if (fuzzyMatch && fuzzyMatch !== oldName) {
+                        console.log(`Auto-fixing mismatch in ${companyId}: "${oldName}" -> "${fuzzyMatch}"`);
+                        newAccs[i] = fuzzyMatch;
+                        docChanged = true;
+                    }
+                }
+            }
+            if (docChanged) {
+                ops.push(b => b.update(doc.ref, { accounts: newAccs }));
+                changed = true;
+            }
+        });
+        
+        if (changed) {
+            await FirebaseService.commitInChunks(ops);
+            console.log("Mismatched accounts auto-fixed!");
+        }
+        localStorage.setItem('mismatched_accounts_fixed_v1', 'true');
+    } catch(e) {
+        console.error("Auto-fix failed:", e);
+    }
+}
+
 async function loadInitialData() {
     showLoader();
     try {
@@ -587,6 +640,7 @@ async function loadInitialData() {
         // One-time migration: Sheets → Firebase
         await ensureFirebaseSeeded();
         await ensureLegacyOrdersMigrated();
+        await autoFixMismatchedAccountNames();
         
         console.log("🚀 [INITIALIZATION] Fetching fresh data instantly from Firestore...");
         
@@ -2052,6 +2106,18 @@ async function renderDataSheet() {
     
     const companyFilter = document.getElementById('sheet-company-filter').value;
     const monthFilter = document.getElementById('sheet-month-filter').value;
+    
+    const sheetTitle = document.getElementById('sheet-title');
+    if (sheetTitle) {
+        const dStr = getTodayISODate();
+        if (monthFilter === 'all') {
+            sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing complete history`;
+        } else if (monthFilter) {
+            sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing data for ${monthFilter}`;
+        } else {
+            sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing current 30 days data`;
+        }
+    }
     
     // Determine which companies to show
     let accounts = [];
