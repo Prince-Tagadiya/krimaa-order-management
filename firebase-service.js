@@ -48,33 +48,86 @@ const FirebaseService = (() => {
         }
     }
 
-    function buildMoneyRecordDocId(date, companyId, accountName) {
-        return [date, companyId, accountName]
+    // Maps for global ID-to-name resolution
+    let accountNameIdMap = {}; // name -> id
+    let accountIdNameMap = {}; // id -> name
+    let _allAccountsMap = {}; // id -> data
+    let _allKarigarsMap = {}; // id -> data
+
+    function buildMoneyRecordDocId(date, companyId, accountId) {
+        return [date, companyId, accountId]
             .map(v => encodeURIComponent(String(v || '').trim()))
             .join('_');
     }
 
-    let accountNameIdMap = {};
-    let accountIdNameMap = {};
-
-    function buildMoneyRecordDocId(date, companyId, accountName) {
-        return [date, companyId, accountName]
-            .map(v => encodeURIComponent(String(v || '').trim()))
-            .join('_');
+    function buildPrefixedId(prefix) {
+        return `${prefix}${Math.random().toString(36).substr(2, 9)}`;
     }
 
-    // ───── ACCOUNTS ─────
+    function isPrefixedId(value, prefix) {
+        return String(value || '').trim().startsWith(prefix);
+    }
+
+    function normalizeNameKey(value) {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    function parseFlexibleDateValue(rawValue) {
+        if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+        if (rawValue instanceof Date && !isNaN(rawValue.getTime())) return rawValue;
+
+        if (typeof rawValue === 'object') {
+            if (typeof rawValue.toDate === 'function') {
+                try {
+                    const d = rawValue.toDate();
+                    if (d instanceof Date && !isNaN(d.getTime())) return d;
+                } catch (e) {}
+            }
+            if (typeof rawValue.seconds === 'number') {
+                const d = new Date(rawValue.seconds * 1000);
+                if (!isNaN(d.getTime())) return d;
+            }
+            if (typeof rawValue._seconds === 'number') {
+                const d = new Date(rawValue._seconds * 1000);
+                if (!isNaN(d.getTime())) return d;
+            }
+        }
+
+        if (typeof rawValue === 'number' && isFinite(rawValue)) {
+            if (rawValue > 1000000000000) {
+                const d = new Date(rawValue);
+                if (!isNaN(d.getTime())) return d;
+            } else if (rawValue > 1000000000) {
+                const d = new Date(rawValue * 1000);
+                if (!isNaN(d.getTime())) return d;
+            } else if (rawValue > 10000 && rawValue < 60000) {
+                const d = new Date((rawValue - 25569) * 86400000);
+                if (!isNaN(d.getTime())) return d;
+            }
+        }
+
+        const str = String(rawValue).trim();
+        if (!str) return null;
+
+        if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+            const d = new Date(str.replace(' ', 'T'));
+            if (!isNaN(d.getTime())) return d;
+        }
+
+        const parsed = new Date(str);
+        if (!isNaN(parsed.getTime())) return parsed;
+        return null;
+    }
+
     async function getAccounts(companyId) {
         init();
         let snap;
         try {
-            // Requires composite index (companyId ASC, position ASC)
             snap = await db.collection('accounts')
                 .where('companyId', '==', companyId)
                 .orderBy('position')
                 .get();
         } catch (e) {
-            // Fallback if index doesn't exist yet — sort client-side
             console.warn('Index missing for accounts, using fallback sort:', e.message);
             snap = await db.collection('accounts')
                 .where('companyId', '==', companyId)
@@ -86,6 +139,7 @@ const FirebaseService = (() => {
             const id = data.accountId || doc.id;
             accountNameIdMap[data.name.trim()] = id;
             accountIdNameMap[id] = data.name.trim();
+            _allAccountsMap[id] = data;
             docs.push(data);
         });
         docs.sort((a, b) => (a.position || 0) - (b.position || 0));
@@ -104,9 +158,9 @@ const FirebaseService = (() => {
         if (!dup.empty) return { success: false, message: 'Account already exists' };
         // Next position
         const all = await db.collection('accounts').where('companyId', '==', companyId).get();
-        const docRef = db.collection('accounts').doc();
-        await docRef.set({
-            accountId: docRef.id,
+        const accId = buildPrefixedId('acc_');
+        await db.collection('accounts').doc(accId).set({
+            accountId: accId,
             name,
             nameLower: name.toLowerCase(),
             companyId,
@@ -114,56 +168,70 @@ const FirebaseService = (() => {
             mobile: mobile || '',
             gstin: gstin || '',
             rechargeDate: rechargeDate || '',
+            money: 0, expense: 0,
             addedDate: firebase.firestore.FieldValue.serverTimestamp()
         });
-        return { success: true, message: 'Account added successfully' };
+        return { success: true, message: 'Account added successfully', id: accId };
     }
 
-    async function editAccount(oldName, newName, companyId, mobile, gstin, rechargeDate) {
+    async function editAccount(accountId, newName, companyId, mobile, gstin, rechargeDate) {
         init();
         newName = (newName || '').trim();
         if (!newName) return { success: false, message: 'Account name cannot be empty' };
-        if (oldName.toLowerCase() !== newName.toLowerCase()) {
-            const dup = await db.collection('accounts')
-                .where('companyId', '==', companyId)
-                .where('nameLower', '==', newName.toLowerCase())
-                .limit(1).get();
-            if (!dup.empty) return { success: false, message: 'Account name already exists' };
-        }
-        // Update account doc
-        const snap = await db.collection('accounts')
-            .where('companyId', '==', companyId)
-            .where('name', '==', oldName.trim())
-            .get();
-        if (snap.empty) return { success: false, message: 'Account not found' };
-        const ops = [];
-        snap.forEach(doc => {
-            ops.push(b => b.update(doc.ref, { 
-                name: newName, 
-                nameLower: newName.toLowerCase(),
-                mobile: mobile || '',
-                gstin: gstin || '',
-                rechargeDate: rechargeDate || ''
-            }));
-        });
-        // Thanks to our ID-based system, we NO LONGER need to manually update thousands
-        // of orders exactly right here! It will resolve globally and automatically.
         
-        await commitInChunks(ops);
+        // 1. Check for duplicate names (excluding current account)
+        const dup = await db.collection('accounts')
+            .where('companyId', '==', companyId)
+            .where('nameLower', '==', newName.toLowerCase())
+            .get();
+        
+        if (!dup.empty && dup.docs.some(d => d.id !== accountId)) {
+            return { success: false, message: 'Account name already exists' };
+        }
+
+        // 2. Update account doc
+        await db.collection('accounts').doc(accountId).update({ 
+            name: newName, 
+            nameLower: newName.toLowerCase(),
+            mobile: mobile || '',
+            gstin: gstin || '',
+            rechargeDate: rechargeDate || ''
+        });
+
+        // Update local maps immediately if they exist
+        if (accountIdNameMap[accountId]) {
+            delete accountNameIdMap[accountIdNameMap[accountId]];
+            accountIdNameMap[accountId] = newName;
+            accountNameIdMap[newName] = accountId;
+        }
+
         return { success: true, message: 'Account updated successfully' };
     }
 
-    async function deleteAccount(name, companyId) {
+    async function deleteAccount(id, companyId) {
         init();
+        if (id) {
+            // Prioritize ID-based deletion
+            await db.collection('accounts').doc(id).delete();
+            return { success: true, message: 'Account deleted successfully' };
+        }
+        // Fallback for name-based delete if no ID provided (legacy)
+        // Note: The original function accepted 'name' as the first argument.
+        // If 'id' is actually a name, this fallback will handle it.
         const snap = await db.collection('accounts')
             .where('companyId', '==', companyId)
-            .where('name', '==', (name || '').trim())
+            .where('name', '==', String(id || '').trim()) // Assuming 'id' might be a name in legacy calls
             .get();
-        if (snap.empty) return { success: false, message: 'Account not found' };
-        const ops = [];
-        snap.forEach(doc => ops.push(b => b.delete(doc.ref)));
-        await commitInChunks(ops);
-        return { success: true, message: 'Account deleted successfully' };
+        if (!snap.empty) {
+            // If multiple accounts with the same name exist (shouldn't happen with current addAccount logic),
+            // this will only delete the first one found. The original code deleted all.
+            // For refactoring, we'll delete all found by name for consistency with original behavior.
+            const ops = [];
+            snap.forEach(doc => ops.push(b => b.delete(doc.ref)));
+            await commitInChunks(ops);
+            return { success: true, message: 'Account deleted successfully' };
+        }
+        return { success: false, message: 'Account not found' };
     }
 
     async function updateAccountOrder(orderedAccounts, companyId) {
@@ -179,22 +247,30 @@ const FirebaseService = (() => {
         return { success: true, message: 'Account order updated' };
     }
 
-    async function updateMoney(accountName, companyId, money, expense, date) {
+    async function updateMoney(accountId, companyId, money, expense, date) {
         init();
-        const snap = await db.collection('accounts')
-            .where('companyId', '==', companyId)
-            .where('name', '==', (accountName || '').trim())
-            .get();
-        if (snap.empty) return { success: false, message: 'Account not found' };
+        const accountDoc = await db.collection('accounts').doc(accountId).get();
+        if (!accountDoc.exists) return { success: false, message: 'Account not found' };
+        
         const ops = [];
-        snap.forEach(doc => {
-            ops.push(b => b.update(doc.ref, { money: money || 0, expense: expense || 0, moneyDate: date || '' }));
-        });
+        ops.push(b => b.update(accountDoc.ref, { 
+            money: money || 0, 
+            expense: expense || 0, 
+            moneyDate: date || '' 
+        }));
+
         // Save historic date wise record
         if (date) {
-            const docId = buildMoneyRecordDocId(date, companyId, accountName);
+            const docId = buildMoneyRecordDocId(date, companyId, accountId);
+            const accountName = accountDoc.data().name;
             ops.push(b => b.set(db.collection('money_records').doc(docId), {
-                date, accountName, companyId, money: money || 0, expense: expense || 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                date, 
+                accountId, 
+                accountName, // Still keep name for easier reading but link by ID
+                companyId, 
+                money: money || 0, 
+                expense: expense || 0, 
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true }));
         }
         await commitInChunks(ops);
@@ -208,16 +284,18 @@ const FirebaseService = (() => {
         snap1.forEach(doc => {
             ops.push(b => b.update(doc.ref, { money: 0, expense: 0, moneyDate: date || '' }));
             if (date) {
-                const docId = buildMoneyRecordDocId(date, 'company1', doc.data().name);
-                ops.push(b => b.set(db.collection('money_records').doc(docId), { date, accountName: doc.data().name, companyId: 'company1', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+                const accId = doc.data().accountId || doc.id;
+                const docId = buildMoneyRecordDocId(date, 'company1', accId);
+                ops.push(b => b.set(db.collection('money_records').doc(docId), { date, accountId: accId, accountName: doc.data().name, companyId: 'company1', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
             }
         });
         const snap2 = await db.collection('accounts').where('companyId', '==', 'company2').get();
         snap2.forEach(doc => {
             ops.push(b => b.update(doc.ref, { money: 0, expense: 0, moneyDate: date || '' }));
             if (date) {
-                const docId = buildMoneyRecordDocId(date, 'company2', doc.data().name);
-                ops.push(b => b.set(db.collection('money_records').doc(docId), { date, accountName: doc.data().name, companyId: 'company2', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
+                const accId = doc.data().accountId || doc.id;
+                const docId = buildMoneyRecordDocId(date, 'company2', accId);
+                ops.push(b => b.set(db.collection('money_records').doc(docId), { date, accountId: accId, accountName: doc.data().name, companyId: 'company2', money: 0, expense: 0, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true }));
             }
         });
         
@@ -334,6 +412,7 @@ const FirebaseService = (() => {
                         const resolvedName = accountIdNameMap[key] || key;
                         records.push({
                             date: d.date,
+                            accountId: key,
                             accountName: resolvedName,
                             meesho: val,
                             total: val,
@@ -362,7 +441,7 @@ const FirebaseService = (() => {
         const summaryUpdates = {};
         
         orders.forEach(o => {
-            const accId = accountNameIdMap[o.accountName.trim()] || o.accountName;
+            const accId = o.accountId || accountNameIdMap[o.accountName.trim()] || o.accountName;
             const quantity = parseInt(o.meesho) || 0;
             
             const docId = encodeURIComponent(`${date}_${accId}`);
@@ -390,7 +469,7 @@ const FirebaseService = (() => {
         return { success: true, message: 'Orders submitted' };
     }
 
-    async function updateOrder(date, accountName, field, value, companyId) {
+    async function updateOrder(date, accountId, field, value, companyId) {
         init();
         const dStr = String(date).split('T')[0];
         const year = dStr.substring(0, 4);
@@ -398,7 +477,7 @@ const FirebaseService = (() => {
         const partition = `orders_${year}_${month}`;
         const numVal = parseInt(value) || 0;
         
-        const accId = accountNameIdMap[(accountName || '').trim()] || accountName;
+        const accId = accountId;
         const docId = encodeURIComponent(`${date}_${accId}`);
         const orderRef = db.collection(partition).doc(docId);
         
@@ -460,17 +539,33 @@ const FirebaseService = (() => {
             db.collection('karigars').get(),
             db.collection('karigar_transactions').orderBy('date', 'desc').get(),
             db.collection('design_prices').get(),
-            db.collection('money_backups').orderBy('timestamp', 'desc').get()
+            db.collection('money_backups').get()
         ]);
 
-        c1a.forEach(d => result.company1.accounts.push({
-             ...d.data(), 
-             name: accountIdNameMap[d.id] || d.data().name 
-        }));
-        c2a.forEach(d => result.company2.accounts.push({
-             ...d.data(),
-             name: accountIdNameMap[d.id] || d.data().name 
-        }));
+        const serializeTs = (ts) => {
+            if (!ts) return '';
+            if (ts.toDate) return ts.toDate().toISOString();
+            if (ts.seconds) return new Date(ts.seconds * 1000).toISOString();
+            return String(ts);
+        };
+        c1a.forEach(d => {
+             const raw = d.data();
+             result.company1.accounts.push({
+                 ...raw,
+                 accountId: raw.accountId || d.id,
+                 name: accountIdNameMap[d.id] || raw.name,
+                 addedDate: serializeTs(raw.addedDate)
+             });
+        });
+        c2a.forEach(d => {
+             const raw = d.data();
+             result.company2.accounts.push({
+                 ...raw,
+                 accountId: raw.accountId || d.id,
+                 name: accountIdNameMap[d.id] || raw.name,
+                 addedDate: serializeTs(raw.addedDate)
+             });
+        });
         result.company1.accounts.sort((a, b) => (a.position || 0) - (b.position || 0));
         result.company2.accounts.sort((a, b) => (a.position || 0) - (b.position || 0));
         
@@ -584,40 +679,184 @@ const FirebaseService = (() => {
     async function getKarigars() {
         init();
         const snap = await db.collection('karigars').get();
-        const results = [];
-        snap.forEach(doc => results.push({ id: doc.id, ...doc.data() }));
+        const docs = snap.docs || [];
+        const canonicalByName = {};
+
+        docs.forEach(doc => {
+            const data = doc.data() || {};
+            const nameKey = normalizeNameKey(data.name);
+            const dataId = String(data.id || '').trim();
+            const docId = String(doc.id || '').trim();
+            const existingCanonical = isPrefixedId(dataId, 'kar_')
+                ? dataId
+                : (isPrefixedId(docId, 'kar_') ? docId : '');
+            if (nameKey && existingCanonical && !canonicalByName[nameKey]) {
+                canonicalByName[nameKey] = existingCanonical;
+            }
+        });
+
+        const resultMap = new Map();
+        _allKarigarsMap = {};
+
+        for (const doc of docs) {
+            const data = doc.data() || {};
+            const name = String(data.name || '').trim();
+            const nameKey = normalizeNameKey(name);
+            const dataId = String(data.id || '').trim();
+            const docId = String(doc.id || '').trim();
+
+            let canonicalId = isPrefixedId(dataId, 'kar_') ? dataId : '';
+            if (!canonicalId && isPrefixedId(docId, 'kar_')) canonicalId = docId;
+            if (!canonicalId && nameKey && canonicalByName[nameKey]) canonicalId = canonicalByName[nameKey];
+            if (!canonicalId) canonicalId = buildPrefixedId('kar_');
+
+            if (nameKey && !canonicalByName[nameKey]) canonicalByName[nameKey] = canonicalId;
+
+            if (doc.id !== canonicalId) {
+                await db.collection('karigars').doc(canonicalId).set({ ...data, id: canonicalId, name }, { merge: true });
+                await doc.ref.delete();
+            } else if (dataId !== canonicalId) {
+                await doc.ref.update({ id: canonicalId });
+            }
+
+            const normalized = { ...data, id: canonicalId, name };
+            _allKarigarsMap[canonicalId] = normalized;
+            resultMap.set(canonicalId, normalized);
+        }
+
+        const results = Array.from(resultMap.values()).sort((a, b) =>
+            String(a.name || '').localeCompare(String(b.name || ''))
+        );
         return { success: true, data: results };
     }
 
     async function addKarigar(name) {
         init();
+        name = name.trim();
         // Check if exists
-        const snap = await db.collection('karigars').where('name', '==', name.trim()).get();
-        if (!snap.empty) return { success: true, id: snap.docs[0].id };
-        const docRef = db.collection('karigars').doc();
-        await docRef.set({
-            name: name.trim(),
+        const snap = await db.collection('karigars')
+            .where('name', '==', name)
+            .get();
+        if (!snap.empty) {
+            const data = snap.docs[0].data();
+            let id = String(data.id || snap.docs[0].id || '').trim();
+            if (!isPrefixedId(id, 'kar_')) {
+                id = buildPrefixedId('kar_');
+                await db.collection('karigars').doc(id).set({ ...data, id, name }, { merge: true });
+                await snap.docs[0].ref.delete();
+            } else if (data.id !== id) {
+                await snap.docs[0].ref.update({ id });
+            }
+            return { success: true, id };
+        }
+        
+        const karigarId = buildPrefixedId('kar_');
+        await db.collection('karigars').doc(karigarId).set({
+            name: name,
+            id: karigarId,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
-        return { success: true, id: docRef.id };
+        return { success: true, id: karigarId };
     }
 
-    async function deleteKarigar(name) {
+    async function deleteKarigar(id) {
         init();
-        const snap = await db.collection('karigars').where('name', '==', name.trim()).get();
-        if (!snap.empty) {
-            await snap.docs[0].ref.delete();
-        }
+        await db.collection('karigars').doc(id).delete();
         return { success: true };
     }
 
     async function getKarigarTransactions() {
         init();
+        if (Object.keys(_allKarigarsMap).length === 0) {
+            try {
+                await getKarigars();
+            } catch (e) {
+                console.warn('Karigar map bootstrap failed:', e);
+            }
+        }
+
+        const karigarNameToId = {};
+        const karigarIdToName = {};
+        Object.values(_allKarigarsMap).forEach(k => {
+            if (!k || typeof k !== 'object') return;
+            const id = String(k.id || '').trim();
+            const name = String(k.name || '').trim();
+            if (!id) return;
+            if (name) karigarNameToId[normalizeNameKey(name)] = id;
+            if (name) karigarIdToName[id] = name;
+        });
+
         const snap = await db.collection('karigar_transactions').get();
         const results = [];
-        snap.forEach(doc => results.push({ id: doc.id, ...doc.data() }));
+        for (const doc of snap.docs) {
+            const data = doc.data() || {};
+            const rawId = String(data.karigarId || '').trim();
+            const rawName = String(data.karigarName || '').trim();
+            const nameKey = normalizeNameKey(rawName);
+
+            let resolvedId = rawId;
+            if (!isPrefixedId(resolvedId, 'kar_') && nameKey && karigarNameToId[nameKey]) {
+                resolvedId = karigarNameToId[nameKey];
+            }
+
+            let resolvedName = rawName;
+            if (!resolvedName && resolvedId && karigarIdToName[resolvedId]) {
+                resolvedName = karigarIdToName[resolvedId];
+            }
+
+            const patch = {};
+            if (resolvedId && resolvedId !== rawId) patch.karigarId = resolvedId;
+            if (resolvedName && resolvedName !== rawName) patch.karigarName = resolvedName;
+            if (Object.keys(patch).length > 0) {
+                await doc.ref.update(patch);
+            }
+
+            results.push({
+                id: doc.id,
+                ...data,
+                karigarId: resolvedId || rawId,
+                karigarName: resolvedName || rawName
+            });
+        }
         // Sorting will be done locally for better performance
         return { success: true, data: results };
+    }
+
+    async function resolveKarigarIdForWrite(karigarId, karigarName) {
+        const rawId = String(karigarId || '').trim();
+        if (isPrefixedId(rawId, 'kar_')) return rawId;
+
+        const name = String(karigarName || '').trim();
+        if (!name) return buildPrefixedId('kar_');
+
+        const snap = await db.collection('karigars')
+            .where('name', '==', name)
+            .limit(1).get();
+
+        if (!snap.empty) {
+            const doc = snap.docs[0];
+            const data = doc.data() || {};
+            let canonicalId = String(data.id || '').trim();
+            if (!isPrefixedId(canonicalId, 'kar_')) {
+                canonicalId = isPrefixedId(doc.id, 'kar_') ? doc.id : buildPrefixedId('kar_');
+            }
+
+            if (doc.id !== canonicalId) {
+                await db.collection('karigars').doc(canonicalId).set({ ...data, id: canonicalId, name }, { merge: true });
+                await doc.ref.delete();
+            } else if (data.id !== canonicalId) {
+                await doc.ref.update({ id: canonicalId });
+            }
+            return canonicalId;
+        }
+
+        const newId = buildPrefixedId('kar_');
+        await db.collection('karigars').doc(newId).set({
+            name,
+            id: newId,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        return newId;
     }
 
     async function addKarigarJama(data) {
@@ -627,11 +866,14 @@ const FirebaseService = (() => {
         const pic = parseInt(data.pic) || 0;
         const total = price * pic;
         const upadAmount = parseFloat(data.upadAmount) || 0;
+        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName);
+        const safeDate = String(data.date || '').split('T')[0];
 
         await docRef.set({
             type: 'jama',
-            karigarName: data.karigarName,
-            date: data.date,
+            karigarId: resolvedKarigarId,
+            karigarName: String(data.karigarName || '').trim(),
+            date: safeDate,
             designName: data.designName,
             size: data.size || '',
             pic: pic,
@@ -655,10 +897,13 @@ const FirebaseService = (() => {
     async function addKarigarUpad(data) {
         init();
         const docRef = db.collection('karigar_transactions').doc();
+        const resolvedKarigarId = await resolveKarigarIdForWrite(data.karigarId, data.karigarName);
+        const safeDate = String(data.date || '').split('T')[0];
         await docRef.set({
             type: 'upad',
-            karigarName: data.karigarName,
-            date: data.date,
+            karigarId: resolvedKarigarId,
+            karigarName: String(data.karigarName || '').trim(),
+            date: safeDate,
             amount: parseFloat(data.amount),
             companyId: data.companyId || 'company1',
             addedBy: data.addedBy || 'admin',
@@ -855,6 +1100,343 @@ const FirebaseService = (() => {
         console.log("Migration finished.");
     }
 
+    async function fixHistoricalDataIntegrity() {
+        init();
+        const stats = { accounts: 0, karigars: 0, orders: 0, karigarTxs: 0, summaries: 0 };
+        const nameToAccId = {};
+        const nameToKarigarId = {};
+        const karigarIdToName = {};
+
+        function isRealId(val) {
+            if (!val) return false;
+            const s = String(val).trim();
+            return s.startsWith('acc_') || s.startsWith('kar_');
+        }
+
+        // 1. ACCOUNTS: Ensure all use acc_ IDs as Document Keys
+        const accSnap = await db.collection('accounts').get();
+        for (const doc of accSnap.docs) {
+            const data = doc.data();
+            let aid = data.accountId || (doc.id.startsWith('acc_') ? doc.id : null);
+            const name = (data.name || '').trim();
+            
+            if (!isRealId(aid)) {
+                aid = buildPrefixedId('acc_');
+            }
+            
+            // If the Doc ID itself is not the Real ID, re-key it
+            if (doc.id !== aid) {
+                await db.collection('accounts').doc(aid).set({ ...data, accountId: aid });
+                await doc.ref.delete();
+                stats.accounts++;
+            } else if (!data.accountId) {
+                await doc.ref.update({ accountId: aid });
+                stats.accounts++;
+            }
+            if (name) nameToAccId[name.toLowerCase()] = aid;
+            nameToAccId[doc.id] = aid; // store mapping for old doc ids
+        }
+
+        // 2. KARIGARS: Ensure all use kar_ IDs as Document Keys
+        const karSnap = await db.collection('karigars').get();
+        for (const doc of karSnap.docs) {
+            const data = doc.data();
+            let kid = data.id || (doc.id.startsWith('kar_') ? doc.id : null);
+            const name = (data.name || '').trim();
+            
+            if (!isRealId(kid)) {
+                kid = buildPrefixedId('kar_');
+            }
+
+            if (doc.id !== kid) {
+                await db.collection('karigars').doc(kid).set({ ...data, id: kid });
+                await doc.ref.delete();
+                stats.karigars++;
+            } else if (!data.id) {
+                await doc.ref.update({ id: kid });
+                stats.karigars++;
+            }
+            if (name) nameToKarigarId[name.toLowerCase()] = kid;
+            nameToKarigarId[doc.id] = kid;
+            if (name) karigarIdToName[kid] = name;
+        }
+
+        // 3. Karigar Transactions
+        const ktxSnap = await db.collection('karigar_transactions').get();
+        for (const doc of ktxSnap.docs) {
+            const data = doc.data();
+            const currentKId = (data.karigarId || '').trim();
+            const kName = (data.karigarName || '').trim();
+            
+            let resolvedId = currentKId;
+            if (!isRealId(resolvedId) && kName) resolvedId = nameToKarigarId[kName.toLowerCase()] || resolvedId;
+            if (!isRealId(resolvedId) && currentKId) resolvedId = nameToKarigarId[currentKId] || nameToKarigarId[currentKId.toLowerCase()] || resolvedId;
+
+            const resolvedName = kName || (resolvedId && karigarIdToName[resolvedId] ? karigarIdToName[resolvedId] : '');
+            const patch = {};
+            if (resolvedId && currentKId !== resolvedId) patch.karigarId = resolvedId;
+            if (resolvedName && kName !== resolvedName) patch.karigarName = resolvedName;
+
+            if (Object.keys(patch).length > 0) {
+                await doc.ref.update(patch);
+                stats.karigarTxs++;
+            }
+        }
+
+        // 4. Daily Summary & Order Partitions
+        const summarySnap = await db.collection('daily_summary').get();
+        const partitionsProcessed = new Set();
+        
+        for (const doc of summarySnap.docs) {
+            const data = doc.data();
+            const date = doc.id;
+            let changedSummary = false;
+            const newSummary = { ...data };
+
+            for (const [key, val] of Object.entries(data)) {
+                if (key === 'date' || key === 'masterCompany') continue;
+                let aid = nameToAccId[key.toLowerCase().trim()];
+                if (!aid) aid = nameToAccId[key]; 
+                
+                if (aid && aid !== key) {
+                    newSummary[aid] = (newSummary[aid] || 0) + val;
+                    delete newSummary[key];
+                    changedSummary = true;
+                }
+            }
+            if (changedSummary) {
+                await doc.ref.set(newSummary);
+                stats.summaries++;
+            }
+
+            // Fix order partitions
+            const dStr = String(date);
+            if (dStr.length >= 7) {
+                const partition = `orders_${dStr.substring(0, 4)}_${dStr.substring(5, 7)}`;
+                if (!partitionsProcessed.has(partition)) {
+                    const ordSnap = await db.collection(partition).get();
+                    for (const oDoc of ordSnap.docs) {
+                        const oData = oDoc.data();
+                        const currentAccId = (oData.accountId || '').trim();
+                        const oName = (oData.accountName || '').trim();
+                        
+                        let resolvedId = oName ? nameToAccId[oName.toLowerCase()] : null;
+                        if (!resolvedId) resolvedId = nameToAccId[currentAccId]; 
+                        
+                        if (resolvedId && resolvedId !== currentAccId) {
+                            await oDoc.ref.update({ accountId: resolvedId });
+                            stats.orders++;
+                        }
+                    }
+                    partitionsProcessed.add(partition);
+                }
+            }
+        }
+
+        return { success: true, stats };
+    }
+
+    /**
+     * Sync FROM Google Sheets TO Firebase. Sheets = source of truth.
+     * Upserts all data: existing Firebase records are updated, new ones are created.
+     * Does NOT delete Firebase records that aren't in Sheets.
+     */
+    async function syncFromSheets(sheetData) {
+        init();
+        const stats = { accounts: 0, orders: 0, karigars: 0, karigarTxs: 0, designPrices: 0 };
+        
+        // 1. Sync Accounts (per company)
+        for (const cid of ['company1', 'company2']) {
+            const accounts = (sheetData[cid] && sheetData[cid].accounts) || [];
+            for (const acc of accounts) {
+                if (!acc.name) continue;
+                
+                const sheetAccId = acc.accountId && acc.accountId.startsWith('acc_') ? acc.accountId : null;
+
+                // Find existing doc by name + companyId
+                const snap = await db.collection('accounts')
+                    .where('name', '==', acc.name)
+                    .where('companyId', '==', cid)
+                    .limit(1).get();
+                
+                const accId = sheetAccId || (snap.empty ? buildPrefixedId('acc_') : (snap.docs[0].data().accountId || snap.docs[0].id));
+
+                if (!snap.empty) {
+                    const existingDoc = snap.docs[0];
+                    const existingData = existingDoc.data();
+                    
+                    // IF we are re-keying (doc id matches sheet but doc itself is random id)
+                    if (existingDoc.id !== accId) {
+                        await db.collection('accounts').doc(accId).set({ ...existingData, accountId: accId, position: acc.position || 0 });
+                        await existingDoc.ref.delete();
+                    } else {
+                        await existingDoc.ref.update({ position: acc.position || 0, accountId: accId });
+                    }
+                } else {
+                    await db.collection('accounts').doc(accId).set({
+                        name: acc.name,
+                        nameLower: acc.name.toLowerCase(),
+                        accountId: accId,
+                        companyId: cid,
+                        position: acc.position || 0,
+                        addedDate: firebase.firestore.FieldValue.serverTimestamp(),
+                        money: 0, expense: 0
+                    });
+                }
+                stats.accounts++;
+            }
+        }
+        
+        // 2. Sync Orders (per company)
+        for (const cid of ['company1', 'company2']) {
+            const orders = (sheetData[cid] && sheetData[cid].orders) || [];
+            // Group orders by month partition
+            const byPartition = {};
+            for (const o of orders) {
+                if (!o.date || !o.accountId) continue;
+                const parts = o.date.split('-');
+                const partition = `orders_${parts[0]}_${parts[1]}`;
+                if (!byPartition[partition]) byPartition[partition] = [];
+                byPartition[partition].push(o);
+            }
+            
+            for (const [partition, partOrders] of Object.entries(byPartition)) {
+                // Get existing docs for dedup
+                const existSnap = await db.collection(partition).get();
+                const existMap = {};
+                existSnap.forEach(doc => {
+                    const d = doc.data();
+                    existMap[`${d.date}_${d.accountId}`] = doc;
+                });
+                
+                for (const o of partOrders) {
+                    const key = `${o.date}_${o.accountId}`;
+                    const quantity = parseInt(o.meesho) || 0;
+                    
+                    if (existMap[key]) {
+                        // Update if different
+                        const existing = existMap[key].data();
+                        if ((parseInt(existing.quantity) || 0) !== quantity) {
+                            await existMap[key].ref.update({ quantity, meesho: quantity });
+                            stats.orders++;
+                        }
+                    } else {
+                        // Create new
+                        await db.collection(partition).add({
+                            date: o.date,
+                            accountId: o.accountId,
+                            accountName: o.accountName || '',
+                            quantity,
+                            meesho: quantity,
+                            masterCompany: cid,
+                            synced: true
+                        });
+                        stats.orders++;
+                    }
+                }
+                
+                // Also update daily_summary
+                const dateMap = {};
+                for (const o of partOrders) {
+                    if (!dateMap[o.date]) dateMap[o.date] = {};
+                    dateMap[o.date][o.accountId] = parseInt(o.meesho) || 0;
+                }
+                for (const [date, accOrders] of Object.entries(dateMap)) {
+                    await db.collection('daily_summary').doc(date).set(
+                        { ...accOrders, date, masterCompany: 'all' },
+                        { merge: true }
+                    );
+                }
+            }
+        }
+        
+        // 3. Sync Karigars
+        const karigars = sheetData.karigars || [];
+        const karigarNameToId = {};
+        for (const k of karigars) {
+            if (!k.name) continue;
+            const snap = await db.collection('karigars')
+                .where('name', '==', k.name)
+                .limit(1).get();
+            
+            const sheetKarId = k.id && k.id.startsWith('kar_') ? k.id : null;
+            const karId = sheetKarId || (!snap.empty ? (snap.docs[0].data().id || snap.docs[0].id) : buildPrefixedId('kar_'));
+
+            if (!snap.empty) {
+                const existingDoc = snap.docs[0];
+                const existingData = existingDoc.data();
+                if (existingDoc.id !== karId) {
+                    await db.collection('karigars').doc(karId).set({ ...existingData, id: karId });
+                    await existingDoc.ref.delete();
+                } else {
+                    await existingDoc.ref.update({ id: karId });
+                }
+            } else {
+                await db.collection('karigars').doc(karId).set({
+                    name: k.name,
+                    id: karId,
+                    addedDate: parseFlexibleDateValue(k.addedAt || k.addedDate) || firebase.firestore.FieldValue.serverTimestamp()
+                });
+            }
+            karigarNameToId[normalizeNameKey(k.name)] = karId;
+            stats.karigars++;
+        }
+        
+        // 4. Sync Karigar Transactions
+        const txs = sheetData.karigarTransactions || [];
+        for (const tx of txs) {
+            if (!tx.date) continue;
+            const txName = String(tx.karigarName || '').trim();
+            const txNameKey = normalizeNameKey(txName);
+            const rawTxId = String(tx.karigarId || '').trim();
+            let txKarigarId = rawTxId;
+            if (!isPrefixedId(txKarigarId, 'kar_') && txNameKey && karigarNameToId[txNameKey]) {
+                txKarigarId = karigarNameToId[txNameKey];
+            }
+            if (!isPrefixedId(txKarigarId, 'kar_')) continue;
+
+            const safeDate = String(tx.date || '').split('T')[0];
+
+            // Dedup by date + karigarId + type + designName + pic
+            const snap = await db.collection('karigar_transactions')
+                .where('date', '==', safeDate)
+                .where('karigarId', '==', txKarigarId)
+                .where('type', '==', tx.type || 'jama')
+                .where('designName', '==', tx.designName || '')
+                .limit(1).get();
+            
+            if (snap.empty) {
+                const createdAtDate = parseFlexibleDateValue(tx.createdAt);
+                await db.collection('karigar_transactions').add({
+                    date: safeDate,
+                    karigarId: txKarigarId,
+                    karigarName: txName || '',
+                    type: tx.type || 'jama',
+                    designName: tx.designName || '',
+                    size: tx.size || '',
+                    pic: tx.pic || 0,
+                    price: tx.price || 0,
+                    total: tx.totalJama || 0,
+                    upadAmount: tx.upadAmount || 0,
+                    createdAt: createdAtDate || firebase.firestore.FieldValue.serverTimestamp()
+                });
+                stats.karigarTxs++;
+            }
+        }
+        
+        // 5. Sync Design Prices
+        const prices = sheetData.designPrices || {};
+        for (const [name, price] of Object.entries(prices)) {
+            await db.collection('design_prices').doc(name).set({
+                price: parseInt(price) || 0,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+            stats.designPrices++;
+        }
+        
+        return { success: true, stats };
+    }
+
     function getPendingCount() { return _pendingWrites.size; }
 
     // ───── PUBLIC API ─────
@@ -879,6 +1461,10 @@ const FirebaseService = (() => {
         getDesignPrices,
         // Write buffer
         bufferWrite, flushWrites, getPendingCount,
+        // Integrity Fix
+        fixHistoricalDataIntegrity,
+        // Sync from Sheets
+        syncFromSheets,
         // Sync status
         onSyncStatusChange, getSyncStatus, setSyncStatus
     };

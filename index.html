@@ -70,8 +70,8 @@
                 <div class="flex items-center gap-1">
                     <button id="menu-toggle"><i class='bx bx-menu'></i></button>
                     <div class="company-switcher-topbar" id="company-switcher">
-                        <button type="button" class="company-btn active" data-company="company1">Company 1</button>
-                        <button type="button" class="company-btn" data-company="company2">Company 2</button>
+                        <button type="button" class="company-btn active" data-company="company1">Shree Sai</button>
+                        <button type="button" class="company-btn" data-company="company2">Dhyan</button>
                     </div>
                 </div>
                 <div class="topbar-right">
@@ -293,8 +293,20 @@
                 <!-- ========== MANAGE ACCOUNTS ========== -->
                 <section id="add-account" class="content-section">
                     <div class="card mx-auto" style="max-width: 600px;">
-                        <h3 class="page-title font-bold text-xl mb-1">Add New Account</h3>
-                        <p class="text-muted text-sm mb-2">Track their daily orders.</p>
+                        <div class="flex-between mb-1" style="align-items: flex-start;">
+                        <div>
+                            <h3 class="page-title font-bold text-xl mb-1">Add New Account</h3>
+                            <p class="text-muted text-sm mb-2">Track their daily orders.</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="button" class="btn btn-outline btn-sm text-primary" id="fix-integrity-btn" title="Generate missing IDs for legacy spreadsheet data">
+                                <i class='bx bx-shield-check'></i> Fix Integrity
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm text-accent" id="sync-to-firebase-btn" title="Push ALL Sheet data to Firebase (Sheet is Source of Truth)">
+                                <i class='bx bx-cloud-upload'></i> Sync to Firebase
+                            </button>
+                        </div>
+                    </div>
                         <form id="add-account-form">
                             <div class="input-group">
                                 <label>Account Name</label>
@@ -520,6 +532,7 @@
                 <div class="input-group">
                     <label>Account Name</label>
                     <input type="text" id="edit-account-name" class="w-100" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px;" required>
+                    <input type="hidden" id="edit-account-id">
                     <input type="hidden" id="edit-account-old-name">
                 </div>
                 <div class="input-group">
@@ -542,6 +555,7 @@
             <i class='bx bxs-error-circle text-danger' style="font-size: 4rem; margin-bottom: 1rem;"></i>
             <h3 class="font-bold text-xl mb-1">Delete Account?</h3>
             <p class="text-sm text-muted mb-2">Are you sure you want to delete <strong class="text-main" id="delete-account-name-display"></strong></p>
+            <input type="hidden" id="delete-account-id">
             <input type="hidden" id="delete-account-name">
             <div class="flex gap-2 w-100" style="display:flex; gap:10px;">
                 <button class="btn btn-outline w-100" id="cancel-delete-btn" style="flex:1;">Cancel</button>

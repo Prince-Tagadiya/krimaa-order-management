@@ -67,6 +67,98 @@ function normalizeToISODate(rawDate) {
     return '';
 }
 
+function parseFlexibleDateTime(rawValue) {
+    if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+    if (rawValue instanceof Date && !isNaN(rawValue.getTime())) return rawValue;
+
+    if (typeof rawValue === 'object') {
+        if (typeof rawValue.toDate === 'function') {
+            try {
+                const d = rawValue.toDate();
+                if (d instanceof Date && !isNaN(d.getTime())) return d;
+            } catch (e) {}
+        }
+        if (typeof rawValue.seconds === 'number') {
+            const d = new Date(rawValue.seconds * 1000);
+            if (!isNaN(d.getTime())) return d;
+        }
+        if (typeof rawValue._seconds === 'number') {
+            const d = new Date(rawValue._seconds * 1000);
+            if (!isNaN(d.getTime())) return d;
+        }
+    }
+
+    if (typeof rawValue === 'number' && isFinite(rawValue)) {
+        if (rawValue > 1000000000000) {
+            const d = new Date(rawValue);
+            if (!isNaN(d.getTime())) return d;
+        } else if (rawValue > 1000000000) {
+            const d = new Date(rawValue * 1000);
+            if (!isNaN(d.getTime())) return d;
+        } else if (rawValue > 10000 && rawValue < 60000) {
+            const d = new Date((rawValue - 25569) * 86400000);
+            if (!isNaN(d.getTime())) return d;
+        }
+    }
+
+    const str = String(rawValue).trim();
+    if (!str) return null;
+
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(str)) {
+        const d = new Date(str.replace(' ', 'T'));
+        if (!isNaN(d.getTime())) return d;
+    }
+
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}(\s+\d{1,2}:\d{2}(:\d{2})?)?$/.test(str)) {
+        const parts = str.split(/\s+/);
+        const dateParts = (parts[0] || '').split('/');
+        if (dateParts.length === 3) {
+            let day = parseInt(dateParts[0], 10);
+            let month = parseInt(dateParts[1], 10);
+            const year = parseInt(dateParts[2], 10);
+            if (day <= 12 && month > 12) {
+                const tmp = day;
+                day = month;
+                month = tmp;
+            }
+            const timeParts = (parts[1] || '00:00:00').split(':');
+            const hour = parseInt(timeParts[0] || '0', 10);
+            const minute = parseInt(timeParts[1] || '0', 10);
+            const second = parseInt(timeParts[2] || '0', 10);
+            const d = new Date(year, month - 1, day, hour, minute, second);
+            if (!isNaN(d.getTime())) return d;
+        }
+    }
+
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) return parsed;
+    return null;
+}
+
+function getKarigarTxTimestampMs(tx) {
+    if (!tx) return 0;
+    const created = parseFlexibleDateTime(tx.createdAt);
+    if (created) return created.getTime();
+    const updated = parseFlexibleDateTime(tx.updatedAt);
+    if (updated) return updated.getTime();
+    const rowDate = parseFlexibleDateTime(tx.date);
+    return rowDate ? rowDate.getTime() : 0;
+}
+
+function getKarigarTransactionsFor(karigarId, karigarName) {
+    const targetId = String(karigarId || '').trim();
+    const targetName = String(karigarName || '').trim().toLowerCase();
+    return (AppState.karigarTransactions || [])
+        .filter(t => {
+            const txId = String(t.karigarId || '').trim();
+            const txName = String(t.karigarName || '').trim().toLowerCase();
+            if (targetId && txId && txId === targetId) return true;
+            if (targetName && txName && txName === targetName) return true;
+            return false;
+        })
+        .sort((a, b) => getKarigarTxTimestampMs(b) - getKarigarTxTimestampMs(a));
+}
+
 function diffDays(fromISO, toISO) {
     if (!fromISO || !toISO) return -1;
     const fromDate = new Date(`${fromISO}T00:00:00`);
@@ -176,6 +268,88 @@ function initApp() {
     // Backup button
     const backupBtn = document.getElementById('backup-btn');
     if (backupBtn) backupBtn.addEventListener('click', () => backupToSheets(false));
+
+    const integrityBtn = document.getElementById('fix-integrity-btn');
+    if (integrityBtn) integrityBtn.addEventListener('click', async () => {
+        if (!confirm("This will repair ALL data integrity issues (corrupted names, missing IDs, wrong formats) across Google Sheets and Firebase. This may take 1-2 minutes. Continue?")) return;
+        showLoader();
+        try {
+            // Step 1: Get all real names from Firebase (source of truth)
+            showToast("Reading data from Firebase...", "info");
+            const [c1Acc, c2Acc, karResult] = await Promise.all([
+                FirebaseService.getAccounts('company1'),
+                FirebaseService.getAccounts('company2'),
+                FirebaseService.getKarigars()
+            ]);
+            
+            const allAccounts = [
+                ...((c1Acc.details || []).map(a => ({ docId: a.accountId, name: a.name, companyId: 'company1' }))),
+                ...((c2Acc.details || []).map(a => ({ docId: a.accountId, name: a.name, companyId: 'company2' })))
+            ];
+            const allKarigars = (karResult.data || []).map(k => ({ docId: k.id, name: k.name }));
+            
+            // Step 2: Send Firebase data to Sheets to fix corrupted names
+            showToast("Repairing names in Google Sheets...", "info");
+            const repairRes = await sheetsApiRequest({ 
+                action: 'repairFromFirebase', 
+                firebaseData: JSON.stringify({ accounts: allAccounts, karigars: allKarigars })
+            });
+            
+            // Step 3: Run backfill for any remaining structural fixes
+            showToast("Running structural integrity check...", "info");
+            const backfillRes = await sheetsApiRequest({ action: 'backfillIds' });
+            
+            // Step 4: Fix Firebase
+            showToast("Fixing Firebase database...", "info");
+            const resFb = await FirebaseService.fixHistoricalDataIntegrity();
+
+            const r = repairRes.stats || {};
+            const b = backfillRes.stats || {};
+            const f = resFb.stats || {};
+            showToast(
+                `Repair Complete! Names Fixed: (Acc: ${r.accounts||0}, Kar: ${r.karigars||0}, Ord: ${r.orders||0}) | ` +
+                `IDs Fixed: (Acc: ${b.accounts||0}, Ord: ${b.orders||0}) | ` +
+                `Firebase: (Acc: ${f.accounts||0}, Ord: ${f.orders||0})`, 
+                "success"
+            );
+            
+            await fetchAccounts();
+            renderAccountsList();
+            try { await fetchAllCompaniesData(); } catch (e) {}
+        } catch (err) {
+            console.error(err);
+            showToast("Migration error: " + err.message, "error");
+        } finally {
+            hideLoader();
+        }
+    });
+
+    const syncToFirebaseBtn = document.getElementById('sync-to-firebase-btn');
+    if (syncToFirebaseBtn) syncToFirebaseBtn.addEventListener('click', async () => {
+        if (!confirm("This will push ALL current Google Sheet data into Firebase, making the Sheet the source of truth. Any data in Sheet will update or create records in Firebase. Continue?")) return;
+        showLoader();
+        try {
+            showToast("Reading all data from Google Sheets...", "info");
+            const sheetRes = await sheetsApiRequest({ action: 'getAllSheetData' });
+            if (!sheetRes.success) throw new Error(sheetRes.message || "Failed to read sheets");
+
+            showToast("Pushing data to Firebase. Please wait...", "info");
+            const syncRes = await FirebaseService.syncFromSheets(sheetRes.data);
+            
+            if (syncRes.success) {
+                const s = syncRes.stats;
+                showToast(`Sync Complete! Accounts: ${s.accounts}, Orders: ${s.orders}, Karigars: ${s.karigars}, Txs: ${s.karigarTxs}`, "success");
+                setTimeout(() => window.location.reload(), 2000);
+            } else {
+                throw new Error(syncRes.message || "Firebase sync failed");
+            }
+        } catch (err) {
+            console.error(err);
+            showToast("Sync Failed: " + err.message, "error");
+        } finally {
+            hideLoader();
+        }
+    });
 
     const today = getTodayISODate();
     setOrderDateDefaults(true);
@@ -476,10 +650,11 @@ function attachEventListeners() {
         const orders = [];
         let hasData = false;
         document.querySelectorAll('.order-row').forEach(row => {
-            const accountName = row.dataset.account;
+            const accountId = row.dataset.accountId;
+            const accountName = row.dataset.accountName;
             const meesho = parseInt(row.querySelector('.inp-meesho').value) || 0;
             if (meesho > 0) hasData = true;
-            orders.push({ accountName, meesho, total: meesho });
+            orders.push({ accountId, accountName, meesho });
         });
         if (!hasData) return showToast("Please enter at least one order value!", "error");
         const btn = document.getElementById('submit-orders-btn');
@@ -509,30 +684,13 @@ function attachEventListeners() {
     document.getElementById('close-modal-btn').addEventListener('click', () => document.getElementById('order-details-modal').classList.remove('show'));
     document.getElementById('order-details-modal').addEventListener('click', (e) => { if(e.target.id === 'order-details-modal') e.target.classList.remove('show'); });
     
+
     document.getElementById('close-edit-modal-btn').addEventListener('click', () => document.getElementById('edit-account-modal').classList.remove('show'));
     document.getElementById('edit-account-modal').addEventListener('click', (e) => { if(e.target.id === 'edit-account-modal') e.target.classList.remove('show'); });
     document.getElementById('edit-account-recharge')?.addEventListener('change', updateEditRechargeMeta);
     document.getElementById('edit-account-form').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const oldName = document.getElementById('edit-account-old-name').value;
-        const newName = document.getElementById('edit-account-name').value.trim();
-        const mobile = document.getElementById('edit-account-mobile')?.value.trim();
-        const rechargeDate = document.getElementById('edit-account-recharge')?.value;
-        if (!newName) return;
-        showLoader();
-        try {
-            const res = await apiRequest({ action: 'editAccount', oldName, newName, mobile, gstin: '', rechargeDate, companyId: AppState.currentCompany });
-            if (res.success) {
-                showToast("Account updated!", "success");
-                document.getElementById('edit-account-modal').classList.remove('show');
-                await fetchAccounts();
-                renderAccountsList();
-                await fetchDashboardData();
-                try { await fetchAllCompaniesData(); } catch (e) { console.warn('Non-blocking: failed to refresh all-company data after edit', e); }
-            }
-            else showToast(res.message || "Failed to update", "error");
-        } catch(err) { showToast("Network Error!", "error"); }
-        finally { hideLoader(); }
+        await saveEditAccount();
     });
 
     const closeDeleteModalBtn = document.getElementById('close-delete-modal-btn');
@@ -542,11 +700,18 @@ function attachEventListeners() {
     document.getElementById('delete-account-modal').addEventListener('click', (e) => { if(e.target.id === 'delete-account-modal') e.target.classList.remove('show'); });
     document.getElementById('cancel-delete-btn').addEventListener('click', () => document.getElementById('delete-account-modal').classList.remove('show'));
     document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+        const accountId = document.getElementById('delete-account-id').value;
         const accountName = document.getElementById('delete-account-name').value;
         showLoader();
         try {
-            const res = await apiRequest({ action: 'deleteAccount', accountName, companyId: AppState.currentCompany });
-            if (res.success) { showToast("Account deleted!", "success"); document.getElementById('delete-account-modal').classList.remove('show'); await fetchAccounts(); renderAccountsList(); }
+            const res = await apiRequest({ action: 'deleteAccount', accountId, accountName, companyId: AppState.currentCompany });
+            if (res.success) { 
+                showToast("Account deleted!", "success"); 
+                document.getElementById('delete-account-modal').classList.remove('show'); 
+                await fetchAccounts(); 
+                renderAccountsList(); 
+                try { await fetchAllCompaniesData(); } catch (e) {} 
+            }
             else showToast(res.message || "Failed to delete", "error");
         } catch(err) { showToast("Network Error!", "error"); }
         finally { hideLoader(); }
@@ -624,6 +789,34 @@ async function ensureLegacyOrdersMigrated() {
     }
 }
 
+async function ensureLegacyIdIntegrity() {
+    if (localStorage.getItem('id_prefix_integrity_v3')) return;
+    try {
+        showProgressToast('Fixing old account and karigar IDs...');
+
+        // Run Sheet backfill for legacy rows when possible.
+        if (AppState.currentUser?.role === 'admin') {
+            try {
+                const sheetFixRes = await sheetsApiRequest({ action: 'backfillIds' });
+                if (sheetFixRes && sheetFixRes.success === false) {
+                    console.warn('Sheet ID backfill returned warning:', sheetFixRes.message);
+                }
+            } catch (sheetErr) {
+                console.warn('Sheet ID backfill skipped:', sheetErr);
+            }
+        }
+
+        const fbFixRes = await FirebaseService.fixHistoricalDataIntegrity();
+        if (fbFixRes && fbFixRes.success === false) {
+            throw new Error(fbFixRes.message || 'Firebase ID integrity fix failed');
+        }
+
+        localStorage.setItem('id_prefix_integrity_v3', 'true');
+    } catch (e) {
+        console.error('Legacy ID integrity fix failed:', e);
+    }
+}
+
 async function autoFixMismatchedAccountNames() {
     if (localStorage.getItem('mismatched_accounts_fixed_v2')) return;
     try {
@@ -695,6 +888,7 @@ async function loadInitialData() {
         // One-time migration: Sheets → Firebase
         await ensureFirebaseSeeded();
         await ensureLegacyOrdersMigrated();
+        await ensureLegacyIdIntegrity();
         await autoFixMismatchedAccountNames();
         await FirebaseService.migrateDatabaseToIds();
         
@@ -754,9 +948,16 @@ function setSheetsCache(companyId, data) {
 
 function mergeOrders(historical, recent) {
     const map = new Map();
-    (historical||[]).forEach(r => map.set(`${r.date}_${r.accountName}`, r));
-    (recent||[]).forEach(r => map.set(`${r.date}_${r.accountName}`, r));
-    return Array.from(map.values()).sort((a,b) => (b.date > a.date ? 1 : -1));
+    // Use accountId for merging if possible, otherwise fallback to accountName for legacy compatibility
+    (historical||[]).forEach(r => {
+        const key = `${normalizeToISODate(r.date)}_${r.accountId || r.accountName}`;
+        map.set(key, r);
+    });
+    (recent||[]).forEach(r => {
+        const key = `${normalizeToISODate(r.date)}_${r.accountId || r.accountName}`;
+        map.set(key, r);
+    });
+    return Array.from(map.values()).sort((a,b) => (normalizeToISODate(b.date) > normalizeToISODate(a.date) ? 1 : -1));
 }
 
 let _isSyncingBg = false;
@@ -878,10 +1079,9 @@ function renderAccountsList() {
             handle: '.drag-handle',
             animation: 250,
             onEnd: function() {
-                const newOrder = Array.from(container.children).map(c => c.dataset.account);
-                AppState.accounts = [...newOrder];
-                saveAccountPositions(newOrder);
-                saveAccountOrderToSheet(newOrder);
+                const newOrder = Array.from(container.children).map(c => c.dataset.accountId);
+                // We keep accountId order in Firebase
+                saveAccountOrderToSheet(newOrder); 
                 Array.from(container.children).forEach((el, idx) => {
                     const posEl = el.querySelector('.account-position-badge');
                     if (posEl) posEl.textContent = idx + 1;
@@ -890,8 +1090,9 @@ function renderAccountsList() {
         });
     }
 
-    container.innerHTML = sorted.map((acc, idx) => {
-        const details = AppState.accountDetails?.find(d => d.name === acc) || {};
+    container.innerHTML = AppState.accountDetails.map((details, idx) => {
+        const id = details.accountId;
+        const acc = details.name; 
         const rechargeTxt = getRechargeText(details.rechargeDate);
         const extraHtml = `
             <div class="account-meta">
@@ -900,7 +1101,7 @@ function renderAccountsList() {
             </div>`;
 
         return `
-        <div class="account-item" data-account="${acc.replace(/"/g, '&quot;')}">
+        <div class="account-item" data-account-id="${id}" data-account-name="${acc.replace(/"/g, '&quot;')}">
             <div style="display: flex; align-items: center; gap: 10px;">
                 ${isAdmin ? `<i class='bx bx-menu drag-handle' style="cursor: grab; color: #a0aec0;"></i>` : ''}
                 <div class="account-position-badge">${idx + 1}</div>
@@ -910,27 +1111,47 @@ function renderAccountsList() {
                 </div>
             </div>
             ${isAdmin ? `<div class="account-actions">
-                <button class="btn btn-outline btn-sm edit-btn" onclick="openEditAccount('${acc.replace(/'/g, "\\'")}')" title="Edit details"><i class='bx bx-edit-alt'></i></button>
-                <button class="btn btn-outline btn-sm delete-btn" onclick="openDeleteAccount('${acc.replace(/'/g, "\\'")}')" title="Delete"><i class='bx bx-trash'></i></button>
+                <button class="btn btn-outline btn-sm edit-btn" onclick="openEditAccount('${id}', '${acc.replace(/'/g, "\\'")}')" title="Edit details"><i class='bx bx-edit-alt'></i></button>
+                <button class="btn btn-outline btn-sm delete-btn" onclick="openDeleteAccount('${id}', '${acc.replace(/'/g, "\\'")}')" title="Delete"><i class='bx bx-trash'></i></button>
             </div>` : ''}
         </div>
     `}).join('');
 }
 
-function openEditAccount(name) {
+function openEditAccount(id, name) {
+    const details = AppState.accountDetails.find(d => d.accountId === id);
+    if (!details) return;
+    document.getElementById('edit-account-id').value = id;
     document.getElementById('edit-account-old-name').value = name;
     document.getElementById('edit-account-name').value = name;
-    const nameLabel = document.getElementById('edit-account-name-display');
-    if (nameLabel) nameLabel.textContent = name;
-    
-    // Fill the detailed fields if available
-    const details = AppState.accountDetails?.find(d => d.name === name);
-    if (document.getElementById('edit-account-mobile')) document.getElementById('edit-account-mobile').value = details?.mobile || '';
-    if (document.getElementById('edit-account-recharge')) document.getElementById('edit-account-recharge').value = details?.rechargeDate || '';
-    updateEditRechargeMeta();
-    
+    document.getElementById('edit-account-mobile').value = details.mobile || '';
+    document.getElementById('edit-account-recharge').value = details.rechargeDate || '';
     document.getElementById('edit-account-modal').classList.add('show');
-    setTimeout(() => document.getElementById('edit-account-mobile')?.focus(), 200);
+}
+
+async function saveEditAccount() {
+    const id = document.getElementById('edit-account-id').value;
+    const oldName = document.getElementById('edit-account-old-name').value;
+    const newName = document.getElementById('edit-account-name').value.trim();
+    const mobile = document.getElementById('edit-account-mobile').value.trim();
+    const recharge = document.getElementById('edit-account-recharge').value;
+    const compId = AppState.currentCompany;
+    
+    if (!newName) return showToast("Name cannot be empty!", "error");
+    
+    showToast("Updating account...", "info");
+    const res = await FirebaseService.editAccount(id, newName, compId, mobile, '', recharge);
+    if (res.success) {
+        showToast("Account updated!", "success");
+        document.getElementById('edit-account-modal').classList.remove('show');
+        await fetchAccounts();
+        if (AppState.currentSection === 'daily-order' || AppState.currentSection === 'order-entry') renderOrderEntryTable();
+        if (AppState.currentSection === 'add-account' || AppState.currentSection === 'accounts') renderAccountsList();
+        await fetchDashboardData();
+        try { await fetchAllCompaniesData(); } catch (e) { console.warn('Non-blocking: failed to refresh all-company data after edit', e); }
+    } else {
+        showToast(res.message, "error");
+    }
 }
 
 function updateEditRechargeMeta() {
@@ -940,7 +1161,8 @@ function updateEditRechargeMeta() {
     meta.textContent = rechargeInput.value ? getRechargeText(rechargeInput.value) : 'Not added';
 }
 
-function openDeleteAccount(name) {
+function openDeleteAccount(id, name) {
+    document.getElementById('delete-account-id').value = id;
     document.getElementById('delete-account-name').value = name;
     document.getElementById('delete-account-name-display').textContent = `"${name}"?`;
     document.getElementById('delete-account-modal').classList.add('show');
@@ -952,12 +1174,12 @@ function renderOrderEntryTable() {
     const msg = document.getElementById('no-accounts-msg');
     if (AppState.accounts.length === 0) { container.classList.add('hidden'); msg.classList.remove('hidden'); return; }
     container.classList.remove('hidden'); msg.classList.add('hidden');
-    const sorted = getSortedAccounts();
-    tbody.innerHTML = sorted.map((acc, index) => `
-        <tr class="order-row" data-account="${acc}">
+    const sorted = AppState.accountDetails; // Already sorted by fetchAccounts
+    tbody.innerHTML = sorted.map((ad, index) => `
+        <tr class="order-row" data-account-id="${ad.accountId}" data-account-name="${ad.name}">
             <td class="drag-handle-cell"><i class='bx bx-menu drag-handle'></i></td>
             <td class="position-number">${index + 1}</td>
-            <td class="font-medium">${acc}</td>
+            <td class="font-medium">${ad.name}</td>
             <td><input type="number" min="0" class="inp-meesho" data-index="${index}" placeholder="0"></td>
             <td><span class="row-total" id="total-${index}">0</span></td>
         </tr>
@@ -1151,35 +1373,56 @@ function renderDashboard() {
 
 function renderAccountTotals(c1Filtered, c2Filtered) {
     const accTbody = document.getElementById('dash-account-totals');
+    if (!accTbody) return;
     accTbody.innerHTML = '';
     
-    const buildAccTotals = (accounts, filtered) => {
+    const buildAccTotals = (accountDetails, filtered) => {
         const totals = {};
-        accounts.forEach(a => totals[a] = { meesho:0, total:0 });
-        filtered.forEach(row => { if (totals[row.accountName]) { totals[row.accountName].meesho += parseInt(row.meesho)||0; totals[row.accountName].total += parseInt(row.total)||0; } });
+        // Use accountId as the key for reliable aggregation
+        accountDetails.forEach(ad => {
+            const id = ad.accountId;
+            totals[id] = { name: ad.name, meesho: 0, total: 0 };
+        });
+        
+        filtered.forEach(row => {
+            const id = row.accountId;
+            if (id && totals[id]) {
+                totals[id].meesho += parseInt(row.meesho) || 0;
+                totals[id].total += parseInt(row.total) || 0;
+            } else if (row.accountName) {
+                // Fallback for legacy name-based records
+                const idFromName = Object.keys(totals).find(k => totals[k].name === row.accountName);
+                if (idFromName) {
+                    totals[idFromName].meesho += parseInt(row.meesho) || 0;
+                    totals[idFromName].total += parseInt(row.total) || 0;
+                }
+            }
+        });
         return totals;
     };
     
-    const c1AccTotals = buildAccTotals(AppState.company1Accounts, c1Filtered);
-    const c2AccTotals = buildAccTotals(AppState.company2Accounts, c2Filtered);
+    const c1AccTotals = buildAccTotals(AppState.company1Details, c1Filtered);
+    const c2AccTotals = buildAccTotals(AppState.company2Details, c2Filtered);
 
     let html = '';
     
     // Company A Header
-    if (Object.keys(c1AccTotals).length > 0) {
+    const c1Keys = Object.keys(c1AccTotals);
+    if (c1Keys.length > 0) {
         html += `<tr class="table-divider-row"><td colspan="5">Company A Accounts</td></tr>`;
-        Object.keys(c1AccTotals).forEach(acc => {
-            const d = c1AccTotals[acc];
-            html += `<tr><td class="font-medium">${acc}</td><td class="text-center"><span class="dot dot-a"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
+        c1Keys.forEach(id => {
+            const d = c1AccTotals[id];
+            html += `<tr><td class="font-medium">${d.name}</td><td class="text-center"><span class="dot dot-a"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
         });
     }
 
     // Company B Header
-    if (Object.keys(c2AccTotals).length > 0) {
+    const c2Keys = Object.keys(c2AccTotals);
+    if (c2Keys.length > 0) {
         html += `<tr class="table-divider-row"><td colspan="5">Company B Accounts</td></tr>`;
-        Object.keys(c2AccTotals).forEach(acc => {
-            const d = c2AccTotals[acc];
-            html += `<tr><td class="font-medium">${acc}</td><td class="text-center"><span class="dot dot-b"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
+        c2Keys.forEach(id => {
+            const d = c2AccTotals[id];
+            html += `<tr><td class="font-medium">${d.name}</td><td class="text-center"><span class="dot dot-b"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
         });
     }
 
@@ -1296,10 +1539,10 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
     const inactiveCard = document.getElementById('inactive-card-container');
     const inactiveAccounts = [];
     
-    const getLastOrderMeta = (accountName, rawData) => {
+    const getLastOrderMeta = (accountId, rawData) => {
         let lastDate = null;
         rawData.forEach(r => {
-            if (r.accountName === accountName && (parseInt(r.total) || 0) > 0) {
+            if (r.accountId === accountId && (parseInt(r.total) || 0) > 0) {
                 const normalizedDate = normalizeToISODate(r.date);
                 if (normalizedDate && (!lastDate || normalizedDate > lastDate)) {
                     lastDate = normalizedDate;
@@ -1310,11 +1553,12 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
         return { days: diffDays(lastDate, getTodayISODate()), lastDate };
     };
 
-    AppState.company1Accounts.forEach(acc => {
-        if (!c1Filtered.some(r => r.accountName === acc && (parseInt(r.total)||0) > 0)) {
-            const meta = getLastOrderMeta(acc, AppState.company1Data);
+    AppState.company1Details.forEach(ad => {
+        const id = ad.accountId;
+        if (!c1Filtered.some(r => r.accountId === id && (parseInt(r.total)||0) > 0)) {
+            const meta = getLastOrderMeta(id, AppState.company1Data);
             inactiveAccounts.push({
-                name: acc,
+                name: ad.name,
                 companyName: getCompanyDisplayName('company1'),
                 class: 'a',
                 days: meta.days,
@@ -1322,11 +1566,12 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
             });
         }
     });
-    AppState.company2Accounts.forEach(acc => {
-        if (!c2Filtered.some(r => r.accountName === acc && (parseInt(r.total)||0) > 0)) {
-            const meta = getLastOrderMeta(acc, AppState.company2Data);
+    AppState.company2Details.forEach(ad => {
+        const id = ad.accountId;
+        if (!c2Filtered.some(r => r.accountId === id && (parseInt(r.total)||0) > 0)) {
+            const meta = getLastOrderMeta(id, AppState.company2Data);
             inactiveAccounts.push({
-                name: acc,
+                name: ad.name,
                 companyName: getCompanyDisplayName('company2'),
                 class: 'b',
                 days: meta.days,
@@ -1447,22 +1692,39 @@ function renderHighLowDay(c1Filtered, c2Filtered) {
 // ===== ACCOUNT RANKING =====
 function renderAccountRanking(c1Filtered, c2Filtered) {
     const rankTbody = document.getElementById('ranking-tbody');
+    if (!rankTbody) return;
     const allAccounts = [];
     
-    const c1AccTotals = {}; AppState.company1Accounts.forEach(a => c1AccTotals[a] = 0);
-    c1Filtered.forEach(r => { if (c1AccTotals[r.accountName] !== undefined) c1AccTotals[r.accountName] += parseInt(r.total)||0; });
-    Object.entries(c1AccTotals).forEach(([name, total]) => allAccounts.push({ name, company: 'A', total }));
+    const buildRankData = (detailsList, filtered, companyLabel) => {
+        const totals = {};
+        detailsList.forEach(ad => {
+            totals[ad.accountId] = { name: ad.name, total: 0 };
+        });
+        filtered.forEach(r => {
+            const id = r.accountId;
+            if (id && totals[id]) totals[id].total += parseInt(r.total) || 0;
+            else if (r.accountName) {
+                const idFromName = Object.keys(totals).find(k => totals[k].name === r.accountName);
+                if (idFromName) totals[idFromName].total += parseInt(r.total) || 0;
+            }
+        });
+        return Object.keys(totals).map(id => ({
+            id,
+            name: totals[id].name,
+            company: companyLabel,
+            total: totals[id].total
+        }));
+    };
     
-    const c2AccTotals = {}; AppState.company2Accounts.forEach(a => c2AccTotals[a] = 0);
-    c2Filtered.forEach(r => { if (c2AccTotals[r.accountName] !== undefined) c2AccTotals[r.accountName] += parseInt(r.total)||0; });
-    Object.entries(c2AccTotals).forEach(([name, total]) => allAccounts.push({ name, company: 'B', total }));
+    const c1Rank = buildRankData(AppState.company1Details, c1Filtered, 'A');
+    const c2Rank = buildRankData(AppState.company2Details, c2Filtered, 'B');
     
-    allAccounts.sort((a, b) => b.total - a.total);
-    const top = allAccounts; // Show all accounts
+    const combined = [...c1Rank, ...c2Rank];
+    combined.sort((a, b) => b.total - a.total);
     
-    if (top.length === 0) { rankTbody.innerHTML = '<div class="text-center text-muted p-2">No data</div>'; return; }
+    if (combined.length === 0) { rankTbody.innerHTML = '<div class="text-center text-muted p-2">No data</div>'; return; }
     
-    rankTbody.innerHTML = top.map((acc, idx) => {
+    rankTbody.innerHTML = combined.map((acc, idx) => {
         const rank = idx + 1;
         const rankClass = rank === 1 ? 'top-1' : '';
         const badgeClass = acc.company === 'A' ? 'text-a' : 'text-b';
@@ -1648,14 +1910,14 @@ async function apiRequest(payload) {
             case 'getDashboardData': return await FirebaseService.getOrders(companyId, payload.month);
             case 'submitOrders': return await FirebaseService.submitOrders(payload.date, payload.orders, companyId);
             case 'addAccount': return await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
-            case 'editAccount': return await FirebaseService.editAccount(payload.oldName, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+            case 'editAccount': return await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
             case 'deleteAccount': return await FirebaseService.deleteAccount(payload.accountName, companyId);
             case 'updateAccountOrder': return await FirebaseService.updateAccountOrder(payload.orderedAccounts, companyId);
             case 'saveRemark': return await FirebaseService.saveRemark(payload.date, payload.remark);
             case 'getRemarks': return await FirebaseService.getRemarks();
-            case 'updateOrder': return await FirebaseService.updateOrder(payload.date, payload.accountName, payload.field, payload.value, companyId);
+            case 'updateOrder': return await FirebaseService.updateOrder(payload.date, payload.accountId, payload.field, payload.value, companyId);
             case 'getCompanies': return { success: true, data: [{id: 'company1', name: 'Company 1'}, {id: 'company2', name: 'Company 2'}] };
-            case 'updateMoney': return await FirebaseService.updateMoney(payload.accountName, companyId, payload.money, payload.expense, payload.date);
+            case 'updateMoney': return await FirebaseService.updateMoney(payload.accountId, companyId, payload.money, payload.expense, payload.date);
             case 'resetAllMoney': return await FirebaseService.resetAllMoney(payload.date);
             case 'createMoneyBackup': return await FirebaseService.createMoneyBackup(payload.date, payload.rows, payload.reason);
             case 'getMoneyBackups': return await FirebaseService.getMoneyBackups();
@@ -2189,14 +2451,14 @@ async function renderDataSheet() {
     let rawData = [];
     
     if (companyFilter === 'company1') {
-        accounts = AppState.company1Accounts.map(a => ({ name: a, company: 'company1', label: getCompanyDisplayName('company1') }));
+        accounts = AppState.company1Details.map(ad => ({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
         rawData = [...AppState.company1Data];
     } else if (companyFilter === 'company2') {
-        accounts = AppState.company2Accounts.map(a => ({ name: a, company: 'company2', label: getCompanyDisplayName('company2') }));
+        accounts = AppState.company2Details.map(ad => ({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
         rawData = [...AppState.company2Data];
     } else {
-        AppState.company1Accounts.forEach(a => accounts.push({ name: a, company: 'company1', label: getCompanyDisplayName('company1') }));
-        AppState.company2Accounts.forEach(a => accounts.push({ name: a, company: 'company2', label: getCompanyDisplayName('company2') }));
+        AppState.company1Details.forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
+        AppState.company2Details.forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
         rawData = [...AppState.company1Data, ...AppState.company2Data];
     }
     
@@ -2249,13 +2511,13 @@ async function renderDataSheet() {
     wrapper.classList.remove('hidden');
     emptyMsg.classList.add('hidden');
     
-    // Build lookup: { date -> { accountName -> { meesho, total, company } } }
+    // Build lookup: { date -> { accountId -> { meesho, total, company } } }
     const lookup = {};
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (!d) return;
         if (!lookup[d]) lookup[d] = {};
-        const key = r.accountName;
+        const key = r.accountId || r.accountName;
         if (!lookup[d][key]) lookup[d][key] = { meesho: 0, total: 0 };
         lookup[d][key].meesho += parseInt(r.meesho) || 0;
         lookup[d][key].total += parseInt(r.total) || 0;
@@ -2296,12 +2558,12 @@ async function renderDataSheet() {
         
         let rowTotal = 0;
         accounts.forEach((acc, idx) => {
-            const cell = lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
+            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
             const meeshoVal = cell.meesho || '';
             rowTotal += cell.total;
             grandTotals.meesho[idx] += cell.meesho;
             
-            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${meeshoVal || ''}" data-date="${date}" data-account="${acc.name}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="-"></td>`;
+            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${meeshoVal || ''}" data-date="${date}" data-account-id="${acc.id}" data-account-name="${acc.name}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="-"></td>`;
         });
         grandTotals.total += rowTotal;
         
@@ -2345,12 +2607,12 @@ async function renderDataSheet() {
     // === EVENT: Save order cell edits (buffered to Firebase) ===
     tbody.querySelectorAll('input[data-field="meesho"]').forEach(inp => {
         inp.addEventListener('change', () => {
-            const { date, account, company, field } = inp.dataset;
+            const { date, accountId, company, field } = inp.dataset;
             const value = parseInt(inp.value) || 0;
             
             // Update local state immediately
             const stateData = company === 'company1' ? AppState.company1Data : AppState.company2Data;
-            const row = stateData.find(r => normalizeToISODate(r.date) === date && r.accountName === account);
+            const row = stateData.find(r => normalizeToISODate(r.date) === date && (r.accountId === accountId || (!r.accountId && r.accountName === inp.dataset.accountName)));
             if (row) {
                 row[field] = value;
                 row.total = parseInt(row.meesho) || 0;
@@ -2360,8 +2622,8 @@ async function renderDataSheet() {
             recalcSheetRowTotal(inp);
             
             // Buffer the write to Firebase
-            FirebaseService.bufferWrite(`order_${date}_${account}_${field}`, () =>
-                FirebaseService.updateOrder(date, account, field, value, company)
+            FirebaseService.bufferWrite(`order_${date}_${accountId}_${field}`, () =>
+                FirebaseService.updateOrder(date, accountId, field, value, company)
             );
         });
     });
@@ -2460,6 +2722,7 @@ async function renderMoneyManagement() {
         (accounts || []).forEach(accName => {
             const details = (detailsList || []).find(d => d.name === accName) || {};
             mgmtAccounts.push({
+                id: details.accountId || '',
                 name: accName,
                 company: companyLabel,
                 companyId: compId,
@@ -2486,7 +2749,7 @@ async function renderMoneyManagement() {
     }
     
     tbody.innerHTML = mgmtAccounts.map((acc, idx) => `
-        <tr class="money-row" data-account="${acc.name.replace(/"/g, '&quot;')}" data-company-id="${acc.companyId}">
+        <tr class="money-row" data-account-id="${acc.id}" data-account-name="${acc.name.replace(/"/g, '&quot;')}" data-company-id="${acc.companyId}">
             <td class="drag-handle-cell"><i class='bx bx-menu money-drag-handle' style="cursor: grab; color: #a0aec0;"></i></td>
             <td class="position-number">${idx + 1}</td>
             <td><span class="badge ${acc.companyId === 'company1' ? 'badge-a' : 'badge-b'}">${acc.company}</span></td>
@@ -2497,6 +2760,7 @@ async function renderMoneyManagement() {
         </tr>
     `).join('');
     
+    // Helper to calculate grand totals
     const updateGrandTotals = () => {
         let totalMoney = 0;
         let totalExpense = 0;
@@ -2521,7 +2785,7 @@ async function renderMoneyManagement() {
              if (saveBtn) saveBtn.classList.remove('hidden');
              
              const row = inp.closest('.money-row');
-             const accName = row.dataset.account;
+             const accountId = row.dataset.accountId;
              const companyId = row.dataset.companyId;
              const money = parseInt(row.querySelector('.inp-money').value) || 0;
              const expense = parseInt(row.querySelector('.inp-expense').value) || 0;
@@ -2530,11 +2794,11 @@ async function renderMoneyManagement() {
              // Also update local state
              const detailsList = companyId === 'company1' ? AppState.company1Details : AppState.company2Details;
              if (detailsList) {
-                 const det = detailsList.find(d => d.name === accName);
+                 const det = detailsList.find(d => d.accountId === accountId);
                  if (det) { det.money = money; det.expense = expense; det.moneyDate = date; }
              }
              
-             FirebaseService.bufferWrite(`money_${companyId}_${accName}`, () => FirebaseService.updateMoney(accName, companyId, money, expense, date));
+             FirebaseService.bufferWrite(`money_${companyId}_${accountId}`, () => FirebaseService.updateMoney(accountId, companyId, money, expense, date));
         });
     });
     
@@ -2600,8 +2864,42 @@ async function loadMoneyBackups(force = false) {
         return AppState.moneyBackups;
     }
 
-    const res = await apiRequest({ action: 'getMoneyBackups' });
-    AppState.moneyBackups = Array.isArray(res?.data) ? res.data : [];
+    try {
+        const [fbRes, sheetsRes] = await Promise.all([
+            apiRequest({ action: 'getMoneyBackups' }).catch(() => null),
+            sheetsApiRequest({ action: 'getMoneyBackups' }).catch(() => null)
+        ]);
+
+        const fbData = Array.isArray(fbRes?.data) ? fbRes.data : [];
+        const sheetsData = Array.isArray(sheetsRes?.data) ? sheetsRes.data : [];
+
+        // Map helps to merge duplicates. Firebase data will overwrite sheets data if backupDate+reason match
+        const map = new Map();
+        
+        // Load sheets backups first
+        sheetsData.forEach(b => {
+            const key = b.backupDate + '_' + (b.reason || '');
+            map.set(key, b);
+        });
+        
+        // Override with Firebase backups
+        fbData.forEach(b => {
+            const key = b.backupDate + '_' + (b.reason || '');
+            map.set(key, b);
+        });
+
+        const merged = Array.from(map.values());
+        
+        // Sort descending by backupDate
+        merged.sort((a,b) => (b.backupDate > a.backupDate ? 1 : -1));
+
+        AppState.moneyBackups = merged;
+    } catch(e) {
+        console.error("Error loading money backups", e);
+        const res = await apiRequest({ action: 'getMoneyBackups' }).catch(()=>null);
+        AppState.moneyBackups = Array.isArray(res?.data) ? res.data : [];
+    }
+    
     if (!AppState.selectedMoneyBackupId && AppState.moneyBackups.length > 0) {
         AppState.selectedMoneyBackupId = AppState.moneyBackups[0].id;
     }
@@ -2816,14 +3114,43 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ===== KARIGAR MANAGEMENT ===== */
 async function loadKarigarData() {
     try {
-        const [kRes, tRes, pRes] = await Promise.all([
-            FirebaseService.getKarigars(),
+        const kRes = await FirebaseService.getKarigars();
+        const [tRes, pRes] = await Promise.all([
             FirebaseService.getKarigarTransactions(),
             FirebaseService.getDesignPrices()
         ]);
         
         if (kRes.success) AppState.karigars = kRes.data || [];
-        if (tRes.success) AppState.karigarTransactions = (tRes.data || []).sort((a,b) => new Date(b.date) - new Date(a.date));
+
+        const karigarNameToId = {};
+        (AppState.karigars || []).forEach(k => {
+            const kName = String(k.name || '').trim().toLowerCase();
+            const kId = String(k.id || '').trim();
+            if (kName && kId) karigarNameToId[kName] = kId;
+        });
+
+        if (tRes.success) {
+            AppState.karigarTransactions = (tRes.data || [])
+                .map(tx => {
+                    const txName = String(tx.karigarName || '').trim();
+                    const txNameKey = txName.toLowerCase();
+                    const rawTxId = String(tx.karigarId || '').trim();
+                    const normalizedDate = normalizeToISODate(tx.date) || String(tx.date || '').trim();
+
+                    let resolvedTxId = rawTxId;
+                    if ((!resolvedTxId || !resolvedTxId.startsWith('kar_')) && txNameKey && karigarNameToId[txNameKey]) {
+                        resolvedTxId = karigarNameToId[txNameKey];
+                    }
+
+                    return {
+                        ...tx,
+                        karigarId: resolvedTxId,
+                        karigarName: txName || tx.karigarName || '',
+                        date: normalizedDate
+                    };
+                })
+                .sort((a, b) => getKarigarTxTimestampMs(b) - getKarigarTxTimestampMs(a));
+        }
         if (pRes.success) AppState.designPrices = pRes.data || {};
     } catch(e) {
         console.error("Failed to load karigar data", e);
@@ -2836,10 +3163,18 @@ async function renderKarigarPage() {
     setupKarigarListeners();
 }
 
-function calculateKarigarBalance(karigarName) {
-    if (!karigarName) return { totalJama: 0, totalUpad: 0, balance: 0, lastTx: null };
-    const searchName = karigarName.trim().toLowerCase();
-    const tx = AppState.karigarTransactions.filter(t => (t.karigarName || '').trim().toLowerCase() === searchName);
+function resolveKarigarIdFromState(karigarId, karigarName) {
+    const rawId = String(karigarId || '').trim();
+    if (rawId.startsWith('kar_')) return rawId;
+    const nameKey = String(karigarName || '').trim().toLowerCase();
+    if (!nameKey) return rawId;
+    const match = (AppState.karigars || []).find(k => String(k.name || '').trim().toLowerCase() === nameKey);
+    return (match && match.id) ? String(match.id).trim() : rawId;
+}
+
+function calculateKarigarBalance(karigarId, karigarName) {
+    if (!karigarId && !karigarName) return { totalJama: 0, totalUpad: 0, balance: 0, lastTx: null };
+    const tx = getKarigarTransactionsFor(karigarId, karigarName);
     let totalJama = 0;
     let totalUpad = 0;
     tx.forEach(t => {
@@ -2904,7 +3239,7 @@ function renderKarigarGrid() {
     let globalBalanceSum = 0;
     
     filtered.forEach(k => {
-        const stats = calculateKarigarBalance(k.name);
+        const stats = calculateKarigarBalance(k.id, k.name);
         globalBalanceSum += stats.balance;
         
         const lastActivity = stats.lastTx ? `<span class="text-xs text-muted">Last active: ${formatISODateForDisplay(stats.lastTx.date)}</span>` : '<span class="text-xs text-muted">No activity yet</span>';
@@ -2938,13 +3273,13 @@ function renderKarigarGrid() {
                 </div>
 
                 <div class="flex gap-2 w-100" style="margin-top: auto; display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
-                    <button class="btn btn-outline btn-karigar-upad" data-name="${k.name.replace(/"/g, '&quot;')}">
+                    <button class="btn btn-outline btn-karigar-upad" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}">
                         <i class='bx bx-minus-circle'></i> Borrow (Upad)
                     </button>
-                    <button class="btn btn-primary btn-karigar-jama" data-name="${k.name.replace(/"/g, '&quot;')}">
+                    <button class="btn btn-primary btn-karigar-jama" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}">
                         <i class='bx bx-plus-circle'></i> Maal (Jama)
                     </button>
-                    <button class="btn btn-outline btn-sm btn-karigar-history" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2;">
+                    <button class="btn btn-outline btn-sm btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2;">
                         <i class='bx bx-history'></i> View Detailed History
                     </button>
                 </div>
@@ -2961,13 +3296,22 @@ function renderKarigarGrid() {
     
     // Bind buttons
     grid.querySelectorAll('.btn-karigar-upad').forEach(btn => {
-        btn.addEventListener('click', (e) => openKarigarUpadModal(e.target.closest('.btn-karigar-upad').dataset.name));
+        btn.addEventListener('click', (e) => {
+            const el = e.currentTarget;
+            openKarigarUpadModal(el.dataset.id, el.dataset.name);
+        });
     });
     grid.querySelectorAll('.btn-karigar-jama').forEach(btn => {
-        btn.addEventListener('click', (e) => openKarigarJamaModal(e.target.closest('.btn-karigar-jama').dataset.name));
+        btn.addEventListener('click', (e) => {
+            const el = e.currentTarget;
+            openKarigarJamaModal(el.dataset.id, el.dataset.name);
+        });
     });
     grid.querySelectorAll('.btn-karigar-history').forEach(btn => {
-        btn.addEventListener('click', (e) => openKarigarHistoryModal(e.target.closest('.btn-karigar-history').dataset.name));
+        btn.addEventListener('click', (e) => {
+            const el = e.currentTarget;
+            openKarigarHistoryModal(el.dataset.id, el.dataset.name);
+        });
     });
 }
 
@@ -3044,8 +3388,9 @@ function setupKarigarListeners() {
     const upadBalanceDisplay = document.getElementById('karigar-upad-balance-display');
     if (upadAmount && !upadAmount.dataset.bound) {
         upadAmount.addEventListener('input', () => {
-            const karigarName = document.getElementById('karigar-upad-id').value;
-            const stats = calculateKarigarBalance(karigarName);
+            const id = document.getElementById('karigar-upad-id').value;
+            const name = document.getElementById('karigar-upad-name-display').textContent;
+            const stats = calculateKarigarBalance(id, name);
             const borrow = parseFloat(upadAmount.value) || 0;
             const newBal = stats.balance - borrow;
             
@@ -3085,7 +3430,9 @@ function setupKarigarListeners() {
     if (jamaForm && !jamaForm.dataset.bound) {
         jamaForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const karigarName = document.getElementById('karigar-jama-id').value;
+            const rawKarigarId = document.getElementById('karigar-jama-id').value;
+            const karigarName = document.getElementById('karigar-jama-name-display').textContent;
+            const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
             const date = document.getElementById('karigar-jama-date').value;
             const designName = document.getElementById('karigar-jama-design').value;
             const size = document.getElementById('karigar-jama-size').value;
@@ -3096,7 +3443,7 @@ function setupKarigarListeners() {
             showLoader();
             try {
                 await FirebaseService.addKarigarJama({ 
-                    karigarName, date, designName, size, pic, price, upadAmount, 
+                    karigarId, karigarName, date, designName, size, pic, price, upadAmount, 
                     companyId: AppState.currentCompany,
                     addedBy: AppState.currentUser?.role || 'admin'
                 });
@@ -3119,14 +3466,16 @@ function setupKarigarListeners() {
     if (upadForm && !upadForm.dataset.bound) {
         upadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const karigarName = document.getElementById('karigar-upad-id').value;
+            const rawKarigarId = document.getElementById('karigar-upad-id').value;
+            const karigarName = document.getElementById('karigar-upad-name-display').textContent;
+            const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
             const date = document.getElementById('karigar-upad-date').value;
             const amount = document.getElementById('karigar-upad-amount').value;
             
             showLoader();
             try {
                 await FirebaseService.addKarigarUpad({ 
-                    karigarName, date, amount, 
+                    karigarId, karigarName, date, amount, 
                     companyId: AppState.currentCompany,
                     addedBy: AppState.currentUser?.role || 'admin'
                 });
@@ -3140,8 +3489,8 @@ function setupKarigarListeners() {
     }
 }
 
-function openKarigarJamaModal(name) {
-    document.getElementById('karigar-jama-id').value = name;
+function openKarigarJamaModal(id, name) {
+    document.getElementById('karigar-jama-id').value = id;
     document.getElementById('karigar-jama-name-display').textContent = name;
     document.getElementById('karigar-jama-date').value = getTodayISODate();
     document.getElementById('karigar-jama-design').value = '';
@@ -3153,9 +3502,9 @@ function openKarigarJamaModal(name) {
     document.getElementById('karigar-jama-modal').classList.add('show');
 }
 
-function openKarigarUpadModal(name) {
-    const stats = calculateKarigarBalance(name);
-    document.getElementById('karigar-upad-id').value = name;
+function openKarigarUpadModal(id, name) {
+    const stats = calculateKarigarBalance(id, name);
+    document.getElementById('karigar-upad-id').value = id;
     document.getElementById('karigar-upad-name-display').textContent = name;
     document.getElementById('karigar-upad-date').value = getTodayISODate();
     document.getElementById('karigar-upad-amount').value = '';
@@ -3176,8 +3525,9 @@ function openKarigarUpadModal(name) {
     document.getElementById('karigar-upad-modal').classList.add('show');
 }
 
-function openKarigarHistoryModal(name) {
-    const txs = AppState.karigarTransactions.filter(t => t.karigarName === name);
+function openKarigarHistoryModal(id, name) {
+    const resolvedId = resolveKarigarIdFromState(id, name);
+    const txs = getKarigarTransactionsFor(resolvedId, name);
     document.getElementById('karigar-history-name-display').textContent = name;
     const tbody = document.getElementById('karigar-history-tbody');
     tbody.innerHTML = '';
@@ -3204,9 +3554,16 @@ function openKarigarHistoryModal(name) {
             if (t.addedBy === 'admin') addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> Admin</span>`;
             if (t.addedBy === 'order') addedByTag = `<span class="text-xs text-muted mt-1 block"><i class='bx bx-user'></i> Order</span>`;
             
+            const txDateObj = parseFlexibleDateTime(t.createdAt) || parseFlexibleDateTime(t.date);
+            const hasTimeInfo = !!t.createdAt || /\d{1,2}:\d{2}/.test(String(t.date || ''));
+            const displayDate = formatISODateForDisplay(t.date) || (txDateObj ? formatISODateForDisplay(txDateObj) : '-');
+            const timeTag = (hasTimeInfo && txDateObj)
+                ? `<div class="text-xs text-muted mt-1"><i class='bx bx-time-five'></i> ${txDateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>`
+                : '';
+            
             const row = `
                 <tr style="border-bottom: 1px solid var(--border-light); ${!isJama ? 'background: #fffcfc;' : ''}">
-                    <td class="p-2 text-sm">${formatISODateForDisplay(t.date)} <div class="mt-1">${companyTag}</div></td>
+                    <td class="p-2 text-sm">${displayDate} ${timeTag} <div class="mt-1">${companyTag}</div></td>
                     <td class="p-2 text-sm font-medium">${isJama ? (t.designName || 'Maal') : '<span class="text-danger font-bold">Direct Borrow (Upad)</span>'} ${addedByTag}</td>
                     <td class="p-2 text-sm text-center">${t.size || '-'}</td>
                     <td class="p-2 text-sm text-right font-bold">${t.pic || '-'}</td>
@@ -3214,7 +3571,7 @@ function openKarigarHistoryModal(name) {
                     <td class="p-2 text-sm text-right text-success font-bold">${isJama ? '₹'+jamaVal.toFixed(2) : '-'}</td>
                     <td class="p-2 text-sm text-right text-danger font-bold">${upadVal > 0 ? '₹'+upadVal.toFixed(2) : '-'}</td>
                     <td class="p-2 text-sm text-center">
-                        <button onclick="deleteKarigarHistory('${t.id}', '${name}')" class="btn-icon text-danger" title="Delete record"><i class='bx bx-trash'></i></button>
+                        <button onclick="deleteKarigarHistory('${t.id}', '${resolvedId}', '${name}')" class="btn-icon text-danger" title="Delete record"><i class='bx bx-trash'></i></button>
                     </td>
                 </tr>
             `;
@@ -3236,23 +3593,23 @@ function openKarigarHistoryModal(name) {
     }
     
     const deleteBtn = document.getElementById('btn-delete-employee');
-    deleteBtn.onclick = () => deleteCompleteKarigar(name);
+    deleteBtn.onclick = () => deleteCompleteKarigar(id, name);
     
     document.getElementById('karigar-history-modal').classList.add('show');
 }
 
-async function deleteCompleteKarigar(karigarName) {
-    if (!confirm(`!! WARNING !!\nAre you sure you want to completely delete "${karigarName}"? This will permanently remove them from the system.`)) return;
+async function deleteCompleteKarigar(id, name) {
+    if (!confirm(`!! WARNING !!\nAre you sure you want to completely delete "${name}"? This will permanently remove them from the system.`)) return;
     
     showLoader();
     try {
-        await FirebaseService.deleteKarigar(karigarName);
-        showToast(`Employee ${karigarName} deleted`, 'success');
+        await FirebaseService.deleteKarigar(id);
+        showToast(`Employee ${name} deleted`, 'success');
         
         document.getElementById('karigar-history-modal').classList.remove('show');
         
         // Remove locally and re-render
-        AppState.karigars = AppState.karigars.filter(k => k.name !== karigarName);
+        AppState.karigars = AppState.karigars.filter(k => k.id !== id);
         renderKarigarGrid();
     } catch (e) {
         console.error('Failed to delete karigar:', e);
@@ -3262,7 +3619,7 @@ async function deleteCompleteKarigar(karigarName) {
     }
 }
 
-async function deleteKarigarHistory(txId, karigarName) {
+async function deleteKarigarHistory(txId, karigarId, karigarName) {
     if (!confirm('Are you certain you want to specifically delete this record? This cannot be undone.')) return;
     
     showLoader();
@@ -3274,11 +3631,11 @@ async function deleteKarigarHistory(txId, karigarName) {
         AppState.karigarTransactions = AppState.karigarTransactions.filter(t => t.id !== txId);
         
         // Refresh the open modal and background grid immediately
-        openKarigarHistoryModal(karigarName);
+        openKarigarHistoryModal(karigarId, karigarName);
         renderKarigarGrid();
     } catch (e) {
-        console.error('Failed to delete transaction:', e);
-        showToast('Failed to delete record.', 'error');
+        console.error('Failed to delete history row:', e);
+        showToast('Failed to delete record', 'error');
     } finally {
         hideLoader();
     }
@@ -3366,7 +3723,8 @@ document.getElementById('export-pdf-sheet-btn')?.addEventListener('click', () =>
         if(rowData.length > 0) rows.push(rowData);
     });
     
-    exportTableToPDF('Combined Data Sheet', headers, rows, `Data_Sheet_${getTodayISODate()}.pdf`);
+    const timeAppend = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}).replace(/:/g, '-').replace(/ /g, '');
+    exportTableToPDF('Combined Data Sheet', headers, rows, `Data_Sheet_${getTodayISODate()}_${timeAppend}.pdf`);
 });
 
 document.getElementById('export-pdf-money-btn')?.addEventListener('click', () => {
@@ -3381,7 +3739,8 @@ document.getElementById('export-pdf-money-btn')?.addEventListener('click', () =>
         ];
         rows.push(rowData);
     });
-    exportTableToPDF('Money Management Report', ['Company', 'Account', 'Money', 'Expense', 'Balance'], rows, `Money_Report_${getTodayISODate()}.pdf`);
+    const timeAppend = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}).replace(/:/g, '-').replace(/ /g, '');
+    exportTableToPDF('Money Management Report', ['Company', 'Account', 'Money', 'Expense', 'Balance'], rows, `Money_Report_${getTodayISODate()}_${timeAppend}.pdf`);
 });
 
 document.getElementById('export-pdf-karigar-btn')?.addEventListener('click', () => {
@@ -3393,7 +3752,8 @@ document.getElementById('export-pdf-karigar-btn')?.addEventListener('click', () 
         const balance = card.querySelector('.karigar-balance-val .actual-bal')?.textContent.replace('₹', '').trim() || '0';
         rows.push([name, jama, upad, balance]);
     });
-    exportTableToPDF('Karigar Management Report', ['Name', 'Total Jama', 'Total Upad', 'Balance'], rows, `Karigar_Report_${getTodayISODate()}.pdf`);
+    const timeAppend = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}).replace(/:/g, '-').replace(/ /g, '');
+    exportTableToPDF('Karigar Management Report', ['Name', 'Total Jama', 'Total Upad', 'Balance'], rows, `Karigar_Report_${getTodayISODate()}_${timeAppend}.pdf`);
 });
 
 document.getElementById('global-export-btn')?.addEventListener('click', () => {
