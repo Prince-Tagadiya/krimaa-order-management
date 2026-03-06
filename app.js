@@ -251,6 +251,10 @@ async function switchCompany(previousCompany = '') {
     if (AppState.isSwitchingCompany) return;
     AppState.isSwitchingCompany = true;
     const companyName = getCompanyDisplayName(AppState.currentCompany);
+    
+    // START MAGICAL TRANSITION
+    triggerMagicalTransition(companyName);
+    
     setCompanyButtonsDisabled(true);
     showProgressToast(`Switching to ${companyName}...`);
 
@@ -304,6 +308,49 @@ async function switchCompany(previousCompany = '') {
         setCompanyButtonsDisabled(false);
     }
 }
+
+function triggerMagicalTransition(companyName) {
+    const flash = document.getElementById('magical-flash');
+    if (flash) {
+        flash.classList.add('active');
+        setTimeout(() => flash.classList.remove('active'), 1000);
+    }
+
+    // Typing effect for the page title
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) {
+        // If it's something like "Dashboard Overview", maybe change it to "Switching to Company..."
+        typeWriterEffect(titleEl, `Magical switch to ${companyName}...`, 50, () => {
+             // After typing, wait a bit then restore or set new relevant title
+             setTimeout(() => {
+                 if (AppState.currentSection === 'dashboard') titleEl.textContent = 'Dashboard Overview';
+                 else if (AppState.currentSection === 'daily-order') titleEl.textContent = 'Daily Order Entry';
+                 else if (AppState.currentSection === 'add-account') titleEl.textContent = 'Manage Accounts';
+                 else titleEl.textContent = 'Dashboard'; // Fallback
+             }, 1500);
+        });
+    }
+}
+
+function typeWriterEffect(element, text, speed = 50, callback) {
+    element.innerHTML = '<span class="typing-text"></span>';
+    const span = element.querySelector('.typing-text');
+    let i = 0;
+    
+    function type() {
+        if (i < text.length) {
+            span.textContent += text.charAt(i);
+            i++;
+            setTimeout(type, speed);
+        } else if (callback) {
+            callback();
+        }
+    }
+    type();
+}
+
+
+
 
 // ===== AUTH =====
 function checkAuth() {
