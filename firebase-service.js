@@ -365,7 +365,7 @@ const FirebaseService = (() => {
             const accId = accountNameIdMap[o.accountName.trim()] || o.accountName;
             const quantity = parseInt(o.meesho) || 0;
             
-            const docId = `${date}_${accId}`;
+            const docId = encodeURIComponent(`${date}_${accId}`);
             const orderRef = db.collection(partition).doc(docId);
             
             ops.push(b => b.set(orderRef, {
@@ -399,7 +399,7 @@ const FirebaseService = (() => {
         const numVal = parseInt(value) || 0;
         
         const accId = accountNameIdMap[(accountName || '').trim()] || accountName;
-        const docId = `${date}_${accId}`;
+        const docId = encodeURIComponent(`${date}_${accId}`);
         const orderRef = db.collection(partition).doc(docId);
         
         const ops = [];
@@ -827,7 +827,7 @@ const FirebaseService = (() => {
                     const accId = mapNameId[originalStr] || originalStr;
                     const quantity = data.orders ? (data.orders[i] || 0) : 0;
                     
-                    const docId = `${date}_${accId}`;
+                    const docId = encodeURIComponent(`${date}_${accId}`);
                     const orderRef = db.collection(partition).doc(docId);
                     ops.push(b => b.set(orderRef, {
                         orderId: docId,
