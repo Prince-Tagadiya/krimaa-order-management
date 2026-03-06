@@ -132,15 +132,16 @@ const FirebaseService = (() => {
         // Also rename in daily_orders
         const dOrdSnap = await db.collection('daily_orders')
             .where('companyId', '==', companyId)
-            .where('accounts', 'array-contains', oldName.trim())
             .get();
         dOrdSnap.forEach(doc => {
             const data = doc.data();
-            const idx = data.accounts.indexOf(oldName.trim());
-            if (idx !== -1) {
-                const newAccs = [...data.accounts];
-                newAccs[idx] = newName;
-                ops.push(b => b.update(doc.ref, { accounts: newAccs }));
+            if (data.accounts && data.accounts.includes(oldName.trim())) {
+                const idx = data.accounts.indexOf(oldName.trim());
+                if (idx !== -1) {
+                    const newAccs = [...data.accounts];
+                    newAccs[idx] = newName;
+                    ops.push(b => b.update(doc.ref, { accounts: newAccs }));
+                }
             }
         });
         await commitInChunks(ops);

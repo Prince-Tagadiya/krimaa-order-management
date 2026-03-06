@@ -578,7 +578,7 @@ async function ensureLegacyOrdersMigrated() {
 }
 
 async function autoFixMismatchedAccountNames() {
-    if (localStorage.getItem('mismatched_accounts_fixed_v1')) return;
+    if (localStorage.getItem('mismatched_accounts_fixed_v2')) return;
     try {
         console.log("Checking for mismatched account names in historical daily_orders...");
         let changed = false;
@@ -606,7 +606,15 @@ async function autoFixMismatchedAccountNames() {
                 const oldName = newAccs[i];
                 if (!validAccounts.includes(oldName)) {
                     // Try to find a fuzzy match inside validAccounts
-                    const fuzzyMatch = validAccounts.find(v => oldName.toLowerCase().startsWith(v.toLowerCase()) || v.toLowerCase().startsWith(oldName.toLowerCase()) || (oldName.length > 5 && v.length > 5 && oldName.substring(0, 5).toLowerCase() === v.substring(0, 5).toLowerCase()));
+                    // Match if they share the first 4 case-insensitive characters OR one contains the other
+                    const fuzzyMatch = validAccounts.find(v => {
+                        const a = oldName.toLowerCase().trim();
+                        const b = v.toLowerCase().trim();
+                        if (a === b) return true;
+                        if (a.startsWith(b) || b.startsWith(a)) return true;
+                        if (a.length >= 4 && b.length >= 4 && a.substring(0, 4) === b.substring(0, 4)) return true;
+                        return false;
+                    });
                     if (fuzzyMatch && fuzzyMatch !== oldName) {
                         console.log(`Auto-fixing mismatch in ${companyId}: "${oldName}" -> "${fuzzyMatch}"`);
                         newAccs[i] = fuzzyMatch;
@@ -624,7 +632,7 @@ async function autoFixMismatchedAccountNames() {
             await FirebaseService.commitInChunks(ops);
             console.log("Mismatched accounts auto-fixed!");
         }
-        localStorage.setItem('mismatched_accounts_fixed_v1', 'true');
+        localStorage.setItem('mismatched_accounts_fixed_v2', 'true');
     } catch(e) {
         console.error("Auto-fix failed:", e);
     }
