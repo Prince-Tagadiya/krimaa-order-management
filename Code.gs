@@ -175,20 +175,16 @@ function setupKarigarSheets(ss) {
   ensureKarigarTxSheet(KARIGAR_TX_SHEETS.company2);
 
   var dpSheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
-  if (!dpSheet) {
-    dpSheet = ss.insertSheet(DESIGN_PRICES_SHEET);
-    dpSheet.appendRow(['Design Name', 'Latest Price', 'Updated At']);
-    dpSheet.getRange('A1:C1').setFontWeight('bold');
-    dpSheet.setFrozenRows(1);
-  }
+  if (!dpSheet) dpSheet = ss.insertSheet(DESIGN_PRICES_SHEET);
+  dpSheet.getRange(1, 1, 1, 4).setValues([['Design Name', 'Latest Price', 'Is Hidden', 'Updated At']]);
+  dpSheet.getRange('A1:D1').setFontWeight('bold');
+  dpSheet.setFrozenRows(1);
 
   var dphSheet = ss.getSheetByName(DESIGN_PRICE_HISTORY_SHEET);
-  if (!dphSheet) {
-    dphSheet = ss.insertSheet(DESIGN_PRICE_HISTORY_SHEET);
-    dphSheet.appendRow(['Company ID', 'Design Key', 'Price', 'Effective From', 'Updated At']);
-    dphSheet.getRange('A1:E1').setFontWeight('bold');
-    dphSheet.setFrozenRows(1);
-  }
+  if (!dphSheet) dphSheet = ss.insertSheet(DESIGN_PRICE_HISTORY_SHEET);
+  dphSheet.getRange(1, 1, 1, 6).setValues([['Company ID', 'Design Key', 'Price', 'Is Hidden', 'Effective From', 'Updated At']]);
+  dphSheet.getRange('A1:F1').setFontWeight('bold');
+  dphSheet.setFrozenRows(1);
 }
 
 function setupRemarksSheet(ss) {
@@ -938,54 +934,88 @@ function saveFullBackup(data) {
     });
   }
 
-  // 4. Sync Design Prices
-  if (data.designPrices) {
-    var sheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
-    sheet.clear();
-    sheet.appendRow(['Design Name', 'Latest Price', 'Updated At']);
-    sheet.getRange('A1:C1').setFontWeight('bold');
-    var rows = [];
-    for (var design in data.designPrices) {
-      rows.push([design, data.designPrices[design], new Date()]);
+  // 4. Sync Design Prices (including hidden marker)
+  if (data.designPrices || data.designPriceHistory) {
+    var dpSheet = ss.getSheetByName(DESIGN_PRICES_SHEET);
+    if (!dpSheet) dpSheet = ss.insertSheet(DESIGN_PRICES_SHEET);
+    dpSheet.clear();
+    dpSheet.getRange(1, 1, 1, 4).setValues([['Design Name', 'Latest Price', 'Is Hidden', 'Updated At']]);
+    dpSheet.getRange('A1:D1').setFontWeight('bold');
+
+    var latestByKey = {};
+    (data.designPriceHistory || []).forEach(function(h) {
+      var key = String(h.key || h.designKey || '').trim().toUpperCase();
+      if (!key) return;
+      var eff = parseFlexibleDateTime(h.effectiveFrom || h.updatedAt || new Date(), Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var upd = parseFlexibleDateTime(h.updatedAt || h.createdAt || eff, Utilities.formatDate(eff, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var isDeleted = String(h.isDeleted || '').toLowerCase() === 'true' || h.isDeleted === true;
+      var rec = latestByKey[key];
+      if (!rec || upd.getTime() >= rec.updatedAt.getTime()) {
+        latestByKey[key] = {
+          key: key,
+          price: parseFloat(h.price) || 0,
+          isDeleted: isDeleted,
+          updatedAt: upd
+        };
+      }
+    });
+    for (var design in (data.designPrices || {})) {
+      var dKey = String(design || '').trim().toUpperCase();
+      if (!dKey) continue;
+      if (!latestByKey[dKey]) {
+        latestByKey[dKey] = {
+          key: dKey,
+          price: parseFloat(data.designPrices[design]) || 0,
+          isDeleted: false,
+          updatedAt: new Date()
+        };
+      }
     }
-    if (rows.length > 0) {
-      sheet.getRange(2, 1, rows.length, 3).setValues(rows);
-      totalRows += rows.length;
+    var dpRows = Object.keys(latestByKey).sort().map(function(k) {
+      var x = latestByKey[k];
+      return [x.key, x.price, x.isDeleted ? 'TRUE' : 'FALSE', x.updatedAt];
+    });
+    if (dpRows.length > 0) {
+      dpSheet.getRange(2, 1, dpRows.length, 4).setValues(dpRows);
+      dpSheet.getRange(2, 4, dpRows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+      totalRows += dpRows.length;
     }
   }
 
-  // 5. Sync Design Price History
+  // 5. Sync Design Price History (full timeline, keep old points)
   if (data.designPriceHistory) {
     var dphSheet = ss.getSheetByName(DESIGN_PRICE_HISTORY_SHEET);
+    if (!dphSheet) dphSheet = ss.insertSheet(DESIGN_PRICE_HISTORY_SHEET);
     dphSheet.clear();
-    dphSheet.appendRow(['Company ID', 'Design Key', 'Price', 'Effective From', 'Updated At']);
-    dphSheet.getRange('A1:E1').setFontWeight('bold');
+    dphSheet.getRange(1, 1, 1, 6).setValues([['Company ID', 'Design Key', 'Price', 'Is Hidden', 'Effective From', 'Updated At']]);
+    dphSheet.getRange('A1:F1').setFontWeight('bold');
+
     var dphMap = {};
     (data.designPriceHistory || []).forEach(function(h) {
       var rawCid = String(h.companyId || 'global').toLowerCase().trim();
       var cid = rawCid === 'global' ? 'global' : normalizeCompanyId(rawCid || 'company1');
       var key = String(h.key || h.designKey || '').trim().toUpperCase();
       if (!key) return;
-      // Keep canonical global scope and second-level precision for integrity.
       cid = 'global';
+      var isDeleted = String(h.isDeleted || '').toLowerCase() === 'true' || h.isDeleted === true;
       var effDate = parseFlexibleDateTime(h.effectiveFrom || h.updatedAt || new Date(), Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
       var updDate = parseFlexibleDateTime(h.updatedAt || h.createdAt || effDate, Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
       var eff = Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
       var upd = Utilities.formatDate(updDate, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
       var mapKey = cid + '|' + key + '|' + eff;
       var prev = dphMap[mapKey];
-      if (!prev || upd > prev[4]) {
-        dphMap[mapKey] = [cid, key, parseFloat(h.price) || 0, eff, upd];
+      if (!prev || upd > prev[5]) {
+        dphMap[mapKey] = [cid, key, parseFloat(h.price) || 0, isDeleted ? 'TRUE' : 'FALSE', eff, upd];
       }
     });
     var dphRows = Object.keys(dphMap).map(function(k) { return dphMap[k]; });
     dphRows.sort(function(a, b) {
       if (a[1] !== b[1]) return a[1] > b[1] ? 1 : -1;
-      return a[3] > b[3] ? 1 : -1;
+      return a[4] > b[4] ? 1 : -1;
     });
     if (dphRows.length > 0) {
-      dphSheet.getRange(2, 1, dphRows.length, 5).setValues(dphRows);
-      dphSheet.getRange(2, 4, dphRows.length, 2).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+      dphSheet.getRange(2, 1, dphRows.length, 6).setValues(dphRows);
+      dphSheet.getRange(2, 5, dphRows.length, 2).setNumberFormat('yyyy-mm-dd hh:mm:ss');
       totalRows += dphRows.length;
     }
   }
@@ -1061,7 +1091,12 @@ function syncCompanyData(ss, companyId, compData) {
     count += rows.length;
   }
 
-  // Sync Orders is now handled by the new partition archive architecture
+  // Sync Orders
+  if (compData.orders && compData.orders.length > 0) {
+    var ordersSheet = ss.getSheetByName(company.ordersSheet);
+    count += syncOrdersToSheet(ordersSheet, compData.orders);
+  }
+
   return count;
 }
 
@@ -1070,26 +1105,32 @@ function syncOrdersToSheet(sheet, orders) {
   var existData = lastRow > 1 ? sheet.getRange(2, 1, lastRow-1, 5).getValues() : [];
   var existMap = {};
   existData.forEach(function(r, idx) {
-    var dStr = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd') : String(r[0]).split(' ')[0];
+    var dStr = r[0] instanceof Date
+      ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM-dd')
+      : String(r[0]).split('T')[0].split(' ')[0];
     var key = dStr + "_" + r[1]; // Date_ID
     existMap[key] = { row: idx + 2, data: r };
   });
 
   var now = new Date();
-  var timeStr = Utilities.formatDate(now, Session.getScriptTimeZone(), "HH:mm:ss");
   var newRows = [];
   var updatedRowsCount = 0;
   
   orders.forEach(function(o) {
-    var key = o.date + "_" + o.accountId;
+    var dateOnly = String(o.date || '').split('T')[0].split(' ')[0].trim();
+    var accountId = String(o.accountId || '').trim();
+    if (!dateOnly || !accountId) return;
+    var accountName = String(o.accountName || accountId).trim();
+    var meeshoVal = parseInt(o.meesho) || 0;
+    var key = dateOnly + "_" + accountId;
     if (existMap[key]) {
       var exist = existMap[key].data;
-      if (parseInt(exist[3]) !== parseInt(o.meesho)) {
-        sheet.getRange(existMap[key].row, 4, 1, 2).setValues([[o.meesho, now]]);
+      if (parseInt(exist[3]) !== meeshoVal || String(exist[2] || '').trim() !== accountName) {
+        sheet.getRange(existMap[key].row, 3, 1, 3).setValues([[accountName, meeshoVal, now]]);
         updatedRowsCount++;
       }
     } else {
-      newRows.push([o.date + ' ' + timeStr, o.accountId, o.accountName, o.meesho, now]);
+      newRows.push([dateOnly, accountId, accountName, meeshoVal, now]);
     }
   });
 
@@ -1834,7 +1875,9 @@ function getAllSheetData() {
     var data = dpSheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
       var designName = String(data[i][0] || '').trim();
-      if (designName) result.designPrices[designName] = parseFloat(data[i][1]) || 0;
+      var hiddenCell = String(data[i][2] || '').toLowerCase();
+      var isHidden = hiddenCell === 'true' || hiddenCell === 'yes' || hiddenCell === '1';
+      if (designName && !isHidden) result.designPrices[designName] = parseFloat(data[i][1]) || 0;
     }
   }
 
@@ -1848,14 +1891,15 @@ function getAllSheetData() {
       var cid = rawCid === 'global' ? 'global' : normalizeCompanyId(rawCid || 'company1');
       var key = String(dphData[i][1] || '').trim().toUpperCase();
       if (!key) continue;
-      var effDate = parseFlexibleDateTime(dphData[i][3], Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
-      var updDate = parseFlexibleDateTime(dphData[i][4], Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var effDate = parseFlexibleDateTime(dphData[i][4], Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+      var updDate = parseFlexibleDateTime(dphData[i][5], Utilities.formatDate(effDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
       var eff = Utilities.formatDate(effDate, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
       var upd = Utilities.formatDate(updDate, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
       var item = {
         companyId: cid,
         key: key,
         price: parseFloat(dphData[i][2]) || 0,
+        isDeleted: (String(dphData[i][3] || '').toLowerCase() === 'true' || dphData[i][3] === true),
         effectiveFrom: eff,
         updatedAt: upd
       };

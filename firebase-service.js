@@ -70,17 +70,20 @@ const FirebaseService = (() => {
         return `${safeCompanyId}__${safeKey}__${safeDateTime.replace(/[:]/g, '-')}`;
     }
 
-    async function saveDesignPricePoint(companyId, designKey, price, effectiveFrom, actor = null) {
+    async function saveDesignPricePoint(companyId, designKey, price, effectiveFrom, actor = null, options = null) {
         const safeCompanyId = String(companyId || 'global').trim() || 'global';
         const safeKey = String(designKey || '').trim().toUpperCase();
         const safePrice = Math.round(((parseFloat(price) || 0) + Number.EPSILON) * 100) / 100;
         const safeEffectiveFrom = normalizeISODateTime(effectiveFrom) || normalizeISODateTime(new Date());
+        const safeOptions = (options && typeof options === 'object') ? options : {};
+        const isDeleted = !!safeOptions.isDeleted;
         const docId = buildDesignPriceDocId(safeCompanyId, safeKey);
         await db.collection('design_prices').doc(docId).set({
             companyId: safeCompanyId,
             key: safeKey,
             price: safePrice,
             effectiveFromLatest: safeEffectiveFrom,
+            isDeletedLatest: isDeleted,
             ...buildActorMeta(actor, 'updated'),
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
@@ -91,10 +94,11 @@ const FirebaseService = (() => {
             key: safeKey,
             price: safePrice,
             effectiveFrom: safeEffectiveFrom,
+            isDeleted,
             ...buildActorMeta(actor, 'updated'),
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
-        return { safeCompanyId, safeKey, safePrice, safeEffectiveFrom };
+        return { safeCompanyId, safeKey, safePrice, safeEffectiveFrom, isDeleted };
     }
 
     async function deleteDesignPricePoint(companyId, designKey, effectiveFrom) {
@@ -709,16 +713,128 @@ const FirebaseService = (() => {
             designPriceHistory: [],
             moneyBackups: []
         };
+
+        const collectOrdersFromPartitions = async (companyId, validAccIds, idToNameMap) => {
+            const rowsMap = new Map();
+            const normalizeCompany = (raw) => {
+                const val = String(raw || '').trim().toLowerCase();
+                if (!val) return '';
+                if (val === 'company1' || val === 'c1' || val === '1' || val === 'company 1' || val === 'comp 1') return 'company1';
+                if (val === 'company2' || val === 'c2' || val === '2' || val === 'company 2' || val === 'comp 2') return 'company2';
+                return val;
+            };
+            const cursor = new Date();
+            for (let i = 0; i < 6; i++) {
+                const y = cursor.getFullYear();
+                const m = String(cursor.getMonth() + 1).padStart(2, '0');
+                const partition = `orders_${y}_${m}`;
+                const seenDocIds = new Set();
+                const docs = [];
+                try {
+                    const byMaster = await db.collection(partition).where('masterCompany', '==', companyId).get();
+                    if (!byMaster.empty) {
+                        byMaster.forEach(doc => {
+                            seenDocIds.add(doc.id);
+                            docs.push(doc);
+                        });
+                    }
+                } catch (e) {
+                    // Ignore and try other query styles for backward compatibility.
+                }
+
+                try {
+                    const byCompany = await db.collection(partition).where('companyId', '==', companyId).get();
+                    if (!byCompany.empty) {
+                        byCompany.forEach(doc => {
+                            if (seenDocIds.has(doc.id)) return;
+                            seenDocIds.add(doc.id);
+                            docs.push(doc);
+                        });
+                    }
+                } catch (e) {
+                    // Ignore and fallback to account-id inference.
+                }
+
+                if (docs.length === 0 && validAccIds && validAccIds.size > 0) {
+                    try {
+                        const allSnap = await db.collection(partition).get();
+                        allSnap.forEach(doc => {
+                            const raw = doc.data() || {};
+                            const accountId = String(raw.accountId || '').trim();
+                            if (!accountId || !validAccIds.has(accountId)) return;
+                            if (seenDocIds.has(doc.id)) return;
+                            seenDocIds.add(doc.id);
+                            docs.push(doc);
+                        });
+                    } catch (e) {
+                        // Ignore partition read failures.
+                    }
+                }
+
+                docs.forEach(doc => {
+                    const raw = doc.data() || {};
+                    const accountId = String(raw.accountId || '').trim();
+                    if (!accountId) return;
+                    const rowCompany = normalizeCompany(raw.masterCompany || raw.companyId || '');
+                    if (rowCompany && rowCompany !== companyId) return;
+                    const inferredCompany = rowCompany || ((validAccIds && validAccIds.has(accountId)) ? companyId : '');
+                    if (inferredCompany !== companyId) return;
+                    const date = normalizeISODate(raw.date || raw.createdAt || raw.updatedAt || '');
+                    if (!date) return;
+                    const qty = parseInt(raw.quantity) || parseInt(raw.meesho) || parseInt(raw.total) || 0;
+                    const key = `${date}__${accountId}`;
+                    rowsMap.set(key, {
+                        date,
+                        accountId,
+                        accountName: String(idToNameMap[accountId] || raw.accountName || accountId).trim(),
+                        meesho: qty,
+                        total: qty
+                    });
+                });
+                cursor.setMonth(cursor.getMonth() - 1);
+            }
+            return Array.from(rowsMap.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        };
+
+        const mergeOrderRows = (baseRows, extraRows) => {
+            const map = new Map();
+            (baseRows || []).forEach(r => {
+                const date = normalizeISODate(r.date);
+                const accountId = String(r.accountId || '').trim();
+                if (!date || !accountId) return;
+                map.set(`${date}__${accountId}`, {
+                    date,
+                    accountId,
+                    accountName: String(r.accountName || accountId).trim(),
+                    meesho: parseInt(r.meesho) || 0,
+                    total: parseInt(r.total) || (parseInt(r.meesho) || 0)
+                });
+            });
+            (extraRows || []).forEach(r => {
+                const date = normalizeISODate(r.date);
+                const accountId = String(r.accountId || '').trim();
+                if (!date || !accountId) return;
+                map.set(`${date}__${accountId}`, {
+                    date,
+                    accountId,
+                    accountName: String(r.accountName || accountId).trim(),
+                    meesho: parseInt(r.meesho) || 0,
+                    total: parseInt(r.total) || (parseInt(r.meesho) || 0)
+                });
+            });
+            return Array.from(map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        };
         
-        const [c1a, c2a, rem, kars, txs, dps, dph, mbks] = await Promise.all([
+        const [c1a, c2a, rem, kars, txs, mbks, dailySummarySnap, dps, dph] = await Promise.all([
             db.collection('accounts').where('companyId', '==', 'company1').get(),
             db.collection('accounts').where('companyId', '==', 'company2').get(),
             db.collection('remarks').get(),
             db.collection('karigars').get(),
             db.collection('karigar_transactions').orderBy('date', 'desc').get(),
+            db.collection('money_backups').get(),
+            db.collection('daily_summary').get().catch(() => null),
             db.collection('design_prices').get(),
-            db.collection('design_price_history').get(),
-            db.collection('money_backups').get()
+            db.collection('design_price_history').get()
         ]);
 
         const serializeTs = (ts) => {
@@ -747,6 +863,87 @@ const FirebaseService = (() => {
         });
         result.company1.accounts.sort((a, b) => (a.position || 0) - (b.position || 0));
         result.company2.accounts.sort((a, b) => (a.position || 0) - (b.position || 0));
+
+        // Build complete company order rows from daily_summary (single source for fast app reads).
+        const c1IdToName = {};
+        const c2IdToName = {};
+        const c1NameToId = {};
+        const c2NameToId = {};
+        const c1Ids = new Set();
+        const c2Ids = new Set();
+        (result.company1.accounts || []).forEach(acc => {
+            const id = String(acc.accountId || '').trim();
+            const name = String(acc.name || '').trim();
+            if (!id) return;
+            c1Ids.add(id);
+            c1IdToName[id] = name;
+            if (name) c1NameToId[name.toLowerCase()] = id;
+        });
+        (result.company2.accounts || []).forEach(acc => {
+            const id = String(acc.accountId || '').trim();
+            const name = String(acc.name || '').trim();
+            if (!id) return;
+            c2Ids.add(id);
+            c2IdToName[id] = name;
+            if (name) c2NameToId[name.toLowerCase()] = id;
+        });
+
+        if (dailySummarySnap && !dailySummarySnap.empty) {
+            const c1Map = new Map();
+            const c2Map = new Map();
+            dailySummarySnap.forEach(doc => {
+                const raw = doc.data() || {};
+                const date = normalizeISODate(raw.date || doc.id);
+                if (!date) return;
+                Object.keys(raw).forEach(k => {
+                    if (k === 'date' || k === 'masterCompany') return;
+                    const rawKey = String(k || '').trim();
+                    if (!rawKey) return;
+                    const qty = parseInt(raw[rawKey]) || 0;
+
+                    let companyId = '';
+                    let accountId = '';
+                    if (c1Ids.has(rawKey)) {
+                        companyId = 'company1';
+                        accountId = rawKey;
+                    } else if (c2Ids.has(rawKey)) {
+                        companyId = 'company2';
+                        accountId = rawKey;
+                    } else {
+                        const lower = rawKey.toLowerCase();
+                        if (c1NameToId[lower]) {
+                            companyId = 'company1';
+                            accountId = c1NameToId[lower];
+                        } else if (c2NameToId[lower]) {
+                            companyId = 'company2';
+                            accountId = c2NameToId[lower];
+                        }
+                    }
+                    if (!companyId || !accountId) return;
+                    const accountName = companyId === 'company1'
+                        ? (c1IdToName[accountId] || rawKey)
+                        : (c2IdToName[accountId] || rawKey);
+                    const key = `${date}__${accountId}`;
+                    const row = {
+                        date,
+                        accountId,
+                        accountName: String(accountName || '').trim(),
+                        meesho: qty,
+                        total: qty
+                    };
+                    if (companyId === 'company1') c1Map.set(key, row);
+                    else c2Map.set(key, row);
+                });
+            });
+            result.company1.orders = Array.from(c1Map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+            result.company2.orders = Array.from(c2Map.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        }
+
+        // Safety fallback: also merge rows from partition collections.
+        const c1PartitionRows = await collectOrdersFromPartitions('company1', c1Ids, c1IdToName);
+        const c2PartitionRows = await collectOrdersFromPartitions('company2', c2Ids, c2IdToName);
+        result.company1.orders = mergeOrderRows(result.company1.orders, c1PartitionRows);
+        result.company2.orders = mergeOrderRows(result.company2.orders, c2PartitionRows);
         
         rem.forEach(d => { result.remarks[d.id] = d.data().remark; });
         kars.forEach(d => result.karigars.push(d.data()));
@@ -759,6 +956,7 @@ const FirebaseService = (() => {
             const effectiveFrom = normalizeISODateTime(raw.effectiveFrom || raw.effectiveFromLatest || raw.updatedAt || raw.createdAt || new Date());
             if (!effectiveFrom) return;
             const price = parseFloat(raw.price) || 0;
+            const isDeleted = !!raw.isDeleted;
             const updatedAtIso = serializeTs(raw.updatedAt || raw.createdAt || new Date());
             const uniq = `global|${key}|${effectiveFrom}`;
             const prev = historyMap.get(uniq);
@@ -769,6 +967,7 @@ const FirebaseService = (() => {
                     companyId: 'global',
                     key,
                     price,
+                    isDeleted,
                     effectiveFrom,
                     updatedAt: updatedAtIso
                 });
@@ -795,7 +994,7 @@ const FirebaseService = (() => {
             points.forEach(p => {
                 if (String(p.effectiveFrom || '') <= nowIso) selected = p;
             });
-            if (selected) result.designPrices[key] = parseFloat(selected.price) || 0;
+            if (selected && !selected.isDeleted) result.designPrices[key] = parseFloat(selected.price) || 0;
         });
 
         dps.forEach(d => {
@@ -804,7 +1003,7 @@ const FirebaseService = (() => {
             if (cid && cid !== 'global') return;
             const key = String(raw.key || '').trim().toUpperCase() || String(d.id || '').split('__').slice(1).join('__').trim().toUpperCase();
             if (!key) return;
-            if (typeof result.designPrices[key] === 'undefined') {
+            if (typeof result.designPrices[key] === 'undefined' && !raw.isDeletedLatest) {
                 result.designPrices[key] = parseFloat(raw.price) || 0;
             }
         });
@@ -1445,22 +1644,23 @@ const FirebaseService = (() => {
             if (!key || !eff) return;
             const price = parseFloat(data.price) || 0;
             const updatedAtMs = parseFlexibleDateValue(data.updatedAt)?.getTime() || 0;
+            const isDeleted = !!data.isDeleted;
             if (!pointMapByKey[key]) pointMapByKey[key] = {};
             const prev = pointMapByKey[key][eff];
             if (!prev || updatedAtMs >= (prev.updatedAtMs || 0)) {
-                pointMapByKey[key][eff] = { effectiveFrom: eff, price, updatedAtMs };
+                pointMapByKey[key][eff] = { effectiveFrom: eff, price, updatedAtMs, isDeleted };
             }
         });
 
         Object.keys(pointMapByKey).forEach(key => {
             historyByKey[key] = Object.values(pointMapByKey[key])
-                .map(p => ({ effectiveFrom: p.effectiveFrom, price: p.price }))
+                .map(p => ({ effectiveFrom: p.effectiveFrom, price: p.price, isDeleted: !!p.isDeleted }))
                 .sort((a, b) => String(a.effectiveFrom).localeCompare(String(b.effectiveFrom)));
             let chosen = null;
             historyByKey[key].forEach(point => {
                 if (point.effectiveFrom <= safeAsOfDate) chosen = point;
             });
-            if (chosen) map[key] = chosen.price;
+            if (chosen && !chosen.isDeleted) map[key] = chosen.price;
         });
 
         const scopedSnap = safeCompanyId === 'global'
@@ -1471,7 +1671,7 @@ const FirebaseService = (() => {
             if (safeCompanyId !== 'global' && String(data.companyId || '').trim() !== safeCompanyId) return;
             const key = String(data.key || '').trim().toUpperCase() || String(doc.id || '').split('__').slice(1).join('__').trim().toUpperCase();
             if (!key) return;
-            if (typeof map[key] === 'undefined') map[key] = parseFloat(data.price) || 0;
+            if (typeof map[key] === 'undefined' && !data.isDeletedLatest) map[key] = parseFloat(data.price) || 0;
         });
 
         // Backward compatibility for old global records.
@@ -1497,6 +1697,14 @@ const FirebaseService = (() => {
         if (!safeKey) return { success: false, message: 'Design/Size key required' };
         if (!Number.isFinite(safePrice) || safePrice < 0) return { success: false, message: 'Invalid price' };
         const safeOptions = (options && typeof options === 'object') ? options : {};
+        const markDeleted = !!safeOptions.isDeleted;
+        if (markDeleted) {
+            const effectiveMark = normalizeISODateTime(effectiveFrom) || normalizeISODateTime(new Date());
+            const asOf = await getDesignPrices(safeCompanyId, effectiveMark);
+            const activePrice = Number.isFinite(parseFloat(asOf?.data?.[safeKey])) ? parseFloat(asOf.data[safeKey]) : (Number.isFinite(safePrice) ? safePrice : 0);
+            const hiddenPoint = await saveDesignPricePoint(safeCompanyId, safeKey, activePrice, effectiveMark, actor, { isDeleted: true });
+            return { success: true, companyId: safeCompanyId, key: safeKey, effectiveFrom: hiddenPoint.safeEffectiveFrom, isDeleted: true };
+        }
         const replaceFromEffectiveFrom = normalizeISODateTime(safeOptions.replaceFromEffectiveFrom || '');
         if (replaceFromEffectiveFrom) {
             const replaceFromKey = String(safeOptions.replaceFromKey || safeKey).trim().toUpperCase();
@@ -1504,6 +1712,25 @@ const FirebaseService = (() => {
         }
         const point = await saveDesignPricePoint(safeCompanyId, safeKey, safePrice, effectiveFrom, actor);
         return { success: true, companyId: safeCompanyId, key: safeKey, effectiveFrom: point.safeEffectiveFrom };
+    }
+
+    async function hideDesignPrice(designKey, actor = null, companyId = 'global', hideFrom = '') {
+        init();
+        if (!isAdminActor(actor)) return { success: false, message: 'Only admin can hide prices' };
+        const safeKey = String(designKey || '').trim().toUpperCase();
+        const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        if (!safeKey) return { success: false, message: 'Design/Size key required' };
+
+        const effectiveFrom = normalizeISODateTime(hideFrom) || normalizeISODateTime(new Date());
+        const asOf = await getDesignPrices(safeCompanyId, effectiveFrom);
+        const activePrice = Number.isFinite(parseFloat(asOf?.data?.[safeKey])) ? parseFloat(asOf.data[safeKey]) : 0;
+        const point = await saveDesignPricePoint(safeCompanyId, safeKey, activePrice, effectiveFrom, actor, { isDeleted: true });
+        return { success: true, companyId: safeCompanyId, key: safeKey, effectiveFrom: point.safeEffectiveFrom };
+    }
+
+    async function deleteDesignPrice(designKey, actor = null, companyId = 'global', hideFrom = '') {
+        // Soft delete only: keep history, hide from current selection.
+        return hideDesignPrice(designKey, actor, companyId, hideFrom);
     }
 
     // ───── MIGRATE LEGACY ORDERS ─────
@@ -2139,8 +2366,9 @@ const FirebaseService = (() => {
             const key = String(point.key || point.designKey || '').trim().toUpperCase();
             const eff = normalizeISODateTime(point.effectiveFrom || point.updatedAt) || normalizeISODateTime(new Date());
             const price = parseFloat(point.price) || 0;
+            const isDeleted = !!point.isDeleted;
             if (!key) continue;
-            await saveDesignPricePoint('global', key, price, eff, null);
+            await saveDesignPricePoint('global', key, price, eff, null, { isDeleted });
             stats.designPrices++;
         }
 
@@ -2181,6 +2409,8 @@ const FirebaseService = (() => {
         clearKarigarMonthlyData,
         getDesignPrices,
         upsertDesignPrice,
+        hideDesignPrice,
+        deleteDesignPrice,
         // Write buffer
         bufferWrite, flushWrites, getPendingCount,
         // Integrity Fix

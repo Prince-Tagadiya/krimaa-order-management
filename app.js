@@ -562,6 +562,91 @@ let _backgroundSheetBackupInFlight = false;
 let _backgroundSheetBackupQueued = false;
 let _pendingDataChangesForBackup = false;
 let _adminRealtimeBusy = false;
+let _quickWriteFlushTimer = null;
+let _renderDataSheetSeq = 0;
+const _pendingOrderOverrides = new Map();
+
+function scheduleQuickWriteFlush(delayMs = 1200) {
+    if (_quickWriteFlushTimer) clearTimeout(_quickWriteFlushTimer);
+    const wait = Math.max(200, parseInt(delayMs, 10) || 1200);
+    _quickWriteFlushTimer = setTimeout(async () => {
+        try {
+            await FirebaseService.flushWrites();
+        } catch (e) {
+            console.warn('Quick flush failed:', e);
+        }
+    }, wait);
+}
+
+function isDataSheetEditActive() {
+    const active = document.activeElement;
+    if (!active) return false;
+    if (active.matches && active.matches('input.sheet-cell-input')) return true;
+    if (active.closest && active.closest('#sheet-table')) return true;
+    return false;
+}
+
+function buildPendingOrderOverrideKey(companyId, date, accountId, accountName) {
+    const safeCompanyId = String(companyId || '').trim();
+    const safeDate = normalizeToISODate(date);
+    const safeAccountId = String(accountId || '').trim();
+    const safeName = String(accountName || '').trim().toLowerCase();
+    return `${safeCompanyId}|${safeDate}|${safeAccountId || safeName}`;
+}
+
+function setPendingOrderOverride(date, accountId, accountName, meesho, companyId) {
+    const safeCompanyId = String(companyId || '').trim();
+    const safeDate = normalizeToISODate(date);
+    if (!safeCompanyId || !safeDate) return;
+    const safeAccountId = String(accountId || '').trim();
+    const safeName = String(accountName || '').trim();
+    const qty = parseInt(meesho) || 0;
+    const key = buildPendingOrderOverrideKey(safeCompanyId, safeDate, safeAccountId, safeName);
+    _pendingOrderOverrides.set(key, {
+        companyId: safeCompanyId,
+        date: safeDate,
+        accountId: safeAccountId,
+        accountName: safeName,
+        meesho: qty,
+        total: qty,
+        updatedAtMs: Date.now()
+    });
+}
+
+function applyPendingOrderOverrides(list, companyId) {
+    const safeCompanyId = String(companyId || '').trim();
+    const target = Array.isArray(list) ? list.slice() : [];
+    const now = Date.now();
+
+    _pendingOrderOverrides.forEach((ov, key) => {
+        if (ov.companyId !== safeCompanyId) return;
+        if ((now - (ov.updatedAtMs || now)) > 10 * 60 * 1000) {
+            _pendingOrderOverrides.delete(key);
+            return;
+        }
+
+        const idx = target.findIndex(r => {
+            if (normalizeToISODate(r.date) !== ov.date) return false;
+            const rid = String(r.accountId || '').trim();
+            if (ov.accountId) return rid === ov.accountId;
+            return !rid && String(r.accountName || '').trim().toLowerCase() === String(ov.accountName || '').trim().toLowerCase();
+        });
+
+        if (idx >= 0) {
+            const serverQty = parseInt(target[idx]?.meesho) || 0;
+            if (serverQty === ov.meesho) {
+                _pendingOrderOverrides.delete(key);
+                return;
+            }
+            target[idx] = { ...target[idx], ...ov };
+            return;
+        }
+
+        target.push({ ...ov });
+    });
+
+    return target.sort((a, b) => (normalizeToISODate(b.date) > normalizeToISODate(a.date) ? 1 : -1));
+}
 
 function setSheetBackupIndicator(state = 'idle', label = 'Sheet idle') {
     const el = document.getElementById('sheet-backup-indicator');
@@ -631,6 +716,14 @@ function startAdminAutoSync() {
     _adminRealtimeRefreshTimer = setInterval(async () => {
         if (!isAdminUser()) return;
         if (document.hidden || AppState.isSwitchingCompany || _adminRealtimeBusy) return;
+        if (AppState.currentSection === 'data-sheet' && isDataSheetEditActive()) return;
+        const pendingWrites = typeof FirebaseService !== 'undefined' && FirebaseService.getPendingCount
+            ? FirebaseService.getPendingCount()
+            : 0;
+        const syncStatus = typeof FirebaseService !== 'undefined' && FirebaseService.getSyncStatus
+            ? FirebaseService.getSyncStatus()
+            : 'idle';
+        if (pendingWrites > 0 || syncStatus === 'pending' || syncStatus === 'syncing') return;
         _adminRealtimeBusy = true;
         try {
             if (AppState.currentSection === 'karigar') {
@@ -985,6 +1078,7 @@ function attachEventListeners() {
         btn.disabled = true; btn.textContent = "Submitting..."; showLoader();
         try {
             await apiRequest({ action: 'submitOrders', date, orders, companyId: AppState.currentCompany });
+            applyOptimisticOrdersBatch(date, orders, AppState.currentCompany);
             showToast("Orders saved!", "success");
             document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
             document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
@@ -1295,6 +1389,80 @@ function mergeOrders(historical, recent) {
     return Array.from(map.values()).sort((a,b) => (normalizeToISODate(b.date) > normalizeToISODate(a.date) ? 1 : -1));
 }
 
+function upsertOrderRowInList(list, nextRow) {
+    const target = Array.isArray(list) ? list : [];
+    const safeDate = normalizeToISODate(nextRow?.date);
+    const safeId = String(nextRow?.accountId || '').trim();
+    const safeNameKey = String(nextRow?.accountName || '').trim().toLowerCase();
+    if (!safeDate) return target;
+
+    const idx = target.findIndex(r => {
+        if (normalizeToISODate(r.date) !== safeDate) return false;
+        const rid = String(r.accountId || '').trim();
+        if (safeId && rid === safeId) return true;
+        if (!safeId && !rid) {
+            return String(r.accountName || '').trim().toLowerCase() === safeNameKey;
+        }
+        return !rid && safeNameKey && String(r.accountName || '').trim().toLowerCase() === safeNameKey;
+    });
+
+    const normalized = {
+        ...nextRow,
+        date: safeDate,
+        accountId: safeId,
+        meesho: parseInt(nextRow?.meesho) || 0,
+        total: parseInt(nextRow?.total) || (parseInt(nextRow?.meesho) || 0)
+    };
+
+    if (idx >= 0) {
+        target[idx] = { ...target[idx], ...normalized };
+    } else {
+        target.push(normalized);
+    }
+    return target;
+}
+
+function applyOptimisticOrderUpdate(date, accountId, accountName, meesho, companyId) {
+    const safeCompanyId = String(companyId || AppState.currentCompany || '').trim() || 'company1';
+    const safeDate = normalizeToISODate(date);
+    if (!safeDate) return;
+    const safeAccountId = String(accountId || '').trim();
+
+    const detailsList = safeCompanyId === 'company1' ? AppState.company1Details : AppState.company2Details;
+    const resolvedNameFromDetails = (detailsList || []).find(d => String(d.accountId || '').trim() === safeAccountId)?.name || '';
+    const resolvedName = String(accountName || resolvedNameFromDetails || safeAccountId).trim();
+    const safeQty = parseInt(meesho) || 0;
+    setPendingOrderOverride(safeDate, safeAccountId, resolvedName, safeQty, safeCompanyId);
+    const row = {
+        date: safeDate,
+        accountId: safeAccountId,
+        accountName: resolvedName,
+        meesho: safeQty,
+        total: safeQty,
+        companyId: safeCompanyId
+    };
+
+    if (safeCompanyId === 'company1') {
+        AppState.company1Data = upsertOrderRowInList(AppState.company1Data, row);
+    } else {
+        AppState.company2Data = upsertOrderRowInList(AppState.company2Data, row);
+    }
+    if (AppState.currentCompany === safeCompanyId) {
+        AppState.dashboardData = safeCompanyId === 'company1' ? AppState.company1Data : AppState.company2Data;
+    }
+
+    const cached = getSheetsCache(safeCompanyId);
+    const cachedCopy = Array.isArray(cached) ? cached.slice() : [];
+    upsertOrderRowInList(cachedCopy, row);
+    setSheetsCache(safeCompanyId, cachedCopy);
+}
+
+function applyOptimisticOrdersBatch(date, orders, companyId) {
+    (orders || []).forEach(o => {
+        applyOptimisticOrderUpdate(date, o.accountId, o.accountName, o.meesho, companyId);
+    });
+}
+
 let _isSyncingBg = false;
 function showBackgroundLoader() {
     const loader = document.getElementById('background-sheets-loader');
@@ -1327,8 +1495,14 @@ async function backgroundSheetsSync() {
         }
         
         if (shouldRender) {
-            AppState.company1Data = mergeOrders(getSheetsCache('company1'), (res1 && Array.isArray(res1.data)) ? res1.data : []);
-            AppState.company2Data = mergeOrders(getSheetsCache('company2'), (res2 && Array.isArray(res2.data)) ? res2.data : []);
+            AppState.company1Data = applyPendingOrderOverrides(
+                mergeOrders(getSheetsCache('company1'), (res1 && Array.isArray(res1.data)) ? res1.data : []),
+                'company1'
+            );
+            AppState.company2Data = applyPendingOrderOverrides(
+                mergeOrders(getSheetsCache('company2'), (res2 && Array.isArray(res2.data)) ? res2.data : []),
+                'company2'
+            );
             
             AppState.dashboardData = AppState.currentCompany === 'company1' ? AppState.company1Data : AppState.company2Data;
             
@@ -1349,7 +1523,7 @@ async function fetchDashboardData() {
         const fbData = Array.isArray(res?.data) ? res.data : [];
         const cached = getSheetsCache(AppState.currentCompany);
         
-        AppState.dashboardData = mergeOrders(cached, fbData);
+        AppState.dashboardData = applyPendingOrderOverrides(mergeOrders(cached, fbData), AppState.currentCompany);
         if (AppState.currentCompany === 'company1') AppState.company1Data = AppState.dashboardData;
         if (AppState.currentCompany === 'company2') AppState.company2Data = AppState.dashboardData;
     } catch(e) {
@@ -1385,8 +1559,8 @@ async function fetchAllCompaniesData(options = {}) {
     if (c1Acc && c1Acc.details) AppState.company1Details = c1Acc.details;
     if (c2Acc && c2Acc.details) AppState.company2Details = c2Acc.details;
 
-    AppState.company1Data = mergeOrders(getSheetsCache('company1'), fData1);
-    AppState.company2Data = mergeOrders(getSheetsCache('company2'), fData2);
+    AppState.company1Data = applyPendingOrderOverrides(mergeOrders(getSheetsCache('company1'), fData1), 'company1');
+    AppState.company2Data = applyPendingOrderOverrides(mergeOrders(getSheetsCache('company2'), fData2), 'company2');
 
     if (enableBackgroundSync) backgroundSheetsSync();
 
@@ -2800,6 +2974,7 @@ async function loadHistoricalData(companyId, month) {
 }
 
 async function renderDataSheet() {
+    const renderSeq = ++_renderDataSheetSeq;
     const thead = document.getElementById('sheet-thead');
     const tbody = document.getElementById('sheet-tbody');
     const emptyMsg = document.getElementById('sheet-empty');
@@ -2900,6 +3075,7 @@ async function renderDataSheet() {
     
     // Load remarks (from backend first time, then cached)
     const savedRemarks = await loadRemarksFromBackend();
+    if (renderSeq !== _renderDataSheetSeq) return;
     
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     
@@ -2976,6 +3152,7 @@ async function renderDataSheet() {
             FirebaseService.bufferWrite(`remark_${date}`, () =>
                 FirebaseService.saveRemark(date, val)
             );
+            scheduleQuickWriteFlush(1200);
         });
     });
     
@@ -2985,13 +3162,8 @@ async function renderDataSheet() {
             const { date, accountId, company, field } = inp.dataset;
             const value = parseInt(inp.value) || 0;
             
-            // Update local state immediately
-            const stateData = company === 'company1' ? AppState.company1Data : AppState.company2Data;
-            const row = stateData.find(r => normalizeToISODate(r.date) === date && (r.accountId === accountId || (!r.accountId && r.accountName === inp.dataset.accountName)));
-            if (row) {
-                row[field] = value;
-                row.total = parseInt(row.meesho) || 0;
-            }
+            // Update local state + local cache immediately (prevents temporary row disappear during refresh)
+            applyOptimisticOrderUpdate(date, accountId, inp.dataset.accountName, value, company);
             
             // Recalculate totals in UI immediately
             recalcSheetRowTotal(inp);
@@ -3000,6 +3172,7 @@ async function renderDataSheet() {
             FirebaseService.bufferWrite(`order_${date}_${accountId}_${field}`, () =>
                 FirebaseService.updateOrder(date, accountId, field, value, company)
             );
+            scheduleQuickWriteFlush(1200);
         });
     });
 }
@@ -3174,6 +3347,7 @@ async function renderMoneyManagement() {
              }
              
              FirebaseService.bufferWrite(`money_${companyId}_${accountId}`, () => FirebaseService.updateMoney(accountId, companyId, money, expense, date));
+             scheduleQuickWriteFlush(1500);
         });
     });
     
@@ -3837,6 +4011,9 @@ async function renderSizePricesPage() {
                 <button class=\"btn btn-outline btn-sm size-edit-btn\" data-key=\"${r.key}\" data-value=\"${r.value}\" data-effective=\"${r.activeFrom}\" ${isAdmin ? '' : 'disabled'}>
                     <i class='bx bx-edit'></i> Edit
                 </button>
+                <button class=\"btn btn-danger btn-sm size-delete-btn\" data-key=\"${r.key}\" ${isAdmin ? '' : 'disabled'}>
+                    <i class='bx bx-trash'></i> Delete
+                </button>
             </td>
         </tr>
     `).join('') : '<tr><td colspan=\"4\" class=\"text-center text-muted p-3\">No size/design prices saved yet.</td></tr>';
@@ -3898,7 +4075,7 @@ async function renderSizePricesPage() {
             const key = String(keyInput.value || '').trim();
             if (!key) return;
             const points = Array.isArray((historyMap || {})[key]) ? (historyMap || {})[key] : [];
-            const latest = points.length > 0 ? points[points.length - 1] : null;
+            const latest = points.length > 0 ? [...points].reverse().find(p => !p.isDeleted) : null;
             const latestPrice = latest ? parseFloat(latest.price) : parseFloat(AppState.designPrices[key]);
             if (Number.isFinite(latestPrice)) {
                 const oldVal = valueInput.value;
@@ -3923,6 +4100,48 @@ async function renderSizePricesPage() {
             effectiveDateInput.value = normalizeToISODateTime(btn.dataset.effective || '', today).slice(0, 16) || getCurrentLocalDateTimeInput();
             saveBtn.innerHTML = "<i class='bx bx-save'></i> Update Price";
             keyInput.focus();
+        });
+    });
+
+    tbody.querySelectorAll('.size-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!isAdminUser()) return;
+            const key = String(btn.dataset.key || '').trim().toUpperCase();
+            if (!key) return;
+            if (!confirm(`Delete "${key}" from current list? Old transactions will keep historical prices.`)) return;
+            showLoader();
+            try {
+                const hideFrom = normalizeToISODateTime(getCurrentLocalDateTimeInput(), today) || `${today}T00:00:00`;
+                let r = null;
+                if (typeof FirebaseService.deleteDesignPrice === 'function') {
+                    r = await FirebaseService.deleteDesignPrice(key, buildAuditActor(), companyId, hideFrom);
+                } else if (typeof FirebaseService.hideDesignPrice === 'function') {
+                    r = await FirebaseService.hideDesignPrice(key, buildAuditActor(), companyId, hideFrom);
+                } else if (typeof FirebaseService.upsertDesignPrice === 'function') {
+                    const asOf = await FirebaseService.getDesignPrices(companyId, hideFrom).catch(() => ({ success: true, data: {} }));
+                    const currentPrice = Number.isFinite(parseFloat(asOf?.data?.[key])) ? parseFloat(asOf.data[key]) : 0;
+                    r = await FirebaseService.upsertDesignPrice(
+                        key,
+                        currentPrice,
+                        buildAuditActor(),
+                        companyId,
+                        hideFrom,
+                        { isDeleted: true }
+                    );
+                } else {
+                    throw new Error('Price delete API missing. Hard refresh page once.');
+                }
+                if (!r || r.success === false) throw new Error(r?.message || 'Failed to delete');
+                _pendingDataChangesForBackup = true;
+                scheduleBackgroundSheetBackup('deleteDesignPrice');
+                showToast('Price deleted from active list', 'success');
+                await renderSizePricesPage();
+            } catch (err) {
+                console.error(err);
+                showToast(err.message || 'Failed to delete price', 'error');
+            } finally {
+                hideLoader();
+            }
         });
     });
 }
@@ -4221,7 +4440,8 @@ function setupKarigarListeners() {
                     const eff = normalizeToISODateTime(point.effectiveFrom, getTodayISODate());
                     if (eff && eff <= targetDateTime) selected = point;
                 });
-                if (selected && Number.isFinite(parseFloat(selected.price))) return parseFloat(selected.price);
+                if (selected && !selected.isDeleted && Number.isFinite(parseFloat(selected.price))) return parseFloat(selected.price);
+                if (selected && selected.isDeleted) return null;
             }
             if (Number.isFinite(parseFloat(AppState.designPrices[designKey]))) return parseFloat(AppState.designPrices[designKey]);
             return null;
