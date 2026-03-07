@@ -308,7 +308,7 @@
                             <button type="button" class="btn btn-outline btn-sm text-primary" id="fix-integrity-btn" title="Generate missing IDs for legacy spreadsheet data">
                                 <i class='bx bx-shield-check'></i> Fix Integrity
                             </button>
-                            <button type="button" class="btn btn-outline btn-sm text-accent" id="sync-sheet-btn" title="Delete Firebase data and replace from Google Sheets">
+                            <button type="button" class="btn btn-outline btn-sm text-accent" id="sync-sheet-btn" title="Replace selected Firebase sections from Google Sheets">
                                 <i class='bx bx-refresh'></i> Replace from Sheet
                             </button>
                         </div>
@@ -438,6 +438,10 @@
                         <div class="flex gap-2 items-center">
                             <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Export to PDF"><i class='bx bxs-file-pdf'></i> Export PDF</button>
                             <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn"><i class='bx bx-archive'></i> View History</button>
+                            <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: right;">
+                                <span class="text-xs text-muted uppercase font-bold mr-2">Total Pics</span>
+                                <strong id="karigar-overall-pics" class="text-lg text-primary">0</strong>
+                            </div>
                             <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                                 <span class="text-xs text-muted uppercase font-bold mr-2">Total Payable Balance</span>
                                 <strong id="karigar-overall-balance" class="text-lg text-primary">₹0.00</strong>
@@ -468,6 +472,11 @@
                             <div>
                                 <h2 class="page-title font-bold text-xl"><i class='bx bx-ruler'></i> Size Price Management</h2>
                                 <p class="text-sm text-muted">Saved Size/Design prices used in Jama auto-fill.</p>
+                            </div>
+                            <div>
+                                <button id="size-price-recycle-open-btn" class="btn btn-outline btn-sm" type="button">
+                                    <i class='bx bx-trash'></i> Recycle Bin (<span id="size-price-recycle-count">0</span>)
+                                </button>
                             </div>
                         </div>
                         <form id="size-price-form" class="mb-2" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:0.75rem;align-items:end;">
@@ -782,10 +791,11 @@
 
     <div id="karigar-reset-backups-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
         <div class="modal-content" style="background:white;width:95%;max-width:980px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;display:flex;flex-direction:column;">
-            <div class="flex-between mb-2" style="gap: 0.75rem;">
+                <div class="flex-between mb-2" style="gap: 0.75rem;">
                 <div>
                     <h3 class="font-bold text-lg">Karigar Reset Backups</h3>
                     <p class="text-xs text-muted">Read-only snapshot cards by employee.</p>
+                    <p id="karigar-reset-backup-range-label" class="text-xs text-primary">Range: -</p>
                 </div>
                 <div style="display:flex; gap: 0.5rem; align-items:center;">
                     <select id="karigar-reset-backup-select" class="date-input" style="min-width: 280px;"></select>
@@ -846,6 +856,57 @@
         </div>
     </div>
 
+    <div id="size-price-history-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:10002;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:94%;max-width:900px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;display:flex;flex-direction:column;">
+            <div class="flex-between mb-2">
+                <div>
+                    <h3 id="size-price-history-title" class="font-bold text-lg">Price History</h3>
+                    <p class="text-xs text-muted">Timeline by effective date ranges.</p>
+                </div>
+                <button id="close-size-price-history-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <div class="table-responsive" style="flex:1; min-height:0;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th class="text-left">From</th>
+                            <th class="text-left">Until</th>
+                            <th class="text-right">Price</th>
+                            <th class="text-center">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="size-price-history-tbody"></tbody>
+                </table>
+            </div>
+            <div id="size-price-history-empty" class="hidden text-center p-2 text-muted">No history found for this size/design.</div>
+        </div>
+    </div>
+    <div id="size-price-recycle-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.45);z-index:10002;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:94%;max-width:900px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;display:flex;flex-direction:column;">
+            <div class="flex-between mb-2">
+                <div>
+                    <h3 class="font-bold text-lg"><i class='bx bx-trash'></i> Recycle Bin</h3>
+                    <p class="text-xs text-muted">Deleted sizes are soft-hidden. Restore anytime.</p>
+                </div>
+                <button id="close-size-price-recycle-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <div class="table-responsive" style="flex:1; min-height:0;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th class="text-left">Size/Design</th>
+                            <th class="text-right">Last Price</th>
+                            <th class="text-center">Deleted On</th>
+                            <th class="text-center">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="size-price-recycle-tbody"></tbody>
+                </table>
+            </div>
+            <div id="size-price-recycle-empty" class="hidden text-center p-2 text-muted">No deleted sizes.</div>
+        </div>
+    </div>
+
     <!-- Global Export Modal -->
     <div id="global-export-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
         <div class="modal-content" style="background:white;width:90%;max-width:500px;border-radius:12px;padding:25px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
@@ -869,6 +930,49 @@
         </div>
     </div>
 
+    <div id="replace-sheet-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10003;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:92%;max-width:540px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
+            <div class="flex-between mb-2">
+                <div>
+                    <h3 class="font-bold text-lg">Replace From Sheet</h3>
+                    <p class="text-xs text-muted">Select only the dashboard data blocks you want to replace.</p>
+                </div>
+                <button id="close-replace-sheet-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <form id="replace-sheet-form">
+                <div class="mb-2 p-2" style="border:1px solid var(--border-color);border-radius:10px;display:grid;gap:0.75rem;">
+                    <label style="display:flex;gap:0.6rem;align-items:flex-start;">
+                        <input type="checkbox" id="replace-sheet-accounts" checked>
+                        <span><strong>Manage Accounts</strong><br><span class="text-xs text-muted">Accounts_C1 + Accounts_C2</span></span>
+                    </label>
+                    <label style="display:flex;gap:0.6rem;align-items:flex-start;">
+                        <input type="checkbox" id="replace-sheet-orders" checked>
+                        <span><strong>Daily Orders / Data Sheet</strong><br><span class="text-xs text-muted">Orders_C1 + Orders_C2</span></span>
+                    </label>
+                    <label style="display:flex;gap:0.6rem;align-items:flex-start;">
+                        <input type="checkbox" id="replace-sheet-karigars" checked>
+                        <span><strong>Karigar Employees</strong><br><span class="text-xs text-muted">Karigars_C1 + Karigars_C2</span></span>
+                    </label>
+                    <label style="display:flex;gap:0.6rem;align-items:flex-start;">
+                        <input type="checkbox" id="replace-sheet-karigar-tx" checked>
+                        <span><strong>Karigar Transactions</strong><br><span class="text-xs text-muted">Karigar_Transactions_C1 + Karigar_Transactions_C2</span></span>
+                    </label>
+                    <label style="display:flex;gap:0.6rem;align-items:flex-start;">
+                        <input type="checkbox" id="replace-sheet-size-prices" checked>
+                        <span><strong>Size Prices</strong><br><span class="text-xs text-muted">Design_Prices + Design_Price_History</span></span>
+                    </label>
+                </div>
+                <div class="flex-between" style="gap:0.6rem;">
+                    <button type="button" id="replace-sheet-select-all-btn" class="btn btn-outline btn-sm">Select All</button>
+                    <div style="display:flex;gap:0.5rem;align-items:center;">
+                        <button type="button" id="replace-sheet-cancel-btn" class="btn btn-outline">Cancel</button>
+                        <button type="submit" class="btn btn-primary"><i class='bx bx-refresh'></i> Replace Selected</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Firebase SDK (compat for vanilla JS) -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -877,11 +981,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <script src="config.js"></script>
-    <script src="firebase-service.js?v=20260307-2"></script>
+    <script src="firebase-service.js?v=20260307-14"></script>
     <div id="background-sheets-loader" class="hidden" style="position: fixed; bottom: 20px; right: 20px; background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: 10px; border-radius: 50%; width: 40px; height: 40px; z-index: 9999; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="app.js?v=20260307-2"></script>
+    <script src="app.js?v=20260307-16"></script>
 </body>
 </html>

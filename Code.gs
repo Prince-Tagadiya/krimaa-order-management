@@ -631,17 +631,36 @@ function submitOrders(dateStr, orders, companyId) {
   setupSheets(companyId);
   var company = COMPANIES[companyId] || COMPANIES['company1'];
   var sheet = ss.getSheetByName(company.ordersSheet);
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
   
-  if (!orders || orders.length === 0) return {success: false, message: 'No orders'};
-  
-  var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd HH:mm:ss");
-  var newRows = orders.map(function(o) {
-    return [dateStr, o.accountId, o.accountName, o.meesho || 0, now];
-  });
-  
-  var lastRow = sheet.getLastRow();
-  sheet.getRange(lastRow + 1, 1, newRows.length, 5).setValues(newRows);
-  return {success: true};
+  try {
+    if (!orders || orders.length === 0) return {success: false, message: 'No orders'};
+
+    var safeDate = String(dateStr || '').split('T')[0].split(' ')[0].trim();
+    if (!safeDate) return {success: false, message: 'Date required'};
+
+    var normalized = [];
+    orders.forEach(function(o) {
+      var accountId = String((o && o.accountId) || '').trim();
+      if (!accountId) return;
+      var accountName = String((o && o.accountName) || accountId).trim();
+      var meesho = parseInt((o && o.meesho), 10);
+      if (!isFinite(meesho)) meesho = 0;
+      normalized.push({
+        date: safeDate,
+        accountId: accountId,
+        accountName: accountName,
+        meesho: meesho
+      });
+    });
+
+    if (normalized.length === 0) return {success: false, message: 'No valid order rows'};
+    var changed = syncOrdersToSheet(sheet, normalized);
+    return {success: true, rowsSynced: changed};
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // Logic to load order data for the dashboard, optionally filtered by month (YYYY-MM)

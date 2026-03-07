@@ -78,27 +78,77 @@ const FirebaseService = (() => {
         const safeOptions = (options && typeof options === 'object') ? options : {};
         const isDeleted = !!safeOptions.isDeleted;
         const docId = buildDesignPriceDocId(safeCompanyId, safeKey);
+
+        // Prevent no-op history growth (daily duplicate points with unchanged price/status).
+        let latestPoint = null;
+        try {
+            const latestSnap = await db.collection('design_price_history')
+                .where('companyId', '==', safeCompanyId)
+                .where('key', '==', safeKey)
+                .orderBy('effectiveFrom', 'desc')
+                .limit(1)
+                .get();
+            if (!latestSnap.empty) {
+                const d = latestSnap.docs[0].data() || {};
+                latestPoint = {
+                    price: parseFloat(d.price) || 0,
+                    isDeleted: !!d.isDeleted,
+                    effectiveFrom: normalizeISODateTime(d.effectiveFrom || d.updatedAt) || safeEffectiveFrom
+                };
+            }
+        } catch (e) {
+            const latestFallbackSnap = await db.collection('design_price_history')
+                .where('companyId', '==', safeCompanyId)
+                .where('key', '==', safeKey)
+                .get();
+            if (!latestFallbackSnap.empty) {
+                let best = null;
+                latestFallbackSnap.forEach(doc => {
+                    const d = doc.data() || {};
+                    const eff = normalizeISODateTime(d.effectiveFrom || d.updatedAt);
+                    if (!eff) return;
+                    if (!best || String(eff) > String(best.effectiveFrom)) {
+                        best = {
+                            price: parseFloat(d.price) || 0,
+                            isDeleted: !!d.isDeleted,
+                            effectiveFrom: eff
+                        };
+                    }
+                });
+                latestPoint = best;
+            }
+        }
+
+        const unchangedFromLatest = latestPoint &&
+            Math.abs((parseFloat(latestPoint.price) || 0) - safePrice) < 0.0001 &&
+            (!!latestPoint.isDeleted) === isDeleted;
+        const effectiveToStore = unchangedFromLatest
+            ? (latestPoint.effectiveFrom || safeEffectiveFrom)
+            : safeEffectiveFrom;
+
         await db.collection('design_prices').doc(docId).set({
             companyId: safeCompanyId,
             key: safeKey,
             price: safePrice,
-            effectiveFromLatest: safeEffectiveFrom,
+            effectiveFromLatest: effectiveToStore,
             isDeletedLatest: isDeleted,
             ...buildActorMeta(actor, 'updated'),
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
 
-        const historyDocId = buildDesignPriceHistoryDocId(safeCompanyId, safeKey, safeEffectiveFrom);
-        await db.collection('design_price_history').doc(historyDocId).set({
-            companyId: safeCompanyId,
-            key: safeKey,
-            price: safePrice,
-            effectiveFrom: safeEffectiveFrom,
-            isDeleted,
-            ...buildActorMeta(actor, 'updated'),
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-        return { safeCompanyId, safeKey, safePrice, safeEffectiveFrom, isDeleted };
+        if (!unchangedFromLatest) {
+            const historyDocId = buildDesignPriceHistoryDocId(safeCompanyId, safeKey, safeEffectiveFrom);
+            await db.collection('design_price_history').doc(historyDocId).set({
+                companyId: safeCompanyId,
+                key: safeKey,
+                price: safePrice,
+                effectiveFrom: safeEffectiveFrom,
+                isDeleted,
+                ...buildActorMeta(actor, 'updated'),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            }, { merge: true });
+        }
+        return { safeCompanyId, safeKey, safePrice, safeEffectiveFrom: effectiveToStore, isDeleted };
     }
 
     async function deleteDesignPricePoint(companyId, designKey, effectiveFrom) {
@@ -217,6 +267,100 @@ const FirebaseService = (() => {
         if (!d) return '';
         const local = new Date(d.getTime() - (d.getTimezoneOffset() * 60000));
         return local.toISOString().slice(0, 19);
+    }
+
+    function getCompanyDisplayName(companyId) {
+        return String(companyId || '').trim() === 'company2' ? 'Company 2' : 'Company 1';
+    }
+
+    function buildDailyOrdersDocId(companyId, dateStr) {
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const safeDate = normalizeISODate(dateStr);
+        return `${safeCompanyId}__${safeDate}`;
+    }
+
+    function getDailyOrdersDayRef(companyId, dateStr) {
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const safeDate = normalizeISODate(dateStr);
+        const docId = buildDailyOrdersDocId(safeCompanyId, safeDate);
+        return db.collection('daily_orders').doc(docId);
+    }
+
+    async function getAccountsForCompany(companyId) {
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const snap = await db.collection('accounts').where('companyId', '==', safeCompanyId).get();
+        const byId = {};
+        const byNameLower = {};
+        const positionById = {};
+        snap.forEach(doc => {
+            const data = doc.data() || {};
+            const accountId = String(data.accountId || doc.id || '').trim();
+            const accountName = String(data.name || '').trim();
+            if (!accountId) return;
+            if (accountName) {
+                byId[accountId] = accountName;
+                byNameLower[accountName.toLowerCase()] = accountId;
+            }
+            positionById[accountId] = Number.isFinite(parseInt(data.position, 10)) ? parseInt(data.position, 10) : 999999;
+        });
+        return { byId, byNameLower, positionById };
+    }
+
+    async function readDailyOrdersRows(companyId, startDate, endDate) {
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const safeStart = normalizeISODate(startDate);
+        const safeEnd = normalizeISODate(endDate);
+        if (!safeStart || !safeEnd) return [];
+        const dayCol = db.collection('daily_orders');
+
+        let docs = [];
+        try {
+            const snap = await dayCol
+                .where('companyId', '==', safeCompanyId)
+                .where('date', '>=', safeStart)
+                .where('date', '<=', safeEnd)
+                .orderBy('date', 'desc')
+                .get();
+            docs = snap.docs || [];
+        } catch (e) {
+            const fallbackSnap = await dayCol.where('companyId', '==', safeCompanyId).get();
+            docs = (fallbackSnap.docs || []).filter(doc => {
+                const raw = doc.data() || {};
+                const d = normalizeISODate(raw.date || doc.id);
+                return !!d && d >= safeStart && d <= safeEnd;
+            });
+        }
+
+        const rows = [];
+        docs.forEach(doc => {
+            const raw = doc.data() || {};
+            const date = normalizeISODate(raw.date || doc.id);
+            if (!date) return;
+            const arr = Array.isArray(raw.orders) ? raw.orders : [];
+            arr.forEach((o, idx) => {
+                const accountId = String(o?.accountId || '').trim();
+                if (!accountId) return;
+                const qty = parseInt(o?.meesho ?? o?.quantity ?? o?.total, 10);
+                rows.push({
+                    date,
+                    accountId,
+                    accountName: String(o?.accountName || '').trim(),
+                    meesho: Number.isFinite(qty) ? qty : 0,
+                    total: Number.isFinite(qty) ? qty : 0,
+                    companyId: safeCompanyId,
+                    companyName: String(raw.companyName || getCompanyDisplayName(safeCompanyId)).trim(),
+                    orderIndex: Number.isFinite(parseInt(o?.orderIndex, 10)) ? parseInt(o.orderIndex, 10) : idx
+                });
+            });
+        });
+
+        rows.sort((a, b) => {
+            const ad = String(a.date || '');
+            const bd = String(b.date || '');
+            if (ad === bd) return (a.orderIndex || 0) - (b.orderIndex || 0);
+            return bd.localeCompare(ad);
+        });
+        return rows;
     }
 
     async function getAccounts(companyId) {
@@ -512,12 +656,54 @@ const FirebaseService = (() => {
         summary.totalJama = Math.round((summary.totalJama + Number.EPSILON) * 100) / 100;
         summary.totalUpad = Math.round((summary.totalUpad + Number.EPSILON) * 100) / 100;
 
-        const snapshotAt = new Date().toISOString();
+        const snapshotAt = normalizeISODateTime(new Date());
+        let previousBackupDoc = null;
+        try {
+            const latestSnap = await db.collection('karigar_reset_backups')
+                .where('companyId', '==', safeCompanyId)
+                .orderBy('createdAt', 'desc')
+                .limit(1)
+                .get();
+            if (!latestSnap.empty) previousBackupDoc = latestSnap.docs[0];
+        } catch (e) {
+            const fallbackSnap = await db.collection('karigar_reset_backups')
+                .where('companyId', '==', safeCompanyId)
+                .get();
+            const ordered = fallbackSnap.docs.slice().sort((a, b) => {
+                const ad = normalizeISODateTime(a.data()?.periodStartAt || a.data()?.snapshotAt || a.data()?.createdAt) || '';
+                const bd = normalizeISODateTime(b.data()?.periodStartAt || b.data()?.snapshotAt || b.data()?.createdAt) || '';
+                return bd.localeCompare(ad);
+            });
+            previousBackupDoc = ordered[0] || null;
+        }
+
+        if (previousBackupDoc) {
+            const prevData = previousBackupDoc.data() || {};
+            const prevEnd = normalizeISODateTime(prevData.periodEndAt);
+            if (!prevEnd) {
+                await previousBackupDoc.ref.set({
+                    periodEndAt: snapshotAt,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            }
+        }
+
+        const rowDateTimes = normalizedRows
+            .map(tx => normalizeISODateTime(tx.transactionDateTime || tx.date))
+            .filter(Boolean)
+            .sort((a, b) => String(a).localeCompare(String(b)));
+        const dataStartAt = rowDateTimes.length > 0 ? rowDateTimes[0] : '';
+        const dataEndAt = rowDateTimes.length > 0 ? rowDateTimes[rowDateTimes.length - 1] : '';
+
         const docRef = await db.collection('karigar_reset_backups').add({
             companyId: safeCompanyId,
             rows: normalizedRows,
             summary,
             snapshotAt,
+            periodStartAt: snapshotAt,
+            periodEndAt: '',
+            dataStartAt,
+            dataEndAt,
             ...buildActorMeta(actor, 'created'),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -552,15 +738,31 @@ const FirebaseService = (() => {
                 rows: Array.isArray(d.rows) ? d.rows : [],
                 summary: d.summary || { totalJama: 0, totalUpad: 0, netBalance: 0, count: 0 },
                 snapshotAt: d.snapshotAt || '',
+                periodStartAt: d.periodStartAt || '',
+                periodEndAt: d.periodEndAt || '',
+                dataStartAt: d.dataStartAt || '',
+                dataEndAt: d.dataEndAt || '',
                 createdAt: d.createdAt || null,
                 createdFrom: String(d.createdFrom || d.source || '').trim()
             });
         });
 
         data.sort((a, b) => {
-            const ad = String(a.snapshotAt || '').trim();
-            const bd = String(b.snapshotAt || '').trim();
+            const ad = String(a.periodStartAt || a.snapshotAt || '').trim();
+            const bd = String(b.periodStartAt || b.snapshotAt || '').trim();
             return bd.localeCompare(ad);
+        });
+        data.forEach((backup, idx) => {
+            const startAt = normalizeISODateTime(backup.periodStartAt || backup.snapshotAt || backup.createdAt) || '';
+            backup.periodStartAt = startAt;
+            const explicitEnd = normalizeISODateTime(backup.periodEndAt) || '';
+            if (explicitEnd) {
+                backup.periodEndAt = explicitEnd;
+                return;
+            }
+            const newerBackup = idx > 0 ? data[idx - 1] : null;
+            const inferredEnd = normalizeISODateTime(newerBackup?.periodStartAt || newerBackup?.snapshotAt || '') || '';
+            backup.periodEndAt = inferredEnd;
         });
         return { success: true, data };
     }
@@ -568,40 +770,60 @@ const FirebaseService = (() => {
     // ───── ORDERS ─────
     async function getOrders(companyId, monthStr) {
         init();
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const thirtyDaysAgoStr = thirtyDaysAgo.toISOString().split('T')[0];
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const todayISO = normalizeISODate(new Date());
+        const monthStart = monthStr ? normalizeISODate(`${monthStr}-01`) : '2000-01-01';
+        const monthEnd = monthStr ? normalizeISODate(`${monthStr}-31`) : todayISO;
+        const startDate = monthStart || '2000-01-01';
+        const endDate = monthEnd || todayISO;
 
-        // 1. Fetch valid Account IDs for this company
-        const accSnap = await db.collection('accounts').where('companyId', '==', companyId).get();
-        const validAccIds = new Set();
-        accSnap.forEach(doc => {
-             validAccIds.add(doc.data().accountId || doc.id);
-        });
-
-        // 2. Fetch from fast Daily Summary layer!
-        let query = db.collection('daily_summary').where('date', '>=', monthStr ? `${monthStr}-01` : thirtyDaysAgoStr);
-        if (monthStr) query = query.where('date', '<=', `${monthStr}-31`);
+        const accountMeta = await getAccountsForCompany(safeCompanyId);
+        const validAccIds = new Set(Object.keys(accountMeta.byId || {}));
 
         try {
+            // Primary source: company/day document with orders[] array.
+            const dayRows = await readDailyOrdersRows(safeCompanyId, startDate, endDate);
+            if (dayRows.length > 0) {
+                const normalized = dayRows.map(r => {
+                    const accountId = String(r.accountId || '').trim();
+                    const resolvedName = String(r.accountName || accountMeta.byId[accountId] || accountId).trim();
+                    return {
+                        ...r,
+                        accountName: resolvedName,
+                        meesho: parseInt(r.meesho, 10) || 0,
+                        total: parseInt(r.total, 10) || (parseInt(r.meesho, 10) || 0),
+                        companyId: safeCompanyId
+                    };
+                });
+                return { success: true, data: normalized };
+            }
+
+            // Fallback source for older data.
+            let query = db.collection('daily_summary').where('date', '>=', startDate);
+            if (monthStr) query = query.where('date', '<=', endDate);
+
             const snap = await query.get();
             const records = [];
             snap.forEach(doc => {
-                const d = doc.data();
+                const d = doc.data() || {};
                 for (const [key, val] of Object.entries(d)) {
-                    if (key !== 'date' && key !== 'masterCompany' && validAccIds.has(key)) {
-                        const resolvedName = accountIdNameMap[key] || key;
-                        records.push({
-                            date: d.date,
-                            accountId: key,
-                            accountName: resolvedName,
-                            meesho: val,
-                            total: val,
-                            companyId
-                        });
-                    }
+                    if (key === 'date' || key === 'masterCompany') continue;
+                    const accountId = String(key || '').trim();
+                    if (!accountId) continue;
+                    if (validAccIds.size > 0 && !validAccIds.has(accountId)) continue;
+                    const qty = parseInt(val, 10) || 0;
+                    records.push({
+                        date: normalizeISODate(d.date || doc.id),
+                        accountId,
+                        accountName: String(accountMeta.byId[accountId] || accountId).trim(),
+                        meesho: qty,
+                        total: qty,
+                        companyId: safeCompanyId,
+                        companyName: getCompanyDisplayName(safeCompanyId)
+                    });
                 }
             });
+            records.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
             return { success: true, data: records };
         } catch (e) {
             console.error("Firebase fetch error: ", e);
@@ -612,32 +834,96 @@ const FirebaseService = (() => {
     async function submitOrders(date, orders, companyId) {
         init();
         if (!orders?.length) return { success: false, message: 'No orders provided' };
-        
-        const dStr = String(date).split('T')[0];
+
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const dStr = normalizeISODate(String(date).split('T')[0]);
+        if (!dStr) return { success: false, message: 'Invalid date' };
         const year = dStr.substring(0, 4);
         const month = dStr.substring(5, 7);
         const partition = `orders_${year}_${month}`;
+        const companyName = getCompanyDisplayName(safeCompanyId);
+        const accountMeta = await getAccountsForCompany(safeCompanyId);
+        const positionById = accountMeta.positionById || {};
+        const normalizedRows = [];
 
         const ops = [];
         const summaryUpdates = {};
         
         orders.forEach(o => {
-            const accId = o.accountId || accountNameIdMap[o.accountName.trim()] || o.accountName;
+            const rawId = String(o?.accountId || '').trim();
+            const rawName = String(o?.accountName || '').trim();
+            const mappedFromName = rawName ? accountMeta.byNameLower[rawName.toLowerCase()] : '';
+            const accId = rawId || mappedFromName || rawName;
+            if (!accId) return;
             const quantity = parseInt(o.meesho) || 0;
+            const accountName = String(rawName || accountMeta.byId[accId] || accId).trim();
+
+            normalizedRows.push({
+                accountId: accId,
+                accountName,
+                meesho: quantity,
+                total: quantity
+            });
             
-            const docId = encodeURIComponent(`${date}_${accId}`);
+            const docId = encodeURIComponent(`${dStr}_${accId}`);
             const orderRef = db.collection(partition).doc(docId);
             
             ops.push(b => b.set(orderRef, {
                 orderId: docId,
                 accountId: accId,
-                masterCompany: companyId,
+                companyId: safeCompanyId,
+                companyName,
+                masterCompany: safeCompanyId,
                 quantity,
                 date: dStr,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true }));
             
             summaryUpdates[accId] = quantity;
+        });
+
+        const dayRef = getDailyOrdersDayRef(safeCompanyId, dStr);
+        await db.runTransaction(async (tx) => {
+            const snap = await tx.get(dayRef);
+            const existingDoc = snap.exists ? (snap.data() || {}) : {};
+            const existingOrders = Array.isArray(existingDoc.orders) ? existingDoc.orders.slice() : [];
+
+            normalizedRows.forEach(row => {
+                const idx = existingOrders.findIndex(it => String(it?.accountId || '').trim() === row.accountId);
+                if (idx >= 0) {
+                    existingOrders[idx] = {
+                        ...existingOrders[idx],
+                        ...row
+                    };
+                } else {
+                    existingOrders.push({ ...row });
+                }
+            });
+
+            existingOrders.sort((a, b) => {
+                const ap = Number.isFinite(parseInt(positionById[a.accountId], 10)) ? parseInt(positionById[a.accountId], 10) : 999999;
+                const bp = Number.isFinite(parseInt(positionById[b.accountId], 10)) ? parseInt(positionById[b.accountId], 10) : 999999;
+                if (ap !== bp) return ap - bp;
+                return String(a.accountName || '').localeCompare(String(b.accountName || ''));
+            });
+
+            const indexedOrders = existingOrders.map((row, idx) => ({
+                accountId: String(row.accountId || '').trim(),
+                accountName: String(row.accountName || accountMeta.byId[row.accountId] || row.accountId || '').trim(),
+                meesho: parseInt(row.meesho, 10) || 0,
+                total: parseInt(row.total, 10) || (parseInt(row.meesho, 10) || 0),
+                orderIndex: idx
+            }));
+
+            const payload = {
+                date: dStr,
+                companyId: safeCompanyId,
+                companyName,
+                orders: indexedOrders,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            if (!snap.exists) payload.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+            tx.set(dayRef, payload, { merge: true });
         });
         
         const summaryRef = db.collection('daily_summary').doc(dStr);
@@ -652,21 +938,74 @@ const FirebaseService = (() => {
 
     async function updateOrder(date, accountId, field, value, companyId) {
         init();
-        const dStr = String(date).split('T')[0];
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const dStr = normalizeISODate(String(date).split('T')[0]);
+        if (!dStr) return { success: false, message: 'Invalid date' };
         const year = dStr.substring(0, 4);
         const month = dStr.substring(5, 7);
         const partition = `orders_${year}_${month}`;
         const numVal = parseInt(value) || 0;
         
-        const accId = accountId;
-        const docId = encodeURIComponent(`${date}_${accId}`);
+        const accId = String(accountId || '').trim();
+        if (!accId) return { success: false, message: 'Account ID required' };
+        const docId = encodeURIComponent(`${dStr}_${accId}`);
         const orderRef = db.collection(partition).doc(docId);
+        const companyName = getCompanyDisplayName(safeCompanyId);
+        const accountMeta = await getAccountsForCompany(safeCompanyId);
+        const accountName = String(accountMeta.byId[accId] || accId).trim();
+
+        const dayRef = getDailyOrdersDayRef(safeCompanyId, dStr);
+        await db.runTransaction(async (tx) => {
+            const snap = await tx.get(dayRef);
+            const existingDoc = snap.exists ? (snap.data() || {}) : {};
+            const existingOrders = Array.isArray(existingDoc.orders) ? existingDoc.orders.slice() : [];
+            const idx = existingOrders.findIndex(it => String(it?.accountId || '').trim() === accId);
+            if (idx >= 0) {
+                existingOrders[idx] = {
+                    ...existingOrders[idx],
+                    accountId: accId,
+                    accountName: String(existingOrders[idx]?.accountName || accountName || accId).trim(),
+                    meesho: numVal,
+                    total: numVal,
+                    orderIndex: Number.isFinite(parseInt(existingOrders[idx]?.orderIndex, 10))
+                        ? parseInt(existingOrders[idx].orderIndex, 10)
+                        : idx
+                };
+            } else {
+                existingOrders.push({
+                    accountId: accId,
+                    accountName,
+                    meesho: numVal,
+                    total: numVal,
+                    orderIndex: existingOrders.length
+                });
+            }
+            const payload = {
+                date: dStr,
+                companyId: safeCompanyId,
+                companyName,
+                orders: existingOrders.map((row, orderIdx) => ({
+                    accountId: String(row.accountId || '').trim(),
+                    accountName: String(row.accountName || accountMeta.byId[row.accountId] || row.accountId || '').trim(),
+                    meesho: parseInt(row.meesho, 10) || 0,
+                    total: parseInt(row.total, 10) || (parseInt(row.meesho, 10) || 0),
+                    orderIndex: Number.isFinite(parseInt(row.orderIndex, 10))
+                        ? parseInt(row.orderIndex, 10)
+                        : orderIdx
+                })),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            if (!snap.exists) payload.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+            tx.set(dayRef, payload, { merge: true });
+        });
         
         const ops = [];
         ops.push(b => b.set(orderRef, {
             orderId: docId,
             accountId: accId,
-            masterCompany: companyId,
+            companyId: safeCompanyId,
+            companyName,
+            masterCompany: safeCompanyId,
             quantity: numVal,
             date: dStr,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -680,6 +1019,41 @@ const FirebaseService = (() => {
         
         await commitInChunks(ops);
         return { success: true, message: 'Order updated' };
+    }
+
+    async function getOrderRowsForDate(companyId, date) {
+        init();
+        const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
+        const safeDate = normalizeISODate(date);
+        if (!safeDate) return { success: true, data: [] };
+
+        const dayRef = getDailyOrdersDayRef(safeCompanyId, safeDate);
+        const snap = await dayRef.get();
+        if (!snap.exists) return { success: true, data: [] };
+
+        const raw = snap.data() || {};
+        const rows = Array.isArray(raw.orders) ? raw.orders : [];
+        const normalized = rows
+            .map((row, idx) => {
+                const accountId = String(row?.accountId || '').trim();
+                if (!accountId) return null;
+                const qty = parseInt(row?.meesho ?? row?.quantity ?? row?.total, 10);
+                const safeQty = Number.isFinite(qty) ? qty : 0;
+                return {
+                    date: safeDate,
+                    accountId,
+                    accountName: String(row?.accountName || accountId).trim(),
+                    meesho: safeQty,
+                    total: safeQty,
+                    orderIndex: Number.isFinite(parseInt(row?.orderIndex, 10)) ? parseInt(row.orderIndex, 10) : idx,
+                    companyId: safeCompanyId,
+                    companyName: String(raw.companyName || getCompanyDisplayName(safeCompanyId)).trim()
+                };
+            })
+            .filter(Boolean)
+            .sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+
+        return { success: true, data: normalized };
     }
 
     // ───── REMARKS ─────
@@ -1653,9 +2027,19 @@ const FirebaseService = (() => {
         });
 
         Object.keys(pointMapByKey).forEach(key => {
-            historyByKey[key] = Object.values(pointMapByKey[key])
+            const sortedPoints = Object.values(pointMapByKey[key])
                 .map(p => ({ effectiveFrom: p.effectiveFrom, price: p.price, isDeleted: !!p.isDeleted }))
                 .sort((a, b) => String(a.effectiveFrom).localeCompare(String(b.effectiveFrom)));
+            // Keep only actual change points (price/status changed).
+            const compressed = [];
+            sortedPoints.forEach(point => {
+                const prev = compressed[compressed.length - 1];
+                const sameAsPrev = prev &&
+                    Math.abs((parseFloat(prev.price) || 0) - (parseFloat(point.price) || 0)) < 0.0001 &&
+                    (!!prev.isDeleted) === (!!point.isDeleted);
+                if (!sameAsPrev) compressed.push(point);
+            });
+            historyByKey[key] = compressed;
             let chosen = null;
             historyByKey[key].forEach(point => {
                 if (point.effectiveFrom <= safeAsOfDate) chosen = point;
@@ -1694,23 +2078,27 @@ const FirebaseService = (() => {
         const safeKey = String(designKey || '').trim().toUpperCase();
         const safePrice = parseFloat(price);
         const safeCompanyId = String(companyId || 'global').trim() || 'global';
+        const nowIso = normalizeISODateTime(new Date());
+        const nowMinute = nowIso ? `${nowIso.slice(0, 16)}:00` : normalizeISODateTime(new Date());
+        const requestedEffectiveFrom = normalizeISODateTime(effectiveFrom) || nowMinute;
+        const safeEffectiveFrom = requestedEffectiveFrom < nowMinute ? nowMinute : requestedEffectiveFrom;
         if (!safeKey) return { success: false, message: 'Design/Size key required' };
         if (!Number.isFinite(safePrice) || safePrice < 0) return { success: false, message: 'Invalid price' };
         const safeOptions = (options && typeof options === 'object') ? options : {};
         const markDeleted = !!safeOptions.isDeleted;
         if (markDeleted) {
-            const effectiveMark = normalizeISODateTime(effectiveFrom) || normalizeISODateTime(new Date());
+            const effectiveMark = safeEffectiveFrom;
             const asOf = await getDesignPrices(safeCompanyId, effectiveMark);
             const activePrice = Number.isFinite(parseFloat(asOf?.data?.[safeKey])) ? parseFloat(asOf.data[safeKey]) : (Number.isFinite(safePrice) ? safePrice : 0);
             const hiddenPoint = await saveDesignPricePoint(safeCompanyId, safeKey, activePrice, effectiveMark, actor, { isDeleted: true });
             return { success: true, companyId: safeCompanyId, key: safeKey, effectiveFrom: hiddenPoint.safeEffectiveFrom, isDeleted: true };
         }
         const replaceFromEffectiveFrom = normalizeISODateTime(safeOptions.replaceFromEffectiveFrom || '');
-        if (replaceFromEffectiveFrom) {
+        if (replaceFromEffectiveFrom && safeOptions.allowPastReplace === true) {
             const replaceFromKey = String(safeOptions.replaceFromKey || safeKey).trim().toUpperCase();
             await deleteDesignPricePoint(safeCompanyId, replaceFromKey, replaceFromEffectiveFrom);
         }
-        const point = await saveDesignPricePoint(safeCompanyId, safeKey, safePrice, effectiveFrom, actor);
+        const point = await saveDesignPricePoint(safeCompanyId, safeKey, safePrice, safeEffectiveFrom, actor);
         return { success: true, companyId: safeCompanyId, key: safeKey, effectiveFrom: point.safeEffectiveFrom };
     }
 
@@ -1721,7 +2109,10 @@ const FirebaseService = (() => {
         const safeCompanyId = String(companyId || 'global').trim() || 'global';
         if (!safeKey) return { success: false, message: 'Design/Size key required' };
 
-        const effectiveFrom = normalizeISODateTime(hideFrom) || normalizeISODateTime(new Date());
+        const nowIso = normalizeISODateTime(new Date());
+        const nowMinute = nowIso ? `${nowIso.slice(0, 16)}:00` : normalizeISODateTime(new Date());
+        const requestedHideFrom = normalizeISODateTime(hideFrom) || nowMinute;
+        const effectiveFrom = requestedHideFrom < nowMinute ? nowMinute : requestedHideFrom;
         const asOf = await getDesignPrices(safeCompanyId, effectiveFrom);
         const activePrice = Number.isFinite(parseFloat(asOf?.data?.[safeKey])) ? parseFloat(asOf.data[safeKey]) : 0;
         const point = await saveDesignPricePoint(safeCompanyId, safeKey, activePrice, effectiveFrom, actor, { isDeleted: true });
@@ -1814,20 +2205,29 @@ const FirebaseService = (() => {
         _pendingWrites.set(key, writeFn);
         setSyncStatus('pending');
         if (_flushTimer) clearTimeout(_flushTimer);
-        _flushTimer = setTimeout(() => flushWrites(), APP_CONFIG.writeBufferMs);
+        _flushTimer = setTimeout(() => {
+            flushWrites().catch((e) => {
+                console.warn('Buffered flush failed:', e);
+            });
+        }, APP_CONFIG.writeBufferMs);
     }
 
     async function flushWrites() {
-        if (_pendingWrites.size === 0) { setSyncStatus('saved'); return; }
+        if (_pendingWrites.size === 0) {
+            setSyncStatus('saved');
+            return { success: true, flushed: 0 };
+        }
         setSyncStatus('syncing');
         const entries = [..._pendingWrites.values()];
         _pendingWrites.clear();
         try {
             await Promise.all(entries.map(fn => fn()));
             setSyncStatus('saved');
+            return { success: true, flushed: entries.length };
         } catch (e) {
             console.error('Flush error:', e);
             setSyncStatus('error');
+            throw e;
         }
     }
 
@@ -2051,6 +2451,136 @@ const FirebaseService = (() => {
             if (snap.size < PAGE_SIZE) break;
         }
         return totalDeleted;
+    }
+
+    function normalizeReplaceSelection(selection = null) {
+        const defaultSelection = {
+            accounts: true,
+            orders: true,
+            karigars: true,
+            karigarTransactions: true,
+            designPrices: true,
+            designPriceHistory: true
+        };
+        if (!selection || typeof selection !== 'object') return defaultSelection;
+        const asBool = (value) => value === true || value === 1 || value === '1' || value === 'true';
+        const sizePricesSelected = asBool(selection.sizePrices);
+        return {
+            accounts: asBool(selection.accounts),
+            orders: asBool(selection.orders),
+            karigars: asBool(selection.karigars),
+            karigarTransactions: asBool(selection.karigarTransactions),
+            designPrices: sizePricesSelected || asBool(selection.designPrices),
+            designPriceHistory: sizePricesSelected || asBool(selection.designPriceHistory)
+        };
+    }
+
+    function hasReplaceSelection(selection) {
+        return !!(selection.accounts ||
+            selection.orders ||
+            selection.karigars ||
+            selection.karigarTransactions ||
+            selection.designPrices ||
+            selection.designPriceHistory);
+    }
+
+    function buildFilteredSheetData(sheetData, selection) {
+        const source = sheetData || {};
+        return {
+            company1: {
+                accounts: selection.accounts ? ([...(source.company1?.accounts || [])]) : [],
+                orders: selection.orders ? ([...(source.company1?.orders || [])]) : []
+            },
+            company2: {
+                accounts: selection.accounts ? ([...(source.company2?.accounts || [])]) : [],
+                orders: selection.orders ? ([...(source.company2?.orders || [])]) : []
+            },
+            karigars: selection.karigars ? ([...(source.karigars || [])]) : [],
+            karigarTransactions: selection.karigarTransactions ? ([...(source.karigarTransactions || [])]) : [],
+            designPrices: selection.designPrices ? ({ ...(source.designPrices || {}) }) : {},
+            designPriceHistory: selection.designPriceHistory ? ([...(source.designPriceHistory || [])]) : []
+        };
+    }
+
+    async function deriveOrderPartitions(sheetData, fastMode = true) {
+        const orderPartitions = new Set();
+        const summarySnap = await db.collection('daily_summary').get();
+        summarySnap.forEach(doc => {
+            const d = String(doc.id || '').trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                orderPartitions.add(`orders_${d.substring(0, 4)}_${d.substring(5, 7)}`);
+            }
+        });
+        for (const cid of ['company1', 'company2']) {
+            const orders = (sheetData?.[cid]?.orders) || [];
+            for (const o of orders) {
+                const d = String(o?.date || '').trim();
+                if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                    orderPartitions.add(`orders_${d.substring(0, 4)}_${d.substring(5, 7)}`);
+                }
+            }
+        }
+        if (!fastMode) {
+            const currentYear = new Date().getFullYear();
+            for (let y = 2018; y <= currentYear + 3; y++) {
+                for (let m = 1; m <= 12; m++) {
+                    orderPartitions.add(`orders_${y}_${String(m).padStart(2, '0')}`);
+                }
+            }
+        }
+        return orderPartitions;
+    }
+
+    async function replaceFromSheetsSelective(sheetData, selection = {}, opts = {}) {
+        init();
+        const fastMode = opts.fast !== false;
+        const normalizedSelection = normalizeReplaceSelection(selection);
+        if (!hasReplaceSelection(normalizedSelection)) {
+            return {
+                success: false,
+                message: 'Select at least one data block to replace.',
+                deleted: 0,
+                stats: { accounts: 0, orders: 0, karigars: 0, karigarTxs: 0, designPrices: 0 },
+                selection: normalizedSelection
+            };
+        }
+
+        const filteredData = buildFilteredSheetData(sheetData || {}, normalizedSelection);
+        const collectionsToClear = new Set();
+        const partitionsToClear = new Set();
+
+        if (normalizedSelection.accounts) collectionsToClear.add('accounts');
+        if (normalizedSelection.orders) {
+            collectionsToClear.add('daily_summary');
+            collectionsToClear.add('daily_orders');
+            collectionsToClear.add('orders');
+            const orderPartitions = await deriveOrderPartitions(filteredData, fastMode);
+            orderPartitions.forEach(part => partitionsToClear.add(part));
+        }
+        if (normalizedSelection.karigars) collectionsToClear.add('karigars');
+        if (normalizedSelection.karigarTransactions) collectionsToClear.add('karigar_transactions');
+        if (normalizedSelection.designPrices) collectionsToClear.add('design_prices');
+        if (normalizedSelection.designPriceHistory) collectionsToClear.add('design_price_history');
+
+        let deleted = 0;
+        for (const collectionName of collectionsToClear) {
+            deleted += await clearCollectionDocs(collectionName);
+        }
+        for (const partitionName of partitionsToClear) {
+            deleted += await clearCollectionDocs(partitionName);
+        }
+
+        if (normalizedSelection.accounts) {
+            accountNameIdMap = {};
+            accountIdNameMap = {};
+            _allAccountsMap = {};
+        }
+        if (normalizedSelection.karigars || normalizedSelection.karigarTransactions) {
+            _allKarigarsMap = {};
+        }
+
+        const syncResult = await syncFromSheets(filteredData);
+        return { ...syncResult, deleted, fastMode, selection: normalizedSelection };
     }
 
     async function replaceFromSheets(sheetData, opts = {}) {
@@ -2374,10 +2904,16 @@ const FirebaseService = (() => {
 
         // 6. Sync latest Design Prices (legacy map)
         const prices = sheetData.designPrices || {};
+        const nowIso = normalizeISODateTime(new Date());
+        const asOfNow = await getDesignPrices('global', nowIso).catch(() => ({ success: true, data: {} }));
+        const currentMap = (asOfNow && asOfNow.success && asOfNow.data) ? asOfNow.data : {};
         for (const [name, price] of Object.entries(prices)) {
             const key = String(name || '').trim().toUpperCase();
             if (!key) continue;
-            await saveDesignPricePoint('global', key, parseFloat(price) || 0, normalizeISODateTime(new Date()), null);
+            const numericPrice = Math.round(((parseFloat(price) || 0) + Number.EPSILON) * 100) / 100;
+            const currentPrice = Math.round(((parseFloat(currentMap[key]) || 0) + Number.EPSILON) * 100) / 100;
+            if (Number.isFinite(currentMap[key]) && Math.abs(currentPrice - numericPrice) < 0.0001) continue;
+            await saveDesignPricePoint('global', key, numericPrice, nowIso, null);
             stats.designPrices += 1;
         }
         
@@ -2393,7 +2929,7 @@ const FirebaseService = (() => {
         getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney, createMoneyBackup, getMoneyBackups, deleteMoneyBackup,
         createKarigarResetBackup, getKarigarResetBackups,
         // Orders
-        getOrders, submitOrders, updateOrder,
+        getOrders, submitOrders, updateOrder, getOrderRowsForDate,
         // Remarks
         saveRemark, getRemarks,
         // Backup
@@ -2416,7 +2952,7 @@ const FirebaseService = (() => {
         // Integrity Fix
         fixHistoricalDataIntegrity,
         // Sync from Sheets
-        syncFromSheets, replaceFromSheets,
+        syncFromSheets, replaceFromSheets, replaceFromSheetsSelective,
         // Sync status
         onSyncStatusChange, getSyncStatus, setSyncStatus
     };

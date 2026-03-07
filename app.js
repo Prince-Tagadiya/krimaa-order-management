@@ -25,7 +25,9 @@ const AppState = {
     moneyBackups: [],
     selectedMoneyBackupId: '',
     karigarResetBackups: [],
+    karigarResetBackupsByCompany: {},
     selectedKarigarResetBackupId: '',
+    selectedKarigarResetBackupIdByCompany: {},
     karigarResetBackupEmployeeMap: {},
     selectedKarigarResetEmployeeKey: '',
     karigars: [],
@@ -380,9 +382,111 @@ function getSortedAccounts() {
     return [...AppState.accounts];
 }
 
+function getReplaceSheetSelectionLabels(selection) {
+    const labels = [];
+    if (selection.accounts) labels.push('Manage Accounts');
+    if (selection.orders) labels.push('Daily Orders / Data Sheet');
+    if (selection.karigars) labels.push('Karigar Employees');
+    if (selection.karigarTransactions) labels.push('Karigar Transactions');
+    if (selection.sizePrices) labels.push('Size Prices');
+    return labels;
+}
+
+function openReplaceFromSheetModal(defaultSelection = null) {
+    const modal = document.getElementById('replace-sheet-modal');
+    const form = document.getElementById('replace-sheet-form');
+    const closeBtn = document.getElementById('close-replace-sheet-modal');
+    const cancelBtn = document.getElementById('replace-sheet-cancel-btn');
+    const selectAllBtn = document.getElementById('replace-sheet-select-all-btn');
+    const checkboxMap = {
+        accounts: document.getElementById('replace-sheet-accounts'),
+        orders: document.getElementById('replace-sheet-orders'),
+        karigars: document.getElementById('replace-sheet-karigars'),
+        karigarTransactions: document.getElementById('replace-sheet-karigar-tx'),
+        sizePrices: document.getElementById('replace-sheet-size-prices')
+    };
+
+    if (!modal || !form) return Promise.resolve(null);
+
+    const checkboxes = Object.values(checkboxMap).filter(Boolean);
+    const defaultAll = {
+        accounts: true,
+        orders: true,
+        karigars: true,
+        karigarTransactions: true,
+        sizePrices: true
+    };
+    const mergedDefaults = { ...defaultAll, ...(defaultSelection || {}) };
+    for (const [key, el] of Object.entries(checkboxMap)) {
+        if (!el) continue;
+        el.checked = !!mergedDefaults[key];
+    }
+
+    return new Promise((resolve) => {
+        const updateSelectAllLabel = () => {
+            if (!selectAllBtn || checkboxes.length === 0) return;
+            const allChecked = checkboxes.every(cb => cb.checked);
+            selectAllBtn.textContent = allChecked ? 'Unselect All' : 'Select All';
+        };
+        updateSelectAllLabel();
+
+        const cleanup = () => {
+            modal.classList.remove('show');
+            form.removeEventListener('submit', onSubmit);
+            modal.removeEventListener('click', onBackdrop);
+            if (closeBtn) closeBtn.removeEventListener('click', onCancel);
+            if (cancelBtn) cancelBtn.removeEventListener('click', onCancel);
+            if (selectAllBtn) selectAllBtn.removeEventListener('click', onToggleAll);
+            document.removeEventListener('keydown', onEsc);
+            checkboxes.forEach(cb => cb.removeEventListener('change', updateSelectAllLabel));
+        };
+
+        const finish = (value) => {
+            cleanup();
+            resolve(value);
+        };
+
+        const onCancel = () => finish(null);
+        const onBackdrop = (e) => { if (e.target === modal) onCancel(); };
+        const onEsc = (e) => { if (e.key === 'Escape') onCancel(); };
+        const onToggleAll = () => {
+            const allChecked = checkboxes.length > 0 && checkboxes.every(cb => cb.checked);
+            checkboxes.forEach(cb => { cb.checked = !allChecked; });
+            updateSelectAllLabel();
+        };
+        const onSubmit = (e) => {
+            e.preventDefault();
+            const selection = {
+                accounts: !!checkboxMap.accounts?.checked,
+                orders: !!checkboxMap.orders?.checked,
+                karigars: !!checkboxMap.karigars?.checked,
+                karigarTransactions: !!checkboxMap.karigarTransactions?.checked,
+                sizePrices: !!checkboxMap.sizePrices?.checked
+            };
+            if (!Object.values(selection).some(Boolean)) {
+                showToast("Select at least one data block", "error");
+                return;
+            }
+            finish(selection);
+        };
+
+        form.addEventListener('submit', onSubmit);
+        modal.addEventListener('click', onBackdrop);
+        if (closeBtn) closeBtn.addEventListener('click', onCancel);
+        if (cancelBtn) cancelBtn.addEventListener('click', onCancel);
+        if (selectAllBtn) selectAllBtn.addEventListener('click', onToggleAll);
+        document.addEventListener('keydown', onEsc);
+        checkboxes.forEach(cb => cb.addEventListener('change', updateSelectAllLabel));
+
+        modal.classList.add('show');
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => { initApp(); });
 
 function initApp() {
+    bootstrapSheetSyncStateFromStorage();
+    bindSheetSyncLifecycleEvents();
     checkAuth();
     attachEventListeners();
     initSyncIndicator();
@@ -447,10 +551,19 @@ function initApp() {
 
     if (syncSheetBtn) syncSheetBtn.addEventListener('click', async () => {
         if (!isDevUser()) {
-            showToast("Only dev can run full Firebase replace", "error");
+            showToast("Only dev can run replace tools", "error");
             return;
         }
-        if (!confirm("This will DELETE all Firebase data and re-sync from Google Sheets. Continue?")) return;
+        const selection = await openReplaceFromSheetModal();
+        if (!selection) return;
+        const selectedLabels = getReplaceSheetSelectionLabels(selection);
+        if (!selectedLabels.length) {
+            showToast("Select at least one data block", "error");
+            return;
+        }
+        const confirmText = `This will replace ONLY selected Firebase data from Google Sheets:\n\n- ${selectedLabels.join('\n- ')}\n\nContinue?`;
+        if (!confirm(confirmText)) return;
+
         showLoader();
         try {
             showToast("Reading full sheet data...", "info");
@@ -459,16 +572,30 @@ function initApp() {
             if (!fullRes?.success || !sheetData) {
                 throw new Error(fullRes?.message || 'Failed to read sheet data');
             }
-            showToast("Replacing Firebase from sheet...", "info");
+
+            showToast(`Replacing selected data: ${selectedLabels.join(', ')}...`, "info");
             const replaceRes = await Promise.race([
-                FirebaseService.replaceFromSheets(sheetData, { fast: true }),
+                FirebaseService.replaceFromSheetsSelective(sheetData, {
+                    accounts: selection.accounts,
+                    orders: selection.orders,
+                    karigars: selection.karigars,
+                    karigarTransactions: selection.karigarTransactions,
+                    sizePrices: selection.sizePrices
+                }, { fast: true }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Replace timed out. Please try again.')), 180000))
             ]);
             if (replaceRes?.success === false) {
                 throw new Error(replaceRes?.message || 'Firebase replace failed');
             }
             await loadInitialData();
-            showToast(`Firebase replaced from Sheets. Synced ${replaceRes?.stats?.karigarTxs || 0} karigar tx.`, "success");
+            const syncStats = replaceRes?.stats || {};
+            const statusParts = [];
+            if (selection.accounts) statusParts.push(`Accounts: ${syncStats.accounts || 0}`);
+            if (selection.orders) statusParts.push(`Orders: ${syncStats.orders || 0}`);
+            if (selection.karigars) statusParts.push(`Karigars: ${syncStats.karigars || 0}`);
+            if (selection.karigarTransactions) statusParts.push(`Karigar Tx: ${syncStats.karigarTxs || 0}`);
+            if (selection.sizePrices) statusParts.push(`Prices: ${syncStats.designPrices || 0}`);
+            showToast(`Selected replace complete. ${statusParts.join(' | ')}`, "success");
         } catch (err) {
             console.error(err);
             showToast("Sync Failed: " + err.message, "error");
@@ -560,11 +687,81 @@ let _adminRealtimeRefreshTimer = null;
 let _backgroundSheetBackupTimer = null;
 let _backgroundSheetBackupInFlight = false;
 let _backgroundSheetBackupQueued = false;
+let _backgroundSheetRetryCount = 0;
 let _pendingDataChangesForBackup = false;
 let _adminRealtimeBusy = false;
 let _quickWriteFlushTimer = null;
 let _renderDataSheetSeq = 0;
 const _pendingOrderOverrides = new Map();
+let _sheetSyncLifecycleBound = false;
+let _lastSheetBackupSuccessMs = 0;
+let _lastDirectOrderSheetSyncMs = 0;
+const SHEET_SYNC_PENDING_KEY = 'sheet_sync_pending_v3';
+const SHEET_SYNC_LAST_SUCCESS_KEY = 'sheet_sync_last_success_v3';
+const SHEET_RECONCILE_MAX_STALE_MS = 3 * 60 * 1000;
+
+function setPersistentSheetSyncPending(reason = '') {
+    try {
+        const payload = {
+            pending: true,
+            reason: String(reason || '').trim() || 'unknown',
+            ts: new Date().toISOString()
+        };
+        localStorage.setItem(SHEET_SYNC_PENDING_KEY, JSON.stringify(payload));
+    } catch (e) {}
+}
+
+function clearPersistentSheetSyncPending() {
+    try { localStorage.removeItem(SHEET_SYNC_PENDING_KEY); } catch (e) {}
+}
+
+function readPersistentSheetSyncPending() {
+    try {
+        const raw = localStorage.getItem(SHEET_SYNC_PENDING_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || parsed.pending !== true) return null;
+        return parsed;
+    } catch (e) { return null; }
+}
+
+function setLastSheetSyncSuccessTimestamp(isoString = '') {
+    const safeIso = normalizeToISODateTime(isoString || new Date());
+    if (!safeIso) return;
+    _lastSheetBackupSuccessMs = parseFlexibleDateTime(safeIso)?.getTime() || Date.now();
+    try { localStorage.setItem(SHEET_SYNC_LAST_SUCCESS_KEY, safeIso); } catch (e) {}
+}
+
+function bootstrapSheetSyncStateFromStorage() {
+    try {
+        const raw = localStorage.getItem(SHEET_SYNC_LAST_SUCCESS_KEY);
+        const ms = parseFlexibleDateTime(raw)?.getTime() || 0;
+        _lastSheetBackupSuccessMs = ms > 0 ? ms : 0;
+    } catch (e) {
+        _lastSheetBackupSuccessMs = 0;
+    }
+}
+
+function bindSheetSyncLifecycleEvents() {
+    if (_sheetSyncLifecycleBound) return;
+    _sheetSyncLifecycleBound = true;
+
+    const markPendingOnLeave = () => {
+        if (typeof FirebaseService !== 'undefined' && FirebaseService.getPendingCount && FirebaseService.getPendingCount() > 0) {
+            _pendingDataChangesForBackup = true;
+        }
+        if (_pendingDataChangesForBackup || _backgroundSheetBackupQueued || _backgroundSheetBackupInFlight) {
+            setPersistentSheetSyncPending('lifecycle_leave');
+        }
+    };
+
+    window.addEventListener('beforeunload', markPendingOnLeave);
+    window.addEventListener('pagehide', markPendingOnLeave);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'hidden') return;
+        markPendingOnLeave();
+    });
+}
 
 function scheduleQuickWriteFlush(delayMs = 1200) {
     if (_quickWriteFlushTimer) clearTimeout(_quickWriteFlushTimer);
@@ -661,8 +858,203 @@ function setSheetBackupIndicator(state = 'idle', label = 'Sheet idle') {
     el.innerHTML = `<i class='bx ${icon}'></i><span>${label}</span>`;
 }
 
+function normalizeBackupTypeLabel(rawType = '') {
+    const input = String(rawType || '').trim();
+    if (!input) return '';
+    const t = input.toLowerCase();
+
+    if (t === 'manual') return 'manual';
+    if (t === 'submitorders' || t === 'updateorder' || t === 'orders_live' || t === 'order_direct') return 'orders';
+    if (t === 'upsertdesignprice' || t === 'deletedesignprice' || t === 'restoredesignprice') return 'size-prices';
+    if (t.startsWith('clearkarigarmonthlydata_')) return 'karigar-reset';
+
+    const autoReasons = new Set([
+        'auto',
+        'queued',
+        'retry',
+        'interval',
+        'reconcile',
+        'firestore_saved',
+        'startup_reconcile',
+        'auto_change',
+        'lifecycle_leave'
+    ]);
+    if (autoReasons.has(t) || t.startsWith('resume_') || t.startsWith('failed_')) return 'auto';
+    return input;
+}
+
+function normalizeCompanyIdLocal(companyId = '') {
+    return String(companyId || '').trim() === 'company2' ? 'company2' : 'company1';
+}
+
+function resolveAccountNameForSheet(accountId, companyId) {
+    const safeCompanyId = normalizeCompanyIdLocal(companyId);
+    const safeAccountId = String(accountId || '').trim();
+    if (!safeAccountId) return '';
+    const details = safeCompanyId === 'company2' ? (AppState.company2Details || []) : (AppState.company1Details || []);
+    const exact = details.find(d => String(d.accountId || '').trim() === safeAccountId);
+    if (exact && String(exact.name || '').trim()) return String(exact.name || '').trim();
+    const accounts = safeCompanyId === 'company2' ? (AppState.company2Accounts || []) : (AppState.company1Accounts || []);
+    const fallback = accounts.find(d => String(d.id || '').trim() === safeAccountId || String(d.accountId || '').trim() === safeAccountId);
+    return String(fallback?.name || safeAccountId).trim();
+}
+
+function normalizeSheetOrderRows(date, orders, companyId) {
+    const safeDate = normalizeToISODate(date);
+    const safeCompanyId = normalizeCompanyIdLocal(companyId);
+    const out = [];
+    (Array.isArray(orders) ? orders : []).forEach(o => {
+        const accountId = String(o?.accountId || '').trim();
+        if (!accountId) return;
+        const accountName = String(o?.accountName || '').trim() || resolveAccountNameForSheet(accountId, safeCompanyId) || accountId;
+        const meesho = parseInt(o?.meesho, 10);
+        out.push({
+            accountId,
+            accountName,
+            meesho: Number.isFinite(meesho) ? meesho : 0
+        });
+    });
+    return { safeDate, safeCompanyId, rows: out };
+}
+
+async function syncOrdersDirectToSheet(date, orders, companyId, reason = 'orders_live') {
+    const normalized = normalizeSheetOrderRows(date, orders, companyId);
+    if (!normalized.safeDate || normalized.rows.length === 0) {
+        return { success: false, skipped: true, message: 'No valid order rows to sync' };
+    }
+
+    const backupType = normalizeBackupTypeLabel(reason || 'orders_live');
+    setPersistentSheetSyncPending(reason || 'orders_live');
+    setSheetBackupIndicator('running', 'Sheet syncing');
+    setLastBackupStatusText(`Sheet syncing (${backupType})...`);
+
+    const response = await sheetsApiRequest({
+        action: 'submitOrders',
+        date: normalized.safeDate,
+        orders: normalized.rows,
+        companyId: normalized.safeCompanyId
+    });
+    if (!response || response.success === false) {
+        throw new Error(response?.message || 'Order sheet sync failed');
+    }
+
+    const now = new Date().toISOString();
+    _lastDirectOrderSheetSyncMs = Date.now();
+    _pendingDataChangesForBackup = false;
+    try {
+        await FirebaseService.setBackupMeta({
+            lastBackup: now,
+            lastBackupType: backupType
+        });
+    } catch (e) {
+        console.warn('Non-blocking: backup meta update failed after order sync', e);
+    }
+    updateLastBackupTimeDisplay(now, backupType);
+    setLastSheetSyncSuccessTimestamp(now);
+    clearPersistentSheetSyncPending();
+    setSheetBackupIndicator('success', 'Sheet synced');
+    setTimeout(() => {
+        if (!_backgroundSheetBackupInFlight && !_backgroundSheetBackupQueued && !_pendingDataChangesForBackup) {
+            setSheetBackupIndicator('idle', 'Sheet idle');
+        }
+    }, 2000);
+    return response;
+}
+
+async function syncOrderDateForAllCompanies(date, options = {}, reason = 'orders_daily') {
+    const safeDate = normalizeToISODate(date);
+    if (!safeDate) return { success: false, skipped: true, message: 'Invalid date' };
+
+    const preferredCompanyId = normalizeCompanyIdLocal(options?.companyId || '');
+    const preferredRows = Array.isArray(options?.rows) ? options.rows : [];
+    const errors = [];
+
+    for (const cid of ['company1', 'company2']) {
+        let rows = [];
+        if (cid === preferredCompanyId && preferredRows.length > 0) {
+            rows = preferredRows;
+        } else {
+            try {
+                const dailyRes = await FirebaseService.getOrderRowsForDate(cid, safeDate);
+                rows = Array.isArray(dailyRes?.data) ? dailyRes.data : [];
+            } catch (e) {
+                errors.push(`${cid}: ${e?.message || 'read failed'}`);
+                continue;
+            }
+        }
+
+        if (!rows.length) continue;
+
+        try {
+            await syncOrdersDirectToSheet(safeDate, rows, cid, `${reason}_${cid}`);
+        } catch (e) {
+            errors.push(`${cid}: ${e?.message || 'sheet sync failed'}`);
+        }
+    }
+
+    if (errors.length > 0) {
+        throw new Error(errors.join(' | '));
+    }
+    return { success: true };
+}
+
+function buildOrderKeySet(rows) {
+    const set = new Set();
+    (Array.isArray(rows) ? rows : []).forEach(r => {
+        const date = normalizeToISODate(r?.date);
+        const accountId = String(r?.accountId || '').trim();
+        if (!date || !accountId) return;
+        set.add(`${date}__${accountId}`);
+    });
+    return set;
+}
+
+async function verifyOrderSyncAgainstSheet(firestoreBackupData) {
+    const source = firestoreBackupData || {};
+    const expectedC1 = buildOrderKeySet(source?.company1?.orders || []);
+    const expectedC2 = buildOrderKeySet(source?.company2?.orders || []);
+
+    const sheetRes = await sheetsApiRequest({ action: 'getAllSheetData' });
+    const sheetData = sheetRes?.data || {};
+    const sheetC1 = buildOrderKeySet(sheetData?.company1?.orders || []);
+    const sheetC2 = buildOrderKeySet(sheetData?.company2?.orders || []);
+
+    const missingC1 = [];
+    expectedC1.forEach(k => { if (!sheetC1.has(k)) missingC1.push(k); });
+    const missingC2 = [];
+    expectedC2.forEach(k => { if (!sheetC2.has(k)) missingC2.push(k); });
+
+    return {
+        success: missingC1.length === 0 && missingC2.length === 0,
+        missing: {
+            company1: missingC1,
+            company2: missingC2
+        },
+        counts: {
+            expectedC1: expectedC1.size,
+            expectedC2: expectedC2.size,
+            sheetC1: sheetC1.size,
+            sheetC2: sheetC2.size
+        }
+    };
+}
+
+function resumeSheetSyncIfPending() {
+    const pending = readPersistentSheetSyncPending();
+    if (!pending) return;
+    _pendingDataChangesForBackup = true;
+    _backgroundSheetBackupQueued = true;
+    setSheetBackupIndicator('queued', 'Recovering sheet sync');
+    setTimeout(() => {
+        runBackgroundSheetBackup(`resume_${pending.reason || 'pending'}`).catch(e => {
+            console.warn('Resume sheet sync failed:', e);
+        });
+    }, 1200);
+}
+
 function scheduleBackgroundSheetBackup(reason = '') {
     _backgroundSheetBackupQueued = true;
+    setPersistentSheetSyncPending(reason || 'queued');
     setSheetBackupIndicator('queued', 'Sheet queued');
     if (_backgroundSheetBackupTimer) clearTimeout(_backgroundSheetBackupTimer);
     _backgroundSheetBackupTimer = setTimeout(() => {
@@ -676,8 +1068,13 @@ async function runBackgroundSheetBackup(reason = '') {
     _backgroundSheetBackupInFlight = true;
     setSheetBackupIndicator('running', 'Sheet syncing');
     _backgroundSheetBackupQueued = false;
+    let success = false;
     try {
-        await backupToSheets(true, { skipArchive: true, reason: reason || 'auto_change' });
+        const reasonText = String(reason || 'auto_change');
+        const shouldVerifyOrders = /reconcile|resume|startup|retry/i.test(reasonText);
+        await backupToSheets(true, { skipArchive: true, reason: reasonText, verifyOrders: shouldVerifyOrders });
+        success = true;
+        _backgroundSheetRetryCount = 0;
         setSheetBackupIndicator('success', 'Sheet synced');
         setTimeout(() => {
             if (!_backgroundSheetBackupInFlight && !_backgroundSheetBackupQueued) {
@@ -685,12 +1082,24 @@ async function runBackgroundSheetBackup(reason = '') {
             }
         }, 2500);
     } catch (e) {
+        _backgroundSheetRetryCount = Math.min(_backgroundSheetRetryCount + 1, 8);
         setSheetBackupIndicator('error', 'Sheet sync error');
         throw e;
     } finally {
         _backgroundSheetBackupInFlight = false;
-        _pendingDataChangesForBackup = false;
-        if (_backgroundSheetBackupQueued) {
+        if (success) {
+            _pendingDataChangesForBackup = false;
+            clearPersistentSheetSyncPending();
+        } else {
+            _pendingDataChangesForBackup = true;
+            setPersistentSheetSyncPending(reason || 'retry');
+            const retryDelay = Math.min(180000, 3000 * Math.pow(2, Math.max(0, _backgroundSheetRetryCount - 1)));
+            if (_backgroundSheetBackupTimer) clearTimeout(_backgroundSheetBackupTimer);
+            _backgroundSheetBackupTimer = setTimeout(() => {
+                runBackgroundSheetBackup('retry').catch(() => null);
+            }, retryDelay);
+        }
+        if (_backgroundSheetBackupQueued && !_backgroundSheetBackupInFlight) {
             runBackgroundSheetBackup('queued').catch(() => null);
         }
     }
@@ -706,11 +1115,17 @@ function startAdminAutoSync() {
             if (_pendingDataChangesForBackup || _backgroundSheetBackupQueued) {
                 await FirebaseService.flushWrites();
                 await runBackgroundSheetBackup('interval');
+                return;
+            }
+            const staleMs = _lastSheetBackupSuccessMs > 0 ? (Date.now() - _lastSheetBackupSuccessMs) : Number.MAX_SAFE_INTEGER;
+            if (!_backgroundSheetBackupInFlight && staleMs >= SHEET_RECONCILE_MAX_STALE_MS) {
+                _pendingDataChangesForBackup = true;
+                scheduleBackgroundSheetBackup('reconcile');
             }
         } catch (e) {
             console.warn('Admin background sync skipped:', e);
         }
-    }, 120000);
+    }, 45000);
 
     // Near real-time refresh so cross-account updates show quickly for admin.
     _adminRealtimeRefreshTimer = setInterval(async () => {
@@ -732,9 +1147,8 @@ function startAdminAutoSync() {
             } else if (AppState.currentSection === 'dashboard') {
                 await fetchAllCompaniesData({ refreshArchiveMonths: false, enableBackgroundSync: false });
                 renderDashboard();
-            } else if (AppState.currentSection === 'data-sheet') {
-                await fetchDashboardData();
-                renderDataSheet();
+            } else if (AppState.currentSection === 'size-prices') {
+                await renderSizePricesPage();
             }
         } catch (e) {
             console.warn('Admin realtime refresh skipped:', e);
@@ -747,11 +1161,10 @@ function startAdminAutoSync() {
 async function refreshAppDataManually() {
     showLoader();
     try {
-        showToast('Refreshing Firebase + Sheets data...', 'info');
+        showToast('Refreshing Firestore data...', 'info');
         await FirebaseService.flushWrites();
         await loadInitialData();
         await Promise.all([
-            backgroundSheetsSync(),
             loadMoneyBackups(true),
             loadAvailableSheetMonths(true)
         ]);
@@ -819,7 +1232,7 @@ async function switchCompany(previousCompany = '') {
         else if (AppState.currentSection === 'add-account') renderAccountsList();
         else if (AppState.currentSection === 'money-management') renderMoneyManagement();
         else if (AppState.currentSection === 'money-backup') renderMoneyBackupPage();
-        else if (AppState.currentSection === 'karigar') await renderKarigarPage(false);
+        else if (AppState.currentSection === 'karigar') await renderKarigarPage(true);
         else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
         else if (AppState.currentSection === 'data-sheet') { 
             // Also switch data sheet filter and force re-render
@@ -1077,9 +1490,12 @@ function attachEventListeners() {
         const btn = document.getElementById('submit-orders-btn');
         btn.disabled = true; btn.textContent = "Submitting..."; showLoader();
         try {
-            await apiRequest({ action: 'submitOrders', date, orders, companyId: AppState.currentCompany });
+            const submitRes = await apiRequest({ action: 'submitOrders', date, orders, companyId: AppState.currentCompany });
             applyOptimisticOrdersBatch(date, orders, AppState.currentCompany);
             showToast("Orders saved!", "success");
+            if (submitRes?.sheetSyncWarning) {
+                showToast(`Saved to Firebase. Sheet sync retrying in background (${submitRes.sheetSyncWarning}).`, "info");
+            }
             document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
             document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
             calculateGrandTotals();
@@ -1181,7 +1597,7 @@ function navigateTo(sectionId) {
     else if (sectionId === 'add-account') renderAccountsList();
     else if (sectionId === 'money-management') renderMoneyManagement();
     else if (sectionId === 'money-backup') renderMoneyBackupPage();
-    else if (sectionId === 'karigar') renderKarigarPage();
+    else if (sectionId === 'karigar') renderKarigarPage(true);
     else if (sectionId === 'size-prices') renderSizePricesPage();
     else if (sectionId === 'data-sheet') { 
         document.getElementById('sheet-company-filter').value = AppState.currentCompany;
@@ -1325,6 +1741,14 @@ async function loadInitialData() {
         console.log("🚀 [INITIALIZATION] Local data ready. Booting UI in background...");
         loadAvailableSheetMonths(true).catch(e => console.warn('Background meta fetch:', e));
         checkAutoBackup();
+        resumeSheetSyncIfPending();
+        if (!_pendingDataChangesForBackup) {
+            const staleMs = _lastSheetBackupSuccessMs > 0 ? (Date.now() - _lastSheetBackupSuccessMs) : Number.MAX_SAFE_INTEGER;
+            if (staleMs >= SHEET_RECONCILE_MAX_STALE_MS) {
+                _pendingDataChangesForBackup = true;
+                scheduleBackgroundSheetBackup('startup_reconcile');
+            }
+        }
 
         console.log("🚀 [INITIALIZATION] Finished completely. Routing to UI.");
         if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
@@ -1450,11 +1874,6 @@ function applyOptimisticOrderUpdate(date, accountId, accountName, meesho, compan
     if (AppState.currentCompany === safeCompanyId) {
         AppState.dashboardData = safeCompanyId === 'company1' ? AppState.company1Data : AppState.company2Data;
     }
-
-    const cached = getSheetsCache(safeCompanyId);
-    const cachedCopy = Array.isArray(cached) ? cached.slice() : [];
-    upsertOrderRowInList(cachedCopy, row);
-    setSheetsCache(safeCompanyId, cachedCopy);
 }
 
 function applyOptimisticOrdersBatch(date, orders, companyId) {
@@ -1474,56 +1893,15 @@ function hideBackgroundLoader() {
 }
 
 async function backgroundSheetsSync() {
-    if (_isSyncingBg) return;
-    showBackgroundLoader();
-    _isSyncingBg = true;
-    try {
-        const [res1, res2] = await Promise.all([
-            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(()=>null),
-            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(()=>null)
-        ]);
-        
-        let shouldRender = false;
-
-        if (res1 && Array.isArray(res1.data)) {
-            setSheetsCache('company1', res1.data);
-            shouldRender = true;
-        }
-        if (res2 && Array.isArray(res2.data)) {
-            setSheetsCache('company2', res2.data);
-            shouldRender = true;
-        }
-        
-        if (shouldRender) {
-            AppState.company1Data = applyPendingOrderOverrides(
-                mergeOrders(getSheetsCache('company1'), (res1 && Array.isArray(res1.data)) ? res1.data : []),
-                'company1'
-            );
-            AppState.company2Data = applyPendingOrderOverrides(
-                mergeOrders(getSheetsCache('company2'), (res2 && Array.isArray(res2.data)) ? res2.data : []),
-                'company2'
-            );
-            
-            AppState.dashboardData = AppState.currentCompany === 'company1' ? AppState.company1Data : AppState.company2Data;
-            
-            if (AppState.currentSection === 'dashboard') renderDashboard();
-            else if (AppState.currentSection === 'data-sheet') renderDataSheet();
-        }
-    } catch (e) {
-        console.warn('Background sync failed', e);
-    } finally {
-        _isSyncingBg = false;
-        hideBackgroundLoader();
-    }
+    // Firestore-first mode: avoid sheet reads for dashboard state (prevents flicker/glitch).
+    hideBackgroundLoader();
 }
 
 async function fetchDashboardData() {
     try {
         const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany });
         const fbData = Array.isArray(res?.data) ? res.data : [];
-        const cached = getSheetsCache(AppState.currentCompany);
-        
-        AppState.dashboardData = applyPendingOrderOverrides(mergeOrders(cached, fbData), AppState.currentCompany);
+        AppState.dashboardData = applyPendingOrderOverrides(fbData, AppState.currentCompany);
         if (AppState.currentCompany === 'company1') AppState.company1Data = AppState.dashboardData;
         if (AppState.currentCompany === 'company2') AppState.company2Data = AppState.dashboardData;
     } catch(e) {
@@ -1534,7 +1912,6 @@ async function fetchDashboardData() {
 
 async function fetchAllCompaniesData(options = {}) {
     const refreshArchiveMonths = !!options.refreshArchiveMonths;
-    const enableBackgroundSync = options.enableBackgroundSync !== false;
     const toList = (res) => {
         if (!res || res.success === false) return null;
         if (Array.isArray(res?.data)) return res.data;
@@ -1559,10 +1936,8 @@ async function fetchAllCompaniesData(options = {}) {
     if (c1Acc && c1Acc.details) AppState.company1Details = c1Acc.details;
     if (c2Acc && c2Acc.details) AppState.company2Details = c2Acc.details;
 
-    AppState.company1Data = applyPendingOrderOverrides(mergeOrders(getSheetsCache('company1'), fData1), 'company1');
-    AppState.company2Data = applyPendingOrderOverrides(mergeOrders(getSheetsCache('company2'), fData2), 'company2');
-
-    if (enableBackgroundSync) backgroundSheetsSync();
+    AppState.company1Data = applyPendingOrderOverrides(fData1, 'company1');
+    AppState.company2Data = applyPendingOrderOverrides(fData2, 'company2');
 
     if (refreshArchiveMonths) {
         try {
@@ -2412,17 +2787,50 @@ async function apiRequest(payload) {
     const companyId = payload?.companyId || AppState.currentCompany || 'company1';
     try {
         let result;
+        let orderSheetSyncWarning = '';
         switch (action) {
             case 'getAccounts': result = await FirebaseService.getAccounts(companyId); break;
             case 'getDashboardData': result = await FirebaseService.getOrders(companyId, payload.month); break;
-            case 'submitOrders': result = await FirebaseService.submitOrders(payload.date, payload.orders, companyId); break;
+            case 'submitOrders':
+                result = await FirebaseService.submitOrders(payload.date, payload.orders, companyId);
+                if (result && result.success !== false) {
+                    try {
+                        await syncOrderDateForAllCompanies(
+                            payload.date,
+                            { companyId, rows: payload.orders || [] },
+                            'submitOrders'
+                        );
+                    } catch (sheetErr) {
+                        console.warn('Immediate order sheet sync failed after submitOrders:', sheetErr);
+                        orderSheetSyncWarning = sheetErr?.message || 'Sheet sync queued';
+                        _pendingDataChangesForBackup = true;
+                        scheduleBackgroundSheetBackup('submitOrders');
+                    }
+                }
+                break;
             case 'addAccount': result = await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate); break;
             case 'editAccount': result = await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate); break;
             case 'deleteAccount': result = await FirebaseService.deleteAccount(payload.accountId, companyId); break;
             case 'updateAccountOrder': result = await FirebaseService.updateAccountOrder(payload.orderedAccounts, companyId); break;
             case 'saveRemark': result = await FirebaseService.saveRemark(payload.date, payload.remark); break;
             case 'getRemarks': result = await FirebaseService.getRemarks(); break;
-            case 'updateOrder': result = await FirebaseService.updateOrder(payload.date, payload.accountId, payload.field, payload.value, companyId); break;
+            case 'updateOrder':
+                result = await FirebaseService.updateOrder(payload.date, payload.accountId, payload.field, payload.value, companyId);
+                if (result && result.success !== false) {
+                    try {
+                        await syncOrderDateForAllCompanies(
+                            payload.date,
+                            { companyId },
+                            'updateOrder'
+                        );
+                    } catch (sheetErr) {
+                        console.warn('Immediate order sheet sync failed after updateOrder:', sheetErr);
+                        orderSheetSyncWarning = sheetErr?.message || 'Sheet sync queued';
+                        _pendingDataChangesForBackup = true;
+                        scheduleBackgroundSheetBackup('updateOrder');
+                    }
+                }
+                break;
             case 'getCompanies': result = { success: true, data: [{id: 'company1', name: 'Company 1'}, {id: 'company2', name: 'Company 2'}] }; break;
             case 'updateMoney': result = await FirebaseService.updateMoney(payload.accountId, companyId, payload.money, payload.expense, payload.date); break;
             case 'resetAllMoney': result = await FirebaseService.resetAllMoney(payload.date); break;
@@ -2432,13 +2840,16 @@ async function apiRequest(payload) {
             default: throw new Error('Unknown action: ' + action);
         }
         const mutatingActions = new Set([
-            'submitOrders', 'addAccount', 'editAccount', 'deleteAccount',
-            'updateAccountOrder', 'saveRemark', 'updateOrder', 'updateMoney',
+            'addAccount', 'editAccount', 'deleteAccount',
+            'updateAccountOrder', 'saveRemark', 'updateMoney',
             'resetAllMoney', 'createMoneyBackup', 'deleteMoneyBackup'
         ]);
         if (mutatingActions.has(action) && result && result.success !== false) {
             _pendingDataChangesForBackup = true;
             scheduleBackgroundSheetBackup(action);
+        }
+        if (orderSheetSyncWarning && result && typeof result === 'object') {
+            result.sheetSyncWarning = orderSheetSyncWarning;
         }
         return result;
     } catch (err) {
@@ -2555,10 +2966,13 @@ async function _doFirebaseSeed() {
 // ===== BACKUP TO SHEETS =====
 async function backupToSheets(isAuto = false, opts = {}) {
     const skipArchive = !!opts.skipArchive;
-    const backupType = String(opts.reason || (isAuto ? 'auto' : 'manual')).trim();
+    const rawBackupType = String(opts.reason || (isAuto ? 'auto' : 'manual')).trim();
+    const backupType = normalizeBackupTypeLabel(rawBackupType || (isAuto ? 'auto' : 'manual')) || (isAuto ? 'auto' : 'manual');
+    const shouldVerifyOrders = opts.verifyOrders === true || (!isAuto && opts.verifyOrders !== false);
     const btn = document.getElementById('backup-btn');
     if (!isAuto && btn) { btn.disabled = true; btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Syncing Sheet..."; }
     if (!isAuto) showToast('Starting background sync to Google Sheets…', 'info');
+    setPersistentSheetSyncPending(rawBackupType || backupType || 'backup');
     setLastBackupStatusText(`Sheet syncing (${backupType})...`);
     
     try {
@@ -2571,12 +2985,31 @@ async function backupToSheets(isAuto = false, opts = {}) {
         if (!isAuto && btn) { btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Pushing to Sheet..."; }
         
         // 3. Send all data to Google Sheets in one comprehensive call
-        const response = await sheetsApiRequest({
+        let response = await sheetsApiRequest({
             action: 'saveFullBackup',
             data: allData
         });
         
         if (response && response.success) {
+            // Verify orders actually landed in sheet; retry one full push if any keys are missing.
+            if (shouldVerifyOrders) {
+                let verification = await verifyOrderSyncAgainstSheet(allData);
+                if (!verification.success) {
+                    console.warn('Order sheet verification failed, retrying full backup once:', verification);
+                    setLastBackupStatusText('Order sync verify failed, retrying...');
+                    response = await sheetsApiRequest({
+                        action: 'saveFullBackup',
+                        data: allData
+                    });
+                    verification = await verifyOrderSyncAgainstSheet(allData);
+                    if (!verification.success) {
+                        const c1Miss = verification.missing.company1.length;
+                        const c2Miss = verification.missing.company2.length;
+                        throw new Error(`Sheet order verification failed (C1 missing ${c1Miss}, C2 missing ${c2Miss})`);
+                    }
+                }
+            }
+
             const now = new Date().toISOString();
             await FirebaseService.setBackupMeta({ 
                 lastBackup: now,
@@ -2584,6 +3017,8 @@ async function backupToSheets(isAuto = false, opts = {}) {
                 totalOrders: (allData.company1.orders.length || 0) + (allData.company2.orders.length || 0)
             });
             updateLastBackupTimeDisplay(now, backupType);
+            setLastSheetSyncSuccessTimestamp(now);
+            clearPersistentSheetSyncPending();
             if (!isAuto) showToast('Full backup successful!', 'success');
             
             let totalArchived = 0;
@@ -2618,12 +3053,14 @@ async function backupToSheets(isAuto = false, opts = {}) {
         }
     } catch (e) {
         console.error('Backup error:', e);
+        setPersistentSheetSyncPending(`failed_${backupType || 'backup'}`);
         setLastBackupStatusText(`Sheet sync failed (${backupType})`);
         if (!isAuto) showToast('Full backup failed. Check connection.', 'error');
         if (!isAuto && btn) {
             btn.disabled = false;
             btn.innerHTML = "<i class='bx bx-refresh'></i> Refresh Data";
         }
+        throw e;
     }
 }
 
@@ -2670,7 +3107,9 @@ async function checkAutoBackup() {
         const meta = await FirebaseService.getBackupMeta();
         
         if (meta && meta.lastBackup) {
-            updateLastBackupTimeDisplay(meta.lastBackup, meta.lastBackupType || '');
+            const safeType = normalizeBackupTypeLabel(meta.lastBackupType || '');
+            updateLastBackupTimeDisplay(meta.lastBackup, safeType);
+            setLastSheetSyncSuccessTimestamp(meta.lastBackup);
         } else {
             updateLastBackupTimeDisplay(null);
         }
@@ -2692,7 +3131,13 @@ function initSyncIndicator() {
             _pendingDataChangesForBackup = true;
         }
         if (status === 'saved' && _pendingDataChangesForBackup) {
-            scheduleBackgroundSheetBackup('firestore_saved');
+            const recentDirectOrderSync = (Date.now() - _lastDirectOrderSheetSyncMs) < 15000;
+            if (recentDirectOrderSync) {
+                _pendingDataChangesForBackup = false;
+                clearPersistentSheetSyncPending();
+            } else {
+                scheduleBackgroundSheetBackup('firestore_saved');
+            }
         }
         if (el) {
             el.className = 'sync-indicator sync-' + status;
@@ -2734,7 +3179,10 @@ function initSyncIndicator() {
     // Bind Save Now button
     document.getElementById('sheet-save-btn')?.addEventListener('click', () => {
         if (typeof FirebaseService !== 'undefined') {
-            FirebaseService.flushWrites();
+            FirebaseService.flushWrites().catch((e) => {
+                console.warn('Manual flush failed:', e);
+                showToast('Save failed. Retrying in background.', 'error');
+            });
         }
     });
 }
@@ -2901,16 +3349,13 @@ function openReorderColumnsModal() {
 
 async function loadAvailableSheetMonths(force = false) {
     if (!force && AppState.availableSheetMonths.length > 0) return AppState.availableSheetMonths;
-    try {
-        const res1 = await sheetsApiRequest({ action: 'getAvailableOrderMonths', companyId: 'company1' });
-        const res2 = await sheetsApiRequest({ action: 'getAvailableOrderMonths', companyId: 'company2' });
-        const combined = new Set([...(res1.data || []), ...(res2.data || [])]);
-        AppState.availableSheetMonths = Array.from(combined).sort().reverse();
-        return AppState.availableSheetMonths;
-    } catch (e) {
-        console.warn('Failed to load available months from sheets:', e);
-        return [];
-    }
+    const months = new Set();
+    [...(AppState.company1Data || []), ...(AppState.company2Data || [])].forEach(row => {
+        const d = normalizeToISODate(row?.date);
+        if (d) months.add(d.slice(0, 7));
+    });
+    AppState.availableSheetMonths = Array.from(months).sort().reverse();
+    return AppState.availableSheetMonths;
 }
 
 function populateSheetMonthFilter() {
@@ -2949,25 +3394,19 @@ function populateSheetMonthFilter() {
 }
 
 async function loadHistoricalData(companyId, month) {
-    showLoader();
     try {
-        showToast(`Fetching ${month} data from Google Sheets…`, 'info');
-        const res = await sheetsApiRequest({ action: 'getDashboardData', companyId, month });
-        if (res?.data && Array.isArray(res.data)) {
-            // Merge with local state but only for the Data Sheet view
-            if (companyId === 'company1') {
-                AppState.company1Data = mergeOrders(AppState.company1Data, res.data);
-            } else {
-                AppState.company2Data = mergeOrders(AppState.company2Data, res.data);
-            }
-            showToast(`Loaded ${res.data.length} records from archive.`, 'success');
-            await renderDataSheet();
-        } else {
-            showToast('No historical data found in Sheets.', 'info');
-        }
+        showLoader();
+        showToast(`Fetching ${month} data from Firestore…`, 'info');
+        const res = await apiRequest({ action: 'getDashboardData', companyId, month });
+        const list = Array.isArray(res?.data) ? res.data : [];
+        if (companyId === 'company1') AppState.company1Data = list;
+        else AppState.company2Data = list;
+        await loadAvailableSheetMonths(true);
+        await renderDataSheet();
+        showToast(`Loaded ${list.length} records from Firestore.`, 'success');
     } catch (e) {
         console.error('Load historical failed:', e);
-        showToast('Failed to load from Sheets', 'error');
+        showToast('Failed to load from Firestore', 'error');
     } finally {
         hideLoader();
     }
@@ -2992,7 +3431,7 @@ async function renderDataSheet() {
         } else if (monthFilter) {
             sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing data for ${monthFilter}`;
         } else {
-            sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing current 30 days data`;
+            sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing Firestore live data`;
         }
     }
     
@@ -3040,7 +3479,7 @@ async function renderDataSheet() {
         wrapper.classList.add('hidden');
         emptyMsg.classList.remove('hidden');
         
-        // If a specific month is selected and no data locally, offer to load from Sheets
+        // If a specific month is selected and no data locally, offer one-click Firestore reload.
         if (monthFilter && monthFilter !== 'all' && monthFilter !== currentMonth) {
             const compId = companyFilter === 'all' ? 'company1' : companyFilter; // Default to comp1 if all
             emptyMsg.innerHTML = `
@@ -3048,9 +3487,9 @@ async function renderDataSheet() {
                     <i class='bx bx-history text-4xl text-muted mb-4'></i>
                     <p class="mb-4">No local data found for ${monthFilter}.</p>
                     <button class="btn btn-primary" onclick="loadHistoricalData('${compId}', '${monthFilter}')">
-                        <i class='bx bx-cloud-download'></i> Load from Google Sheets Archive
+                        <i class='bx bx-cloud-download'></i> Reload from Firestore
                     </button>
-                    <p class="text-xs text-muted mt-2">Showing recent rows by default for speed.</p>
+                    <p class="text-xs text-muted mt-2">Data source: Firestore (live).</p>
                 </div>
             `;
         } else {
@@ -3172,6 +3611,16 @@ async function renderDataSheet() {
             FirebaseService.bufferWrite(`order_${date}_${accountId}_${field}`, () =>
                 FirebaseService.updateOrder(date, accountId, field, value, company)
             );
+            const accountName = String(inp.dataset.accountName || '').trim() || resolveAccountNameForSheet(accountId, company);
+            syncOrderDateForAllCompanies(
+                date,
+                { companyId: company, rows: [{ accountId, accountName, meesho: value }] },
+                'updateOrder'
+            ).catch((sheetErr) => {
+                console.warn('Inline order sheet sync failed, queued for full backup:', sheetErr);
+                _pendingDataChangesForBackup = true;
+                scheduleBackgroundSheetBackup('updateOrder');
+            });
             scheduleQuickWriteFlush(1200);
         });
     });
@@ -3551,19 +4000,42 @@ function exportMoneyBackupToExcel() {
 }
 
 async function loadKarigarResetBackups(force = false) {
-    if (!force && Array.isArray(AppState.karigarResetBackups) && AppState.karigarResetBackups.length > 0) {
+    const companyId = String(AppState.currentCompany || 'company1').trim() || 'company1';
+    if (!AppState.karigarResetBackupsByCompany || typeof AppState.karigarResetBackupsByCompany !== 'object') {
+        AppState.karigarResetBackupsByCompany = {};
+    }
+    if (!AppState.selectedKarigarResetBackupIdByCompany || typeof AppState.selectedKarigarResetBackupIdByCompany !== 'object') {
+        AppState.selectedKarigarResetBackupIdByCompany = {};
+    }
+
+    const cached = AppState.karigarResetBackupsByCompany[companyId];
+    if (!force && Array.isArray(cached)) {
+        AppState.karigarResetBackups = cached;
+        AppState.selectedKarigarResetBackupId = String(AppState.selectedKarigarResetBackupIdByCompany[companyId] || '').trim();
+        if (!AppState.selectedKarigarResetBackupId || !AppState.karigarResetBackups.some(b => b.id === AppState.selectedKarigarResetBackupId)) {
+            AppState.selectedKarigarResetBackupId = AppState.karigarResetBackups[0]?.id || '';
+        }
+        AppState.selectedKarigarResetBackupIdByCompany[companyId] = AppState.selectedKarigarResetBackupId;
         return AppState.karigarResetBackups;
     }
+
     try {
-        const res = await FirebaseService.getKarigarResetBackups(AppState.currentCompany);
-        AppState.karigarResetBackups = Array.isArray(res?.data) ? res.data : [];
+        const res = await FirebaseService.getKarigarResetBackups(companyId);
+        const fetched = Array.isArray(res?.data) ? res.data : [];
+        AppState.karigarResetBackups = fetched.filter(b => String(b?.companyId || '').trim() === companyId);
     } catch (e) {
         console.error('Error loading karigar reset backups', e);
         AppState.karigarResetBackups = [];
     }
-    if (!AppState.selectedKarigarResetBackupId && AppState.karigarResetBackups.length > 0) {
-        AppState.selectedKarigarResetBackupId = AppState.karigarResetBackups[0].id;
+
+    AppState.karigarResetBackupsByCompany[companyId] = AppState.karigarResetBackups;
+    const selectedForCompany = String(AppState.selectedKarigarResetBackupIdByCompany[companyId] || '').trim();
+    AppState.selectedKarigarResetBackupId = selectedForCompany;
+    if (!AppState.selectedKarigarResetBackupId || !AppState.karigarResetBackups.some(b => b.id === AppState.selectedKarigarResetBackupId)) {
+        AppState.selectedKarigarResetBackupId = AppState.karigarResetBackups[0]?.id || '';
     }
+    AppState.selectedKarigarResetBackupIdByCompany[companyId] = AppState.selectedKarigarResetBackupId;
+
     return AppState.karigarResetBackups;
 }
 
@@ -3578,6 +4050,20 @@ function getSelectedKarigarResetEmployee() {
     return AppState.karigarResetBackupEmployeeMap?.[key] || null;
 }
 
+function formatKarigarBackupPoint(rawValue, fallback = '-') {
+    const normalized = normalizeToISODateTime(rawValue);
+    if (!normalized) return fallback;
+    return formatISODateTimeForDisplay(normalized) || fallback;
+}
+
+function getKarigarBackupRangeLabel(backup, withPrefix = false) {
+    const startLabel = formatKarigarBackupPoint(backup?.periodStartAt || backup?.snapshotAt || backup?.createdAt, '-');
+    const endRaw = backup?.periodEndAt || '';
+    const endLabel = endRaw ? formatKarigarBackupPoint(endRaw, '-') : 'Present';
+    const rangeText = `${startLabel} → ${endLabel}`;
+    return withPrefix ? `Range: ${rangeText}` : rangeText;
+}
+
 async function renderKarigarResetBackupsModal(forceReload = false) {
     const select = document.getElementById('karigar-reset-backup-select');
     const cardsWrap = document.getElementById('karigar-reset-backup-cards');
@@ -3586,6 +4072,7 @@ async function renderKarigarResetBackupsModal(forceReload = false) {
     const sumJama = document.getElementById('karigar-reset-summary-jama');
     const sumUpad = document.getElementById('karigar-reset-summary-upad');
     const sumBalance = document.getElementById('karigar-reset-summary-balance');
+    const rangeLabel = document.getElementById('karigar-reset-backup-range-label');
     if (!select || !cardsWrap || !empty || !sumEmployees || !sumJama || !sumUpad || !sumBalance) return;
 
     await loadKarigarResetBackups(forceReload);
@@ -3599,19 +4086,19 @@ async function renderKarigarResetBackupsModal(forceReload = false) {
         sumJama.textContent = '₹0.00';
         sumUpad.textContent = '₹0.00';
         sumBalance.textContent = '₹0.00';
+        if (rangeLabel) rangeLabel.textContent = 'Range: -';
         empty.classList.remove('hidden');
         return;
     }
 
     select.innerHTML = AppState.karigarResetBackups.map(backup => {
-        const createdAt = parseFlexibleDateTime(backup.createdAt || backup.snapshotAt);
-        const labelTime = createdAt ? createdAt.toLocaleString() : (backup.snapshotAt || '');
         const selected = backup.id === AppState.selectedKarigarResetBackupId ? 'selected' : '';
-        const label = `${backup.companyId || ''} • ${labelTime}`;
+        const label = `${backup.companyId || ''} • ${getKarigarBackupRangeLabel(backup)}`;
         return `<option value="${backup.id}" ${selected}>${label}</option>`;
     }).join('');
 
     const active = getSelectedKarigarResetBackup();
+    if (rangeLabel) rangeLabel.textContent = getKarigarBackupRangeLabel(active, true);
     const rows = Array.isArray(active?.rows) ? active.rows : [];
     const empMap = {};
     rows.forEach(r => {
@@ -3698,6 +4185,7 @@ async function renderKarigarResetBackupsModal(forceReload = false) {
                 <div class="text-xs text-muted">Last Tx: ${e.lastAtLabel || '-'}</div>
                 <div class="text-xs text-muted">Last Design: ${e.lastDesign}</div>
                 <div class="text-xs text-muted">Created From: ${e.createdFrom}</div>
+                <div class="text-xs text-muted">Backup Range: ${getKarigarBackupRangeLabel(active)}</div>
                 <div class="text-xs text-primary"><i class='bx bx-link-external'></i> ${hintLabel}</div>
             </div>
         `;
@@ -3753,7 +4241,7 @@ function openKarigarResetEmployeeDetailsModal(empKey) {
 
     nameEl.textContent = employee.karigarName || 'Unknown';
     const compName = getCompanyDisplayName(backup.companyId || AppState.currentCompany);
-    subEl.textContent = `${employee.karigarId || '-'} • ${compName}`;
+    subEl.textContent = `${employee.karigarId || '-'} • ${compName} • ${getKarigarBackupRangeLabel(backup, true)}`;
 
     const txRows = (Array.isArray(employee.rows) ? employee.rows : []).slice()
         .sort((a, b) => getKarigarTxTimestampMs(b) - getKarigarTxTimestampMs(a));
@@ -3868,7 +4356,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const newMoneySaveBtn = moneySaveBtn.cloneNode(true);
         moneySaveBtn.parentNode.replaceChild(newMoneySaveBtn, moneySaveBtn);
         newMoneySaveBtn.addEventListener('click', () => {
-            FirebaseService.flushWrites();
+            FirebaseService.flushWrites().catch((e) => {
+                console.warn('Money flush failed:', e);
+                showToast('Save failed. Retrying in background.', 'error');
+            });
             newMoneySaveBtn.classList.add('hidden');
             showToast('Changes saved instantly!', 'success');
         });
@@ -3930,6 +4421,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (karigarBackupSelect) {
         karigarBackupSelect.addEventListener('change', () => {
             AppState.selectedKarigarResetBackupId = karigarBackupSelect.value;
+            const companyId = String(AppState.currentCompany || 'company1').trim() || 'company1';
+            if (!AppState.selectedKarigarResetBackupIdByCompany || typeof AppState.selectedKarigarResetBackupIdByCompany !== 'object') {
+                AppState.selectedKarigarResetBackupIdByCompany = {};
+            }
+            AppState.selectedKarigarResetBackupIdByCompany[companyId] = AppState.selectedKarigarResetBackupId;
             renderKarigarResetBackupsModal(false);
         });
     }
@@ -3945,14 +4441,16 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ===== SIZE PRICE MANAGEMENT ===== */
 async function renderSizePricesPage() {
     const companyId = DESIGN_PRICE_SCOPE;
-    const nowDateTimeInput = getCurrentLocalDateTimeInput();
+    const nowDateTimeInput = normalizeToISODateTime(new Date()) || `${getTodayISODate()}T00:00:00`;
+    const nowDateTimeFieldValue = getCurrentLocalDateTimeInput();
     const today = getTodayISODate();
+    let map = {};
+    let rawHistoryMap = {};
     try {
         const res = await FirebaseService.getDesignPrices(companyId, nowDateTimeInput);
-        const map = (res && res.success && res.data) ? res.data : {};
-        const history = (res && res.success && res.history) ? res.history : {};
+        map = (res && res.success && res.data) ? res.data : {};
+        rawHistoryMap = (res && res.success && res.history) ? res.history : {};
         AppState.designPricesByCompany[companyId] = map;
-        AppState.designPriceHistoryByCompany[companyId] = history;
         AppState.designPrices = map;
     } catch (e) {
         console.error('Failed to load size prices:', e);
@@ -3966,8 +4464,40 @@ async function renderSizePricesPage() {
     const valueInput = document.getElementById('size-price-value');
     const effectiveDateInput = document.getElementById('size-price-effective-date');
     const saveBtn = document.getElementById('size-price-save-btn');
-    if (!tbody || !chart || !form || !keyInput || !valueInput || !effectiveDateInput || !saveBtn) return;
-    if (!effectiveDateInput.value) effectiveDateInput.value = nowDateTimeInput;
+    const recycleOpenBtn = document.getElementById('size-price-recycle-open-btn');
+    const recycleCountEl = document.getElementById('size-price-recycle-count');
+    const recycleTbody = document.getElementById('size-price-recycle-tbody');
+    const recycleModal = document.getElementById('size-price-recycle-modal');
+    const recycleEmpty = document.getElementById('size-price-recycle-empty');
+    const recycleCloseBtn = document.getElementById('close-size-price-recycle-modal');
+    const historyModal = document.getElementById('size-price-history-modal');
+    const historyTitle = document.getElementById('size-price-history-title');
+    const historyBody = document.getElementById('size-price-history-tbody');
+    const historyEmpty = document.getElementById('size-price-history-empty');
+    const historyCloseBtn = document.getElementById('close-size-price-history-modal');
+    if (!tbody || !chart || !form || !keyInput || !valueInput || !effectiveDateInput || !saveBtn || !recycleOpenBtn || !recycleTbody || !recycleModal || !recycleEmpty || !recycleCloseBtn || !historyModal || !historyTitle || !historyBody || !historyEmpty || !historyCloseBtn) return;
+
+    const historyMap = {};
+    Object.entries(rawHistoryMap || {}).forEach(([rawKey, list]) => {
+        const key = String(rawKey || '').trim().toUpperCase();
+        if (!key) return;
+        const points = (Array.isArray(list) ? list : [])
+            .map(point => {
+                const eff = normalizeToISODateTime(point?.effectiveFrom || point?.updatedAt || nowDateTimeInput, today);
+                if (!eff) return null;
+                return {
+                    effectiveFrom: eff,
+                    price: parseFloat(point?.price) || 0,
+                    isDeleted: !!point?.isDeleted
+                };
+            })
+            .filter(Boolean)
+            .sort((a, b) => String(a.effectiveFrom).localeCompare(String(b.effectiveFrom)));
+        if (points.length > 0) historyMap[key] = points;
+    });
+    AppState.designPriceHistoryByCompany[companyId] = historyMap;
+
+    if (!effectiveDateInput.value) effectiveDateInput.value = nowDateTimeFieldValue;
     if (form.dataset.editMode !== '1') {
         form.dataset.editFromEffective = '';
         form.dataset.editFromKey = '';
@@ -3981,26 +4511,114 @@ async function renderSizePricesPage() {
     effectiveDateInput.disabled = !isAdmin;
     if (!isAdmin) saveBtn.title = 'Only admin can update prices';
 
-    const historyMap = AppState.designPriceHistoryByCompany[companyId] || {};
-    const rows = Object.entries(AppState.designPrices || {})
-        .map(([k, v]) => {
-            const key = String(k || '').trim();
-            const history = Array.isArray(historyMap[key]) ? historyMap[key] : [];
-            let activePoint = null;
-            history.forEach(point => {
-                const eff = normalizeToISODateTime(point.effectiveFrom, today);
-                if (eff && eff <= nowDateTimeInput) activePoint = point;
+    const activeRowsMap = new Map();
+    Object.entries(historyMap).forEach(([key, points]) => {
+        let chosen = null;
+        points.forEach(point => {
+            if (point.effectiveFrom <= nowDateTimeInput) chosen = point;
+        });
+        if (chosen && !chosen.isDeleted) {
+            activeRowsMap.set(key, {
+                key,
+                value: Number.isFinite(parseFloat(chosen.price)) ? parseFloat(chosen.price) : 0,
+                activeFrom: chosen.effectiveFrom
             });
-            const lastPoint = history.length > 0 ? history[history.length - 1] : null;
-            const displayPoint = activePoint || lastPoint;
+        }
+    });
+    Object.entries(map || {}).forEach(([rawKey, rawPrice]) => {
+        const key = String(rawKey || '').trim().toUpperCase();
+        if (!key || activeRowsMap.has(key)) return;
+        const points = Array.isArray(historyMap[key]) ? historyMap[key] : [];
+        const lastVisible = points.length > 0 ? [...points].reverse().find(p => !p.isDeleted) : null;
+        activeRowsMap.set(key, {
+            key,
+            value: Number.isFinite(parseFloat(rawPrice)) ? parseFloat(rawPrice) : (parseFloat(lastVisible?.price) || 0),
+            activeFrom: lastVisible?.effectiveFrom || nowDateTimeInput
+        });
+    });
+    const rows = Array.from(activeRowsMap.values()).sort((a, b) => String(a.key).localeCompare(String(b.key)));
+
+    const recycleRows = Object.entries(historyMap)
+        .map(([key, points]) => {
+            if (!points.length) return null;
+            const latest = points[points.length - 1];
+            if (!latest?.isDeleted) return null;
+            const lastVisible = [...points].reverse().find(p => !p.isDeleted);
+            const restorePrice = Number.isFinite(parseFloat(lastVisible?.price))
+                ? parseFloat(lastVisible.price)
+                : (Number.isFinite(parseFloat(latest?.price)) ? parseFloat(latest.price) : 0);
             return {
                 key,
-                value: Number.isFinite(parseFloat(v)) ? parseFloat(v) : (parseFloat(displayPoint?.price) || 0),
-                activeFrom: (displayPoint && displayPoint.effectiveFrom) ? displayPoint.effectiveFrom : nowDateTimeInput
+                restorePrice,
+                deletedOn: latest.effectiveFrom
             };
         })
-        .filter(r => r.key)
-        .sort((a, b) => a.key.localeCompare(b.key));
+        .filter(Boolean)
+        .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+
+    const formatHistoryDateTime = (rawValue) => {
+        const dt = parseFlexibleDateTime(rawValue);
+        if (!dt) return '-';
+        const datePart = formatISODateForDisplay(dt);
+        const timePart = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return `${datePart} ${timePart}`;
+    };
+
+    const openHistoryModal = (rawKey) => {
+        const key = String(rawKey || '').trim().toUpperCase();
+        const points = Array.isArray(historyMap[key]) ? historyMap[key] : [];
+        historyTitle.textContent = `Price History: ${key || '-'}`;
+        if (!points.length) {
+            historyBody.innerHTML = '';
+            historyEmpty.classList.remove('hidden');
+            historyModal.classList.add('show');
+            return;
+        }
+        historyEmpty.classList.add('hidden');
+        historyBody.innerHTML = points.map((point, idx) => {
+            const nextPoint = points[idx + 1] || null;
+            const fromText = formatHistoryDateTime(point.effectiveFrom);
+            const untilText = nextPoint ? formatHistoryDateTime(nextPoint.effectiveFrom) : 'Now';
+            const statusText = point.isDeleted ? 'Deleted (hidden)' : 'Active';
+            const statusColor = point.isDeleted ? '#ef4444' : '#10b981';
+            return `
+                <tr>
+                    <td>${fromText}</td>
+                    <td>${untilText}</td>
+                    <td class="text-right">₹${(parseFloat(point.price) || 0).toFixed(2)}</td>
+                    <td class="text-center" style="color:${statusColor}; font-weight:600;">${statusText}</td>
+                </tr>
+            `;
+        }).join('');
+        historyModal.classList.add('show');
+    };
+    if (!historyCloseBtn.dataset.bound) {
+        historyCloseBtn.addEventListener('click', () => historyModal.classList.remove('show'));
+        historyCloseBtn.dataset.bound = 'true';
+    }
+    if (!historyModal.dataset.bound) {
+        historyModal.addEventListener('click', (e) => {
+            if (e.target && e.target.id === 'size-price-history-modal') historyModal.classList.remove('show');
+        });
+        historyModal.dataset.bound = 'true';
+    }
+    if (!recycleOpenBtn.dataset.bound) {
+        recycleOpenBtn.addEventListener('click', () => {
+            if ((parseInt(recycleCountEl?.textContent || '0', 10) || 0) <= 0) return;
+            recycleModal.classList.add('show');
+        });
+        recycleOpenBtn.dataset.bound = 'true';
+    }
+    if (!recycleCloseBtn.dataset.bound) {
+        recycleCloseBtn.addEventListener('click', () => recycleModal.classList.remove('show'));
+        recycleCloseBtn.dataset.bound = 'true';
+    }
+    if (!recycleModal.dataset.bound) {
+        recycleModal.addEventListener('click', (e) => {
+            if (e.target && e.target.id === 'size-price-recycle-modal') recycleModal.classList.remove('show');
+        });
+        recycleModal.dataset.bound = 'true';
+    }
 
     tbody.innerHTML = rows.length ? rows.map(r => `
         <tr>
@@ -4014,9 +4632,32 @@ async function renderSizePricesPage() {
                 <button class=\"btn btn-danger btn-sm size-delete-btn\" data-key=\"${r.key}\" ${isAdmin ? '' : 'disabled'}>
                     <i class='bx bx-trash'></i> Delete
                 </button>
+                <button class=\"btn btn-outline btn-sm size-history-btn\" data-key=\"${r.key}\">
+                    <i class='bx bx-history'></i> History
+                </button>
             </td>
         </tr>
     `).join('') : '<tr><td colspan=\"4\" class=\"text-center text-muted p-3\">No size/design prices saved yet.</td></tr>';
+
+    if (recycleCountEl) recycleCountEl.textContent = String(recycleRows.length);
+    recycleOpenBtn.disabled = recycleRows.length === 0;
+    recycleOpenBtn.title = recycleRows.length === 0 ? 'No deleted sizes' : 'Open recycle bin';
+    recycleTbody.innerHTML = recycleRows.length ? recycleRows.map(r => `
+        <tr>
+            <td>${r.key}</td>
+            <td class="text-right">₹${(parseFloat(r.restorePrice) || 0).toFixed(2)}</td>
+            <td class="text-center">${formatHistoryDateTime(r.deletedOn)}</td>
+            <td class="text-center">
+                <button class="btn btn-outline btn-sm size-recycle-history-btn" data-key="${r.key}">
+                    <i class='bx bx-history'></i> History
+                </button>
+                <button class="btn btn-primary btn-sm size-restore-btn" data-key="${r.key}" data-price="${r.restorePrice}" ${isAdmin ? '' : 'disabled'}>
+                    <i class='bx bx-undo'></i> Restore
+                </button>
+            </td>
+        </tr>
+    `).join('') : '<tr><td colspan="4" class="text-center text-muted p-2">No deleted sizes.</td></tr>';
+    recycleEmpty.classList.toggle('hidden', recycleRows.length > 0);
 
     const maxVal = rows.reduce((m, r) => Math.max(m, r.value), 0) || 1;
     chart.innerHTML = rows.slice(0, 20).map(r => `
@@ -4035,21 +4676,21 @@ async function renderSizePricesPage() {
             if (!isAdminUser()) return showToast('Only admin can update prices', 'error');
             const k = String(keyInput.value || '').trim().toUpperCase();
             const p = parseFloat(valueInput.value);
-            const effectiveFrom = normalizeToISODateTime(effectiveDateInput.value, today) || `${today}T00:00:00`;
+            const requestedEffectiveFrom = normalizeToISODateTime(effectiveDateInput.value, today) || `${today}T00:00:00`;
+            const nowEffectiveFrom = normalizeToISODateTime(getCurrentLocalDateTimeInput(), today) || `${today}T00:00:00`;
+            const effectiveFrom = requestedEffectiveFrom < nowEffectiveFrom ? nowEffectiveFrom : requestedEffectiveFrom;
             if (!k) return showToast('Enter size/design', 'error');
             if (!Number.isFinite(p) || p < 0) return showToast('Enter valid price', 'error');
             showLoader();
             try {
-                const editMode = form.dataset.editMode === '1';
-                const replaceFromEffectiveFrom = String(form.dataset.editFromEffective || '').trim();
-                const replaceFromKey = String(form.dataset.editFromKey || '').trim().toUpperCase();
-                const options = editMode && replaceFromEffectiveFrom
-                    ? { replaceFromEffectiveFrom, replaceFromKey: replaceFromKey || k }
-                    : null;
-                const r = await FirebaseService.upsertDesignPrice(k, p, buildAuditActor(), companyId, effectiveFrom, options);
+                if (requestedEffectiveFrom < nowEffectiveFrom) {
+                    showToast('Past timeline is locked. Applied from current time.', 'info');
+                }
+                const r = await FirebaseService.upsertDesignPrice(k, p, buildAuditActor(), companyId, effectiveFrom, null);
                 if (!r || r.success === false) throw new Error(r?.message || 'Failed');
                 _pendingDataChangesForBackup = true;
                 scheduleBackgroundSheetBackup('upsertDesignPrice');
+                invalidateAllKarigarCaches();
                 showToast('Price saved', 'success');
                 form.dataset.editMode = '';
                 form.dataset.editFromEffective = '';
@@ -4074,7 +4715,8 @@ async function renderSizePricesPage() {
             keyInput.value = String(keyInput.value || '').toUpperCase();
             const key = String(keyInput.value || '').trim();
             if (!key) return;
-            const points = Array.isArray((historyMap || {})[key]) ? (historyMap || {})[key] : [];
+            const latestHistoryMap = AppState.designPriceHistoryByCompany[companyId] || {};
+            const points = Array.isArray(latestHistoryMap[key]) ? latestHistoryMap[key] : [];
             const latest = points.length > 0 ? [...points].reverse().find(p => !p.isDeleted) : null;
             const latestPrice = latest ? parseFloat(latest.price) : parseFloat(AppState.designPrices[key]);
             if (Number.isFinite(latestPrice)) {
@@ -4093,12 +4735,13 @@ async function renderSizePricesPage() {
         btn.addEventListener('click', () => {
             if (!isAdminUser()) return;
             form.dataset.editMode = '1';
-            form.dataset.editFromEffective = String(btn.dataset.effective || '').trim();
-            form.dataset.editFromKey = String(btn.dataset.key || '').trim().toUpperCase();
+            form.dataset.editFromEffective = '';
+            form.dataset.editFromKey = '';
             keyInput.value = btn.dataset.key || '';
             valueInput.value = btn.dataset.value || '';
-            effectiveDateInput.value = normalizeToISODateTime(btn.dataset.effective || '', today).slice(0, 16) || getCurrentLocalDateTimeInput();
-            saveBtn.innerHTML = "<i class='bx bx-save'></i> Update Price";
+            effectiveDateInput.value = getCurrentLocalDateTimeInput();
+            saveBtn.innerHTML = "<i class='bx bx-save'></i> Save New Price";
+            showToast('Past history is locked. New price will apply from selected time onward.', 'info');
             keyInput.focus();
         });
     });
@@ -4134,11 +4777,53 @@ async function renderSizePricesPage() {
                 if (!r || r.success === false) throw new Error(r?.message || 'Failed to delete');
                 _pendingDataChangesForBackup = true;
                 scheduleBackgroundSheetBackup('deleteDesignPrice');
+                invalidateAllKarigarCaches();
                 showToast('Price deleted from active list', 'success');
                 await renderSizePricesPage();
             } catch (err) {
                 console.error(err);
                 showToast(err.message || 'Failed to delete price', 'error');
+            } finally {
+                hideLoader();
+            }
+        });
+    });
+
+    tbody.querySelectorAll('.size-history-btn').forEach(btn => {
+        btn.addEventListener('click', () => openHistoryModal(btn.dataset.key || ''));
+    });
+    recycleTbody.querySelectorAll('.size-recycle-history-btn').forEach(btn => {
+        btn.addEventListener('click', () => openHistoryModal(btn.dataset.key || ''));
+    });
+    recycleTbody.querySelectorAll('.size-restore-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!isAdminUser()) return;
+            const key = String(btn.dataset.key || '').trim().toUpperCase();
+            if (!key) return;
+            if (!confirm(`Restore "${key}" back to active price list?`)) return;
+            let restorePrice = parseFloat(btn.dataset.price);
+            if (!Number.isFinite(restorePrice) || restorePrice < 0) {
+                const raw = prompt(`Enter restore price for ${key}:`, '0');
+                if (raw === null) return;
+                restorePrice = parseFloat(raw);
+            }
+            if (!Number.isFinite(restorePrice) || restorePrice < 0) {
+                return showToast('Invalid restore price', 'error');
+            }
+            showLoader();
+            try {
+                const effectiveFrom = normalizeToISODateTime(getCurrentLocalDateTimeInput(), today) || `${today}T00:00:00`;
+                const r = await FirebaseService.upsertDesignPrice(key, restorePrice, buildAuditActor(), companyId, effectiveFrom);
+                if (!r || r.success === false) throw new Error(r?.message || 'Failed to restore');
+                _pendingDataChangesForBackup = true;
+                scheduleBackgroundSheetBackup('restoreDesignPrice');
+                invalidateAllKarigarCaches();
+                showToast('Size price restored', 'success');
+                recycleModal.classList.remove('show');
+                await renderSizePricesPage();
+            } catch (err) {
+                console.error(err);
+                showToast(err.message || 'Failed to restore size', 'error');
             } finally {
                 hideLoader();
             }
@@ -4152,6 +4837,10 @@ function invalidateKarigarCache(companyId = AppState.currentCompany) {
     if (AppState.karigarCacheByCompany && AppState.karigarCacheByCompany[cid]) {
         delete AppState.karigarCacheByCompany[cid];
     }
+}
+
+function invalidateAllKarigarCaches() {
+    AppState.karigarCacheByCompany = {};
 }
 
 async function loadKarigarData(forceReload = false) {
@@ -4236,7 +4925,7 @@ function resolveKarigarIdFromState(karigarId, karigarName) {
 }
 
 function calculateKarigarBalance(karigarId, karigarName) {
-    if (!karigarId) return { totalJama: 0, totalUpad: 0, balance: 0, lastTx: null };
+    if (!karigarId) return { totalJama: 0, totalUpad: 0, totalPics: 0, balance: 0, lastTx: null };
     const tx = getKarigarTransactionsFor(karigarId);
     const toAmount = (v) => {
         const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
@@ -4245,15 +4934,18 @@ function calculateKarigarBalance(karigarId, karigarName) {
     const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
     let totalJama = 0;
     let totalUpad = 0;
+    let totalPics = 0;
     tx.forEach(t => {
         if (t.type === 'jama') {
             totalJama = round2(totalJama + toAmount(t.total));
             totalUpad = round2(totalUpad + toAmount(t.upadAmount));
+            const pics = parseInt(String(t.pic ?? '').replace(/[^0-9-]/g, ''), 10);
+            if (Number.isFinite(pics) && pics > 0) totalPics += pics;
         }
         if (t.type === 'upad') totalUpad = round2(totalUpad + toAmount(t.amount));
     });
     const balance = round2(totalJama - totalUpad);
-    return { totalJama, totalUpad, balance, lastTx: tx[0] };
+    return { totalJama, totalUpad, totalPics, balance, lastTx: tx[0] };
 }
 
 function renderKarigarGrid() {
@@ -4289,23 +4981,27 @@ function renderKarigarGrid() {
         if (!isAdmin) {
             resetBtn.style.display = 'none';
         } else {
+            const targetCompanyId = String(AppState.currentCompany || 'company1').trim() || 'company1';
+            const targetCompanyName = getCompanyDisplayName(targetCompanyId);
             resetBtn.style.display = 'block';
             resetBtn.classList.remove('btn-danger', 'text-white');
             resetBtn.classList.add('btn-outline', 'text-danger');
-            resetBtn.innerHTML = "<i class='bx bx-refresh'></i> Reset Karigar Data";
+            resetBtn.innerHTML = `<i class='bx bx-refresh'></i> Reset ${targetCompanyName} Karigar Data`;
 
             const newResetBtn = resetBtn.cloneNode(true);
             resetBtn.parentNode.replaceChild(newResetBtn, resetBtn);
-            newResetBtn.addEventListener('click', confirmKarigarMonthlyReset);
+            newResetBtn.addEventListener('click', () => confirmKarigarMonthlyReset(targetCompanyId));
         }
     }
     
     let html = '';
     let globalBalanceSum = 0;
+    let globalPicsSum = 0;
     
     filtered.forEach(k => {
         const stats = calculateKarigarBalance(k.id, k.name);
         globalBalanceSum += stats.balance;
+        globalPicsSum += (parseInt(stats.totalPics, 10) || 0);
         
         const lastActivity = stats.lastTx ? `<span class="text-xs text-muted">Last active: ${formatISODateForDisplay(stats.lastTx.date)}</span>` : '<span class="text-xs text-muted">No activity yet</span>';
         
@@ -4335,6 +5031,11 @@ function renderKarigarGrid() {
                         <span class="text-xs text-muted" style="display:block;">Total Borrow (Upad)</span>
                         <strong class="text-danger">₹${stats.totalUpad.toFixed(2)}</strong>
                     </div>
+                    <div style="width: 1px; background: var(--border-color);"></div>
+                    <div>
+                        <span class="text-xs text-muted" style="display:block;">Total Pics</span>
+                        <strong class="text-primary">${stats.totalPics}</strong>
+                    </div>
                 </div>
 
                 <div class="flex gap-2 w-100" style="margin-top: auto; display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
@@ -4357,6 +5058,10 @@ function renderKarigarGrid() {
     if (obEl) {
         obEl.textContent = '₹' + Math.abs(globalBalanceSum).toFixed(2) + (globalBalanceSum < 0 ? ' Due' : ' Clear');
         obEl.className = globalBalanceSum < 0 ? 'text-lg text-danger' : 'text-lg text-success';
+    }
+    const opEl = document.getElementById('karigar-overall-pics');
+    if (opEl) {
+        opEl.textContent = String(globalPicsSum);
     }
     
     // Bind buttons
@@ -4434,11 +5139,12 @@ function setupKarigarListeners() {
             const companyId = DESIGN_PRICE_SCOPE;
             const history = (AppState.designPriceHistoryByCompany[companyId] || {})[designKey] || [];
             const targetDateTime = combineDateAndTimeToISO(dateValue, timeValue || '00:00') || `${getTodayISODate()}T00:00:00`;
+            const targetMinuteClose = `${targetDateTime.slice(0, 16)}:59`;
             if (Array.isArray(history) && history.length > 0) {
                 let selected = null;
                 history.forEach(point => {
                     const eff = normalizeToISODateTime(point.effectiveFrom, getTodayISODate());
-                    if (eff && eff <= targetDateTime) selected = point;
+                    if (eff && eff <= targetMinuteClose) selected = point;
                 });
                 if (selected && !selected.isDeleted && Number.isFinite(parseFloat(selected.price))) return parseFloat(selected.price);
                 if (selected && selected.isDeleted) return null;
@@ -4447,9 +5153,37 @@ function setupKarigarListeners() {
             return null;
         };
 
-        const applyAutoPrice = () => {
+        let autoPriceTimer = null;
+        let autoPriceReqSeq = 0;
+        const applyAutoPrice = async () => {
             const up = jamaDesign.value.trim().toUpperCase();
-            const resolved = getPriceForDateTime(up, jamaDate?.value, jamaTime?.value);
+            if (!up) {
+                updateJamaTotal();
+                return;
+            }
+            const dateValue = jamaDate?.value || getTodayISODate();
+            const timeValue = jamaTime?.value || '00:00';
+            const targetDateTime = combineDateAndTimeToISO(dateValue, timeValue) || `${getTodayISODate()}T00:00:00`;
+            const asOfDateTime = `${targetDateTime.slice(0, 16)}:59`;
+
+            const reqId = ++autoPriceReqSeq;
+            let resolved = null;
+            try {
+                const live = await FirebaseService.getDesignPrices(DESIGN_PRICE_SCOPE, asOfDateTime);
+                if (reqId !== autoPriceReqSeq) return;
+                if (live && live.success) {
+                    AppState.designPrices = live.data || {};
+                    AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = live.data || {};
+                    AppState.designPriceHistoryByCompany[DESIGN_PRICE_SCOPE] = live.history || {};
+                    const livePrice = parseFloat((live.data || {})[up]);
+                    if (Number.isFinite(livePrice)) resolved = livePrice;
+                }
+            } catch (e) {
+                console.warn('Live design price fetch failed, using local cache:', e);
+            }
+            if (!Number.isFinite(resolved)) {
+                resolved = getPriceForDateTime(up, dateValue, timeValue);
+            }
             if (Number.isFinite(resolved)) {
                 const oldVal = jamaPrice.value;
                 jamaPrice.value = resolved;
@@ -4462,10 +5196,16 @@ function setupKarigarListeners() {
             }
             updateJamaTotal();
         };
+        const queueAutoPrice = () => {
+            if (autoPriceTimer) clearTimeout(autoPriceTimer);
+            autoPriceTimer = setTimeout(() => {
+                applyAutoPrice().catch(err => console.warn('Auto price resolve failed:', err));
+            }, 180);
+        };
 
-        jamaDesign.addEventListener('input', applyAutoPrice);
-        if (jamaDate) jamaDate.addEventListener('change', applyAutoPrice);
-        if (jamaTime) jamaTime.addEventListener('change', applyAutoPrice);
+        jamaDesign.addEventListener('input', queueAutoPrice);
+        if (jamaDate) jamaDate.addEventListener('change', queueAutoPrice);
+        if (jamaTime) jamaTime.addEventListener('change', queueAutoPrice);
         jamaPrice.addEventListener('input', updateJamaTotal);
         jamaPic.addEventListener('input', updateJamaTotal);
         function updateJamaTotal() {
@@ -4552,18 +5292,7 @@ function setupKarigarListeners() {
                 scheduleBackgroundSheetBackup('addKarigarJama');
                 document.getElementById('karigar-jama-modal').classList.remove('show');
                 showToast("Maal (Jama) added successfully!", "success");
-                
-                // Update local price cache immediately
-                if (designName && price) {
-                    const key = designName.toString().trim().toUpperCase();
-                    const companyId = DESIGN_PRICE_SCOPE;
-                    AppState.designPrices[key] = parseFloat(price);
-                    AppState.designPricesByCompany[companyId] = {
-                        ...(AppState.designPricesByCompany[companyId] || {}),
-                        [key]: parseFloat(price)
-                    };
-                }
-                
+
                 invalidateKarigarCache();
                 await renderKarigarPage(true);
             } catch (err) { showToast("Failed to add", "error"); }
@@ -4882,13 +5611,15 @@ async function editKarigarHistory(txId, karigarId, karigarName) {
     }
 }
 
-async function confirmKarigarMonthlyReset() {
+async function confirmKarigarMonthlyReset(targetCompanyId = '') {
     if (!isAdminUser()) return showToast('Only admin can run monthly reset', 'error');
-    if (!confirm("This will backup ALL current Karigar data to Google Sheets and instantly clear it from the app for the new month.\n\nAre you sure you want to proceed?")) return;
+    const safeCompanyId = String(targetCompanyId || AppState.currentCompany || 'company1').trim() || 'company1';
+    const targetCompanyName = getCompanyDisplayName(safeCompanyId);
+    if (!confirm(`This will backup ALL ${targetCompanyName} Karigar data to Google Sheets and instantly clear ONLY ${targetCompanyName} Karigar transactions for new month.\n\nAre you sure you want to proceed?`)) return;
     
     showLoader();
     try {
-        showToast('Initiating backup to Google Sheets...', 'info');
+        showToast(`Initiating ${targetCompanyName} backup to Google Sheets...`, 'info');
         
         // Ensure all pending writes are flushed first
         await FirebaseService.flushWrites();
@@ -4898,37 +5629,50 @@ async function confirmKarigarMonthlyReset() {
         const response = await sheetsApiRequest({ action: 'saveFullBackup', data: allData });
         
         if (response && response.success) {
-            showToast('Backup successful. Clearing local database...', 'info');
-            const backupRows = (AppState.karigarTransactions || [])
-                .filter(tx => String(tx.companyId || '').trim() === String(AppState.currentCompany || '').trim())
+            showToast(`Backup successful. Clearing ${targetCompanyName} data...`, 'info');
+            const txRes = await FirebaseService.getKarigarTransactions(safeCompanyId);
+            const backupRows = (Array.isArray(txRes?.data) ? txRes.data : [])
+                .filter(tx => String(tx.companyId || '').trim() === safeCompanyId)
                 .map(tx => ({ ...tx }));
             await FirebaseService.createKarigarResetBackup({
-                companyId: AppState.currentCompany,
+                companyId: safeCompanyId,
                 rows: backupRows,
                 actor: buildAuditActor()
             });
             
             // Delete from firestore
-            const deleted = await FirebaseService.clearKarigarMonthlyData(AppState.currentCompany, buildAuditActor());
+            const deleted = await FirebaseService.clearKarigarMonthlyData(safeCompanyId, buildAuditActor());
             _pendingDataChangesForBackup = true;
-            scheduleBackgroundSheetBackup('clearKarigarMonthlyData');
+            scheduleBackgroundSheetBackup(`clearKarigarMonthlyData_${safeCompanyId}`);
             
             // Update UI & memory state
-            AppState.karigarTransactions = [];
-            invalidateKarigarCache();
+            if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
+                AppState.karigarTransactions = [];
+            }
+            invalidateKarigarCache(safeCompanyId);
             const currentMonth = getTodayISODate().substring(0, 7);
-            localStorage.setItem('karigar_last_reset_month', currentMonth);
-            AppState.karigarResetBackups = [];
-            AppState.selectedKarigarResetBackupId = '';
+            localStorage.setItem(`karigar_last_reset_month_${safeCompanyId}`, currentMonth);
+            if (AppState.karigarResetBackupsByCompany && typeof AppState.karigarResetBackupsByCompany === 'object') {
+                delete AppState.karigarResetBackupsByCompany[safeCompanyId];
+            }
+            if (AppState.selectedKarigarResetBackupIdByCompany && typeof AppState.selectedKarigarResetBackupIdByCompany === 'object') {
+                delete AppState.selectedKarigarResetBackupIdByCompany[safeCompanyId];
+            }
+            if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
+                AppState.karigarResetBackups = [];
+                AppState.selectedKarigarResetBackupId = '';
+            }
             
-            showToast(`Monthly Reset complete! Cleared ${deleted} records.`, 'success');
-            renderKarigarGrid();
+            showToast(`${targetCompanyName} reset complete! Cleared ${deleted} records.`, 'success');
+            if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
+                renderKarigarGrid();
+            }
         } else {
-            showToast('Backup failed. Local data was kept safe.', 'error');
+            showToast(`Backup failed for ${targetCompanyName}. Local data was kept safe.`, 'error');
         }
     } catch (e) {
         console.error('Reset error:', e);
-        showToast('System Error during reset.', 'error');
+        showToast(`System error during ${targetCompanyName} reset.`, 'error');
     } finally {
         hideLoader();
     }
