@@ -772,9 +772,14 @@ const FirebaseService = (() => {
         init();
         const safeCompanyId = String(companyId || 'company1').trim() || 'company1';
         const todayISO = normalizeISODate(new Date());
-        const monthStart = monthStr ? normalizeISODate(`${monthStr}-01`) : '2000-01-01';
+        const rollingStartDate = (() => {
+            const d = new Date();
+            d.setDate(d.getDate() - 29);
+            return normalizeISODate(d);
+        })();
+        const monthStart = monthStr ? normalizeISODate(`${monthStr}-01`) : rollingStartDate;
         const monthEnd = monthStr ? normalizeISODate(`${monthStr}-31`) : todayISO;
-        const startDate = monthStart || '2000-01-01';
+        const startDate = monthStart || rollingStartDate;
         const endDate = monthEnd || todayISO;
 
         const accountMeta = await getAccountsForCompany(safeCompanyId);

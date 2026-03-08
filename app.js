@@ -699,6 +699,8 @@ let _sheetSyncLifecycleBound = false;
 let _lastSheetBackupSuccessMs = 0;
 let _lastDirectOrderSheetSyncMs = 0;
 let _rainbowLoadingCounter = 0;
+let _startupMaintenanceRunning = false;
+const RECENT_30D_HYDRATE_KEY = 'recent_30d_hydrated_at_v1';
 let _firestoreQuotaBlockedUntilMs = 0;
 let _firestoreQuotaLastToastMs = 0;
 let _useSheetsFallbackMode = false;
@@ -2127,6 +2129,88 @@ async function autoFixMismatchedAccountNames() {
     }
 }
 
+function runStartupMaintenanceInBackground() {
+    if (_startupMaintenanceRunning) return;
+    _startupMaintenanceRunning = true;
+    setTimeout(async () => {
+        try {
+            await ensureLegacyOrdersMigrated();
+            await ensureLegacyIdIntegrity();
+            await autoFixMismatchedAccountNames();
+            await FirebaseService.migrateDatabaseToIds();
+            await hydrateRecent30DaysFromSheetsToFirebase();
+            // Merge recent Sheet rows in background so UI never misses rows synced to Sheet first.
+            try {
+                await mergeRecentSheetRowsIntoState(SHEETS_FALLBACK_DAYS);
+                if (AppState.currentSection === 'data-sheet') renderDataSheet();
+                if (AppState.currentSection === 'dashboard') renderDashboard();
+            } catch (e) {}
+        } catch (e) {
+            console.warn('Startup maintenance skipped:', e);
+        } finally {
+            _startupMaintenanceRunning = false;
+        }
+    }, 50);
+}
+
+function shouldRunRecent30dHydration() {
+    try {
+        const today = getTodayISODate();
+        const last = String(localStorage.getItem(RECENT_30D_HYDRATE_KEY) || '').trim();
+        return last !== today;
+    } catch (e) {
+        return true;
+    }
+}
+
+function markRecent30dHydrationDone() {
+    try {
+        localStorage.setItem(RECENT_30D_HYDRATE_KEY, getTodayISODate());
+    } catch (e) {}
+}
+
+function groupSheetRowsByDate(rows) {
+    const map = new Map();
+    (Array.isArray(rows) ? rows : []).forEach(r => {
+        const date = normalizeToISODate(r?.date);
+        const accountId = String(r?.accountId || '').trim();
+        if (!date || !accountId) return;
+        const bucket = map.get(date) || [];
+        bucket.push({
+            accountId,
+            accountName: String(r?.accountName || accountId).trim(),
+            meesho: parseInt(r?.meesho, 10) || 0
+        });
+        map.set(date, bucket);
+    });
+    return map;
+}
+
+async function hydrateRecent30DaysFromSheetsToFirebase() {
+    if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) return;
+    if (!shouldRunRecent30dHydration()) return;
+    try {
+        const [c1, c2] = await Promise.all([
+            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company1' }),
+            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2' })
+        ]);
+        const c1Rows = filterRecentRows(c1?.data || [], 30);
+        const c2Rows = filterRecentRows(c2?.data || [], 30);
+        const byDateC1 = groupSheetRowsByDate(c1Rows);
+        const byDateC2 = groupSheetRowsByDate(c2Rows);
+
+        for (const [date, rows] of byDateC1.entries()) {
+            await FirebaseService.submitOrders(date, rows, 'company1');
+        }
+        for (const [date, rows] of byDateC2.entries()) {
+            await FirebaseService.submitOrders(date, rows, 'company2');
+        }
+        markRecent30dHydrationDone();
+    } catch (e) {
+        console.warn('Recent 30-day Sheet→Firebase hydration skipped:', e);
+    }
+}
+
 async function loadInitialData() {
     showLoader('Connecting to server...');
     try {
@@ -2145,10 +2229,6 @@ async function loadInitialData() {
         
         console.log("🚀 [INITIALIZATION] Checking legacy migration and seeds...");
         await ensureFirebaseSeeded();
-        await ensureLegacyOrdersMigrated();
-        await ensureLegacyIdIntegrity();
-        await autoFixMismatchedAccountNames();
-        await FirebaseService.migrateDatabaseToIds();
         
         if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
             setLoaderStatus('Server is down. Starting Sheet Mode (Slow)...');
@@ -2162,8 +2242,6 @@ async function loadInitialData() {
                 fetchAccounts(),
                 fetchAllCompaniesData({ refreshArchiveMonths: false })
             ]);
-            // Always merge recent Sheet rows so UI never misses rows that reached Sheet first.
-            try { await mergeRecentSheetRowsIntoState(SHEETS_FALLBACK_DAYS); } catch (e) {}
         }
         
         console.log("🚀 [INITIALIZATION] Local data ready. Booting UI in background...");
@@ -2184,6 +2262,7 @@ async function loadInitialData() {
         } else {
             navigateTo('data-sheet');
         }
+        runStartupMaintenanceInBackground();
     } catch (err) {
         console.error(err);
         if (isFirestoreQuotaError(err) || isFirestoreUnavailableError(err)) {
