@@ -783,39 +783,50 @@ const FirebaseService = (() => {
         try {
             // Primary source: company/day document with orders[] array.
             const dayRows = await readDailyOrdersRows(safeCompanyId, startDate, endDate);
-            if (dayRows.length > 0) {
-                const normalized = dayRows.map(r => {
-                    const accountId = String(r.accountId || '').trim();
-                    const resolvedName = String(r.accountName || accountMeta.byId[accountId] || accountId).trim();
-                    return {
-                        ...r,
-                        accountName: resolvedName,
-                        meesho: parseInt(r.meesho, 10) || 0,
-                        total: parseInt(r.total, 10) || (parseInt(r.meesho, 10) || 0),
-                        companyId: safeCompanyId
-                    };
+            const merged = new Map();
+            dayRows.forEach(r => {
+                const date = normalizeISODate(r.date);
+                const accountId = String(r.accountId || '').trim();
+                if (!date || !accountId) return;
+                const resolvedName = String(r.accountName || accountMeta.byId[accountId] || accountId).trim();
+                merged.set(`${date}__${accountId}`, {
+                    ...r,
+                    date,
+                    accountId,
+                    accountName: resolvedName,
+                    meesho: parseInt(r.meesho, 10) || 0,
+                    total: parseInt(r.total, 10) || (parseInt(r.meesho, 10) || 0),
+                    companyId: safeCompanyId,
+                    companyName: String(r.companyName || getCompanyDisplayName(safeCompanyId)).trim()
                 });
-                return { success: true, data: normalized };
-            }
+            });
 
-            // Fallback source for older data.
+            // Fallback source for older data (merge only if not already present in daily_orders).
             let query = db.collection('daily_summary').where('date', '>=', startDate);
             if (monthStr) query = query.where('date', '<=', endDate);
 
             const snap = await query.get();
-            const records = [];
             snap.forEach(doc => {
                 const d = doc.data() || {};
                 for (const [key, val] of Object.entries(d)) {
                     if (key === 'date' || key === 'masterCompany') continue;
-                    const accountId = String(key || '').trim();
-                    if (!accountId) continue;
-                    if (validAccIds.size > 0 && !validAccIds.has(accountId)) continue;
+                    const rawKey = String(key || '').trim();
+                    if (!rawKey) continue;
+                    let accountId = rawKey;
+                    if (validAccIds.size > 0 && !validAccIds.has(accountId)) {
+                        const mapped = accountMeta.byNameLower[String(rawKey).toLowerCase()] || '';
+                        if (!mapped || !validAccIds.has(mapped)) continue;
+                        accountId = mapped;
+                    }
+                    const date = normalizeISODate(d.date || doc.id);
+                    if (!date) continue;
+                    const mergeKey = `${date}__${accountId}`;
+                    if (merged.has(mergeKey)) continue;
                     const qty = parseInt(val, 10) || 0;
-                    records.push({
-                        date: normalizeISODate(d.date || doc.id),
+                    merged.set(mergeKey, {
+                        date,
                         accountId,
-                        accountName: String(accountMeta.byId[accountId] || accountId).trim(),
+                        accountName: String(accountMeta.byId[accountId] || rawKey || accountId).trim(),
                         meesho: qty,
                         total: qty,
                         companyId: safeCompanyId,
@@ -823,6 +834,7 @@ const FirebaseService = (() => {
                     });
                 }
             });
+            const records = Array.from(merged.values());
             records.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
             return { success: true, data: records };
         } catch (e) {
@@ -2218,13 +2230,17 @@ const FirebaseService = (() => {
             return { success: true, flushed: 0 };
         }
         setSyncStatus('syncing');
-        const entries = [..._pendingWrites.values()];
+        const entries = [..._pendingWrites.entries()];
         _pendingWrites.clear();
         try {
-            await Promise.all(entries.map(fn => fn()));
+            await Promise.all(entries.map(([, fn]) => fn()));
             setSyncStatus('saved');
             return { success: true, flushed: entries.length };
         } catch (e) {
+            // Re-queue all writes so retry can continue; avoids data loss on transient errors.
+            entries.forEach(([key, fn]) => {
+                if (!_pendingWrites.has(key)) _pendingWrites.set(key, fn);
+            });
             console.error('Flush error:', e);
             setSyncStatus('error');
             throw e;

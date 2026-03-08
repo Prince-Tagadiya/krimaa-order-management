@@ -679,10 +679,20 @@ function getDashboardData(companyId, monthFilter) {
   var data = sheet.getRange(startRow, 1, lastRow - (startRow - 1), 5).getValues();
   var records = [];
   for (var i = 0; i < data.length; i++) {
-    var d = data[i][0] instanceof Date ? Utilities.formatDate(data[i][0], Session.getScriptTimeZone(), "yyyy-MM-dd") : data[i][0];
-    if (monthFilter && d.substring(0, 7) !== monthFilter) continue;
+    var rawDate = data[i][0];
+    var parsedDate = parseFlexibleDateTime(rawDate, '');
+    var d = Utilities.formatDate(parsedDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    if (monthFilter && String(d).substring(0, 7) !== monthFilter) continue;
+    var accountId = String(data[i][1] || '').trim();
+    var accountName = String(data[i][2] || '').trim();
+    if (!accountId && !accountName) continue;
+    if (!accountId) accountId = accountName;
+    if (!accountName) accountName = accountId;
     var meeshoVal = parseInt(data[i][3]) || 0;
-    records.push({ date: d, accountId: data[i][1], accountName: data[i][2], meesho: meeshoVal, total: meeshoVal });
+    var syncedAt = data[i][4] instanceof Date
+      ? Utilities.formatDate(data[i][4], Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss")
+      : String(data[i][4] || '');
+    records.push({ date: d, accountId: accountId, accountName: accountName, meesho: meeshoVal, total: meeshoVal, syncedAt: syncedAt });
   }
   return {success: true, data: records};
 }

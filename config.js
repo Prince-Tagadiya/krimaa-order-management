@@ -18,7 +18,7 @@ const SHEETS_API_URL = "https://script.google.com/macros/s/AKfycbwj9oL5WWKMGzSGY
 
 // App behaviour
 const APP_CONFIG = {
-    writeBufferMs: 60000,       // 1 minute buffer before flushing edits to Firestore
+    writeBufferMs: 600000,      // 10 minute auto-save fallback (manual Save Changes is primary)
     dailyBackupEnabled: true,   // Auto-backup to Sheets daily
     monthlyCleanup: true,       // Monthly: move all data to Sheets + clear Firestore
     backupCheckIntervalMs: 3600000 // Check backup status every hour

@@ -1094,6 +1094,13 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     opacity: 1;
 }
 
+.magical-flash.loading {
+    opacity: 0.9;
+    background: linear-gradient(120deg, rgba(255, 0, 128, 0.28), rgba(0, 255, 255, 0.28), rgba(255, 215, 0, 0.22), rgba(19, 91, 236, 0.24));
+    background-size: 300% 300%;
+    animation: rainbow-bg 2s linear infinite;
+}
+
 .confetti-piece {
     position: absolute;
     width: 10px;

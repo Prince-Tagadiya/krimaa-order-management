@@ -485,8 +485,10 @@ function openReplaceFromSheetModal(defaultSelection = null) {
 document.addEventListener('DOMContentLoaded', () => { initApp(); });
 
 function initApp() {
+    restoreFirestoreQuotaCooldown();
     bootstrapSheetSyncStateFromStorage();
     bindSheetSyncLifecycleEvents();
+    updateBackendModeBanner();
     checkAuth();
     attachEventListeners();
     initSyncIndicator();
@@ -696,9 +698,345 @@ const _pendingOrderOverrides = new Map();
 let _sheetSyncLifecycleBound = false;
 let _lastSheetBackupSuccessMs = 0;
 let _lastDirectOrderSheetSyncMs = 0;
+let _rainbowLoadingCounter = 0;
+let _firestoreQuotaBlockedUntilMs = 0;
+let _firestoreQuotaLastToastMs = 0;
+let _useSheetsFallbackMode = false;
+let _sheetsFallbackLastLoadMs = 0;
+const _apiReadCache = new Map();
 const SHEET_SYNC_PENDING_KEY = 'sheet_sync_pending_v3';
 const SHEET_SYNC_LAST_SUCCESS_KEY = 'sheet_sync_last_success_v3';
+const FIRESTORE_QUOTA_UNTIL_KEY = 'firestore_quota_until_v1';
 const SHEET_RECONCILE_MAX_STALE_MS = 3 * 60 * 1000;
+const FIRESTORE_QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+const SHEETS_FALLBACK_DAYS = 7;
+const READ_CACHE_TTL_MS = 15000;
+
+function isFirestoreQuotaError(err) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    const code = String(err?.code || '').toLowerCase();
+    return (
+        msg.includes('quota exceeded') ||
+        msg.includes('resource_exhausted') ||
+        msg.includes('too many requests') ||
+        code.includes('resource-exhausted')
+    );
+}
+
+function isFirestoreUnavailableError(err) {
+    const msg = String(err?.message || err || '').toLowerCase();
+    const code = String(err?.code || '').toLowerCase();
+    return (
+        msg.includes('unavailable') ||
+        msg.includes('network error') ||
+        msg.includes('failed to fetch') ||
+        msg.includes('deadline exceeded') ||
+        msg.includes('timed out') ||
+        code.includes('unavailable')
+    );
+}
+
+function isFirestoreQuotaBlocked() {
+    return Date.now() < _firestoreQuotaBlockedUntilMs;
+}
+
+function activateFirestoreQuotaCooldown(err) {
+    _firestoreQuotaBlockedUntilMs = Date.now() + FIRESTORE_QUOTA_COOLDOWN_MS;
+    try { localStorage.setItem(FIRESTORE_QUOTA_UNTIL_KEY, String(_firestoreQuotaBlockedUntilMs)); } catch (e) {}
+    enableSheetsFallbackMode();
+    const now = Date.now();
+    if (now - _firestoreQuotaLastToastMs > 60000) {
+        _firestoreQuotaLastToastMs = now;
+        showToast('Firestore quota exceeded. App switched to cached mode for 10 minutes.', 'error');
+    }
+    console.warn('Firestore quota cooldown active until:', new Date(_firestoreQuotaBlockedUntilMs).toISOString(), err);
+}
+
+function restoreFirestoreQuotaCooldown() {
+    try {
+        const raw = localStorage.getItem(FIRESTORE_QUOTA_UNTIL_KEY);
+        const ms = parseInt(raw, 10);
+        if (Number.isFinite(ms) && ms > Date.now()) {
+            _firestoreQuotaBlockedUntilMs = ms;
+            _useSheetsFallbackMode = true;
+        } else {
+            localStorage.removeItem(FIRESTORE_QUOTA_UNTIL_KEY);
+        }
+    } catch (e) {}
+}
+
+function getTomorrowRecoveryLabel() {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(1, 30, 0, 0);
+    const dateLabel = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    const timeLabel = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return `${dateLabel}, ${timeLabel}`;
+}
+
+function updateBackendModeBanner() {
+    const el = document.getElementById('backend-mode-banner');
+    if (!el) return;
+    if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
+        el.classList.remove('hidden');
+        el.innerHTML = `<i class='bx bx-error-circle'></i><span>Server down • Sheet Mode (Slow)</span>`;
+    } else {
+        el.classList.add('hidden');
+    }
+}
+
+function setLoaderStatus(text) {
+    const el = document.getElementById('global-loader-text');
+    if (!el) return;
+    el.textContent = String(text || 'Loading...');
+}
+
+function startRainbowLoading(message = '') {
+    _rainbowLoadingCounter += 1;
+    const flash = document.getElementById('magical-flash');
+    if (flash) {
+        flash.classList.add('loading');
+        flash.classList.remove('active');
+    }
+    if (message) setLoaderStatus(message);
+}
+
+function stopRainbowLoading() {
+    _rainbowLoadingCounter = Math.max(0, _rainbowLoadingCounter - 1);
+    if (_rainbowLoadingCounter > 0) return;
+    const flash = document.getElementById('magical-flash');
+    if (flash) flash.classList.remove('loading');
+}
+
+function mapSheetAccountsToDetails(list, companyId) {
+    const raw = Array.isArray(list) ? list : [];
+    const details = raw.map((item, idx) => {
+        if (item && typeof item === 'object') {
+            const safeName = String(item.name || '').trim();
+            const safeId = String(item.accountId || '').trim() || `sheet_${companyId}_${safeName.toLowerCase().replace(/[^a-z0-9]+/g, '_') || idx}`;
+            return {
+                accountId: safeId,
+                name: safeName || safeId,
+                companyId,
+                position: Number.isFinite(parseInt(item.position, 10)) ? parseInt(item.position, 10) : (idx + 1)
+            };
+        }
+        const safeName = String(item || '').trim();
+        const accountId = `sheet_${companyId}_${safeName.toLowerCase().replace(/[^a-z0-9]+/g, '_') || idx}`;
+        return { accountId, name: safeName, companyId, position: idx + 1 };
+    }).filter(d => d.name);
+    return details;
+}
+
+function filterRecentRows(rows, days = SHEETS_FALLBACK_DAYS) {
+    const safeDays = Math.max(1, parseInt(days, 10) || SHEETS_FALLBACK_DAYS);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - (safeDays - 1));
+    cutoff.setHours(0, 0, 0, 0);
+    const cutoffIso = normalizeToISODate(cutoff);
+    return (Array.isArray(rows) ? rows : []).filter(r => {
+        const d = normalizeToISODate(r?.date);
+        return !!d && d >= cutoffIso;
+    });
+}
+
+function mergeOrderRowsUnique(primaryRows, secondaryRows) {
+    const merged = new Map();
+    const add = (row) => {
+        const date = normalizeToISODate(row?.date);
+        const accountId = String(row?.accountId || '').trim();
+        const accountName = String(row?.accountName || '').trim();
+        if (!date || (!accountId && !accountName)) return;
+        const key = `${date}__${accountId || accountName.toLowerCase()}`;
+        if (!merged.has(key)) {
+            merged.set(key, {
+                date,
+                accountId: accountId || accountName,
+                accountName: accountName || accountId,
+                meesho: parseInt(row?.meesho, 10) || 0,
+                total: parseInt(row?.total, 10) || (parseInt(row?.meesho, 10) || 0),
+                companyId: String(row?.companyId || '').trim()
+            });
+        }
+    };
+    (Array.isArray(primaryRows) ? primaryRows : []).forEach(add);
+    (Array.isArray(secondaryRows) ? secondaryRows : []).forEach(add);
+    return Array.from(merged.values()).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+async function loadRecentDataFromSheets(days = SHEETS_FALLBACK_DAYS) {
+    const [accC1, accC2, ordC1, ordC2, rem] = await Promise.all([
+        sheetsApiRequest({ action: 'getAccounts', companyId: 'company1' }).catch(() => ({ data: [] })),
+        sheetsApiRequest({ action: 'getAccounts', companyId: 'company2' }).catch(() => ({ data: [] })),
+        sheetsApiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(() => ({ data: [] })),
+        sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(() => ({ data: [] })),
+        sheetsApiRequest({ action: 'getRemarks' }).catch(() => ({ data: {} }))
+    ]);
+
+    const rowsC1 = filterRecentRows(ordC1?.data || [], days);
+    const rowsC2 = filterRecentRows(ordC2?.data || [], days);
+
+    AppState.company1Data = rowsC1;
+    AppState.company2Data = rowsC2;
+
+    const c1Details = mapSheetAccountsToDetails((accC1 && accC1.details) ? accC1.details : (accC1?.data || []), 'company1');
+    const c2Details = mapSheetAccountsToDetails((accC2 && accC2.details) ? accC2.details : (accC2?.data || []), 'company2');
+    if (c1Details.length > 0) AppState.company1Details = c1Details;
+    if (c2Details.length > 0) AppState.company2Details = c2Details;
+    AppState.company1Accounts = (AppState.company1Details || []).map(d => d.accountId);
+    AppState.company2Accounts = (AppState.company2Details || []).map(d => d.accountId);
+    AppState.accountDetails = AppState.currentCompany === 'company2' ? AppState.company2Details : AppState.company1Details;
+    AppState.accounts = (AppState.accountDetails || []).map(d => d.accountId);
+    AppState.dashboardData = AppState.currentCompany === 'company2' ? rowsC2 : rowsC1;
+    _remarkCache = rem?.data || _remarkCache || {};
+    _sheetsFallbackLastLoadMs = Date.now();
+}
+
+async function readFromSheetsInQuotaMode(action, payload, companyId) {
+    setSheetBackupIndicator('running', 'Google Sheet loading');
+    if (action === 'getAccounts') {
+        const res = await sheetsApiRequest({ action: 'getAccounts', companyId });
+        setSheetBackupIndicator('idle', 'Sheet idle');
+        return res;
+    }
+    if (action === 'getDashboardData') {
+        const res = await sheetsApiRequest({ action: 'getDashboardData', companyId, month: payload?.month || '' });
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        setSheetBackupIndicator('idle', 'Sheet idle');
+        return { success: true, data: filterRecentRows(rows, SHEETS_FALLBACK_DAYS) };
+    }
+    if (action === 'getRemarks') {
+        const res = await sheetsApiRequest({ action: 'getRemarks' });
+        setSheetBackupIndicator('idle', 'Sheet idle');
+        return res;
+    }
+    setSheetBackupIndicator('idle', 'Sheet idle');
+    return null;
+}
+
+async function mergeRecentSheetRowsIntoState(days = SHEETS_FALLBACK_DAYS) {
+    setSheetBackupIndicator('running', 'Google Sheet loading');
+    try {
+        const [s1, s2] = await Promise.all([
+            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company1' }),
+            sheetsApiRequest({ action: 'getDashboardData', companyId: 'company2' })
+        ]);
+        const sheetRowsC1 = filterRecentRows(s1?.data || [], days).map(r => ({ ...r, companyId: 'company1' }));
+        const sheetRowsC2 = filterRecentRows(s2?.data || [], days).map(r => ({ ...r, companyId: 'company2' }));
+        AppState.company1Data = mergeOrderRowsUnique(AppState.company1Data || [], sheetRowsC1);
+        AppState.company2Data = mergeOrderRowsUnique(AppState.company2Data || [], sheetRowsC2);
+        AppState.dashboardData = AppState.currentCompany === 'company2' ? AppState.company2Data : AppState.company1Data;
+    } finally {
+        setSheetBackupIndicator('idle', 'Sheet idle');
+    }
+}
+
+function enableSheetsFallbackMode() {
+    _useSheetsFallbackMode = true;
+    updateBackendModeBanner();
+    const stale = (Date.now() - _sheetsFallbackLastLoadMs) > 30000;
+    if (stale) {
+        loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS)
+            .then(() => {
+                if (AppState.currentSection === 'data-sheet') renderDataSheet();
+                if (AppState.currentSection === 'dashboard') renderDashboard();
+            })
+            .catch((e) => console.warn('Sheets fallback load failed:', e));
+    }
+}
+
+function disableSheetsFallbackMode() {
+    _useSheetsFallbackMode = false;
+    _firestoreQuotaBlockedUntilMs = 0;
+    try { localStorage.removeItem(FIRESTORE_QUOTA_UNTIL_KEY); } catch (e) {}
+    updateBackendModeBanner();
+}
+
+async function tryRecoverFirestoreMode() {
+    if (!_useSheetsFallbackMode) return false;
+    try {
+        await FirebaseService.getAccounts(AppState.currentCompany || 'company1');
+        disableSheetsFallbackMode();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function checkFirestoreResponsive(timeoutMs = 5000) {
+    if (isFirestoreQuotaBlocked()) return false;
+    try {
+        const probePromise = (async () => {
+            const db = FirebaseService.getDb();
+            await db.collection('system').doc('backupMeta').get();
+            return true;
+        })();
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Firestore health timeout')), Math.max(1500, parseInt(timeoutMs, 10) || 5000));
+        });
+        await Promise.race([probePromise, timeoutPromise]);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+async function probeFirebaseWithCountdown(seconds = 2) {
+    const safeSeconds = Math.max(1, parseInt(seconds, 10) || 2);
+    const timeoutMs = safeSeconds * 1000;
+    const endTs = Date.now() + timeoutMs;
+    const updateText = () => {
+        const remaining = Math.max(0, Math.ceil((endTs - Date.now()) / 1000));
+        setLoaderStatus(`Loading from Firebase... ${remaining}s`);
+    };
+    updateText();
+    const timer = setInterval(updateText, 200);
+    try {
+        return await checkFirestoreResponsive(timeoutMs);
+    } finally {
+        clearInterval(timer);
+    }
+}
+
+async function syncFirebaseFromSheetsSourceOnRefresh() {
+    if (!FirebaseService || typeof FirebaseService.replaceFromSheetsSelective !== 'function') return;
+    const fullRes = await sheetsApiRequest({ action: 'getAllSheetData' });
+    const sheetData = fullRes?.data || null;
+    if (!fullRes?.success || !sheetData) {
+        throw new Error(fullRes?.message || 'Failed to read Google Sheet data');
+    }
+    await FirebaseService.replaceFromSheetsSelective(
+        sheetData,
+        {
+            accounts: true,
+            orders: true,
+            karigars: true,
+            karigarTransactions: true,
+            sizePrices: true
+        },
+        { fast: true }
+    );
+}
+
+function buildCachedApiResult(action, companyId) {
+    switch (action) {
+        case 'getAccounts': {
+            const details = companyId === 'company2' ? (AppState.company2Details || []) : (AppState.company1Details || []);
+            const ids = details.map(d => d.accountId).filter(Boolean);
+            return { success: true, data: ids, details };
+        }
+        case 'getDashboardData': {
+            const data = companyId === 'company2' ? (AppState.company2Data || []) : (AppState.company1Data || []);
+            return { success: true, data };
+        }
+        case 'getRemarks':
+            return { success: true, data: _remarkCache || {} };
+        case 'getMoneyBackups':
+            return { success: true, data: AppState.moneyBackups || [] };
+        default:
+            return null;
+    }
+}
 
 function setPersistentSheetSyncPending(reason = '') {
     try {
@@ -765,11 +1103,17 @@ function bindSheetSyncLifecycleEvents() {
 
 function scheduleQuickWriteFlush(delayMs = 1200) {
     if (_quickWriteFlushTimer) clearTimeout(_quickWriteFlushTimer);
-    const wait = Math.max(200, parseInt(delayMs, 10) || 1200);
+    // Manual Save button is primary; auto-save is fallback based on APP_CONFIG.writeBufferMs.
+    const configured = Math.max(600000, parseInt(APP_CONFIG?.writeBufferMs, 10) || 600000);
+    const wait = Math.max(configured, parseInt(delayMs, 10) || configured);
     _quickWriteFlushTimer = setTimeout(async () => {
         try {
             await FirebaseService.flushWrites();
         } catch (e) {
+            if (isFirestoreQuotaError(e)) {
+                activateFirestoreQuotaCooldown(e);
+                loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS).catch(() => null);
+            }
             console.warn('Quick flush failed:', e);
         }
     }, wait);
@@ -917,6 +1261,31 @@ function normalizeSheetOrderRows(date, orders, companyId) {
     return { safeDate, safeCompanyId, rows: out };
 }
 
+function getLocalOrderRowsForDate(date, companyId) {
+    const safeDate = normalizeToISODate(date);
+    const safeCompanyId = normalizeCompanyIdLocal(companyId);
+    if (!safeDate) return [];
+    const source = safeCompanyId === 'company2' ? (AppState.company2Data || []) : (AppState.company1Data || []);
+    const map = new Map();
+    source.forEach(r => {
+        const d = normalizeToISODate(r?.date);
+        if (d !== safeDate) return;
+        const accountId = String(r?.accountId || '').trim();
+        if (!accountId) return;
+        const key = accountId;
+        const accountName = String(r?.accountName || resolveAccountNameForSheet(accountId, safeCompanyId) || accountId).trim();
+        const qty = parseInt(r?.meesho, 10) || 0;
+        const prev = map.get(key);
+        if (!prev) {
+            map.set(key, { accountId, accountName, meesho: qty });
+        } else {
+            prev.meesho = (parseInt(prev.meesho, 10) || 0) + qty;
+            map.set(key, prev);
+        }
+    });
+    return Array.from(map.values());
+}
+
 async function syncOrdersDirectToSheet(date, orders, companyId, reason = 'orders_live') {
     const normalized = normalizeSheetOrderRows(date, orders, companyId);
     if (!normalized.safeDate || normalized.rows.length === 0) {
@@ -965,22 +1334,16 @@ async function syncOrderDateForAllCompanies(date, options = {}, reason = 'orders
     const safeDate = normalizeToISODate(date);
     if (!safeDate) return { success: false, skipped: true, message: 'Invalid date' };
 
-    const preferredCompanyId = normalizeCompanyIdLocal(options?.companyId || '');
-    const preferredRows = Array.isArray(options?.rows) ? options.rows : [];
     const errors = [];
 
     for (const cid of ['company1', 'company2']) {
         let rows = [];
-        if (cid === preferredCompanyId && preferredRows.length > 0) {
-            rows = preferredRows;
-        } else {
-            try {
-                const dailyRes = await FirebaseService.getOrderRowsForDate(cid, safeDate);
-                rows = Array.isArray(dailyRes?.data) ? dailyRes.data : [];
-            } catch (e) {
-                errors.push(`${cid}: ${e?.message || 'read failed'}`);
-                continue;
-            }
+        try {
+            const dailyRes = await FirebaseService.getOrderRowsForDate(cid, safeDate);
+            rows = Array.isArray(dailyRes?.data) ? dailyRes.data : [];
+        } catch (e) {
+            errors.push(`${cid}: ${e?.message || 'read failed'}`);
+            continue;
         }
 
         if (!rows.length) continue;
@@ -1063,6 +1426,10 @@ function scheduleBackgroundSheetBackup(reason = '') {
 }
 
 async function runBackgroundSheetBackup(reason = '') {
+    if (isFirestoreQuotaBlocked()) {
+        setSheetBackupIndicator('queued', 'Sheet queued (quota cooldown)');
+        return;
+    }
     if (_backgroundSheetBackupInFlight) return;
     if (!_backgroundSheetBackupQueued && !_pendingDataChangesForBackup) return;
     _backgroundSheetBackupInFlight = true;
@@ -1111,6 +1478,14 @@ function startAdminAutoSync() {
     if (!isAdminUser()) return;
     _adminAutoSyncTimer = setInterval(async () => {
         try {
+            if (_useSheetsFallbackMode && !isFirestoreQuotaBlocked()) {
+                try {
+                    await fetchAllCompaniesData({ refreshArchiveMonths: false, enableBackgroundSync: false });
+                    disableSheetsFallbackMode();
+                } catch (e) {}
+                return;
+            }
+            if (isFirestoreQuotaBlocked()) return;
             if (document.hidden) return;
             if (_pendingDataChangesForBackup || _backgroundSheetBackupQueued) {
                 await FirebaseService.flushWrites();
@@ -1130,6 +1505,7 @@ function startAdminAutoSync() {
     // Near real-time refresh so cross-account updates show quickly for admin.
     _adminRealtimeRefreshTimer = setInterval(async () => {
         if (!isAdminUser()) return;
+        if (isFirestoreQuotaBlocked()) return;
         if (document.hidden || AppState.isSwitchingCompany || _adminRealtimeBusy) return;
         if (AppState.currentSection === 'data-sheet' && isDataSheetEditActive()) return;
         const pendingWrites = typeof FirebaseService !== 'undefined' && FirebaseService.getPendingCount
@@ -1155,15 +1531,37 @@ function startAdminAutoSync() {
         } finally {
             _adminRealtimeBusy = false;
         }
-    }, 3000);
+    }, 15000);
 }
 
 async function refreshAppDataManually() {
-    showLoader();
+    showLoader('Checking server status...');
     try {
-        showToast('Refreshing Firestore data...', 'info');
+        const serverResponsive = await probeFirebaseWithCountdown(2);
+        if (!serverResponsive) {
+            enableSheetsFallbackMode();
+            updateBackendModeBanner();
+            setLoaderStatus('Server is down. Loading from Google Sheet (slow)...');
+            await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
+            await loadAvailableSheetMonths(true);
+            if (AppState.currentSection === 'data-sheet') renderDataSheet();
+            else if (AppState.currentSection === 'dashboard') renderDashboard();
+            else if (AppState.currentSection === 'daily-order') renderOrderEntryTable();
+            showToast('Server down. Loaded latest Google Sheet data.', 'info');
+            return;
+        }
+
+        if (_useSheetsFallbackMode) {
+            disableSheetsFallbackMode();
+            updateBackendModeBanner();
+        }
+
+        showToast('Refreshing from Google Sheet first, then Firebase...', 'info');
         await FirebaseService.flushWrites();
+        await syncFirebaseFromSheetsSourceOnRefresh();
+        setLoaderStatus('Applying latest data to website...');
         await loadInitialData();
+        await mergeRecentSheetRowsIntoState(SHEETS_FALLBACK_DAYS);
         await Promise.all([
             loadMoneyBackups(true),
             loadAvailableSheetMonths(true)
@@ -1195,7 +1593,7 @@ async function switchCompany(previousCompany = '') {
     const companyName = getCompanyDisplayName(AppState.currentCompany);
     
     // START MAGICAL TRANSITION
-    triggerMagicalTransition(companyName);
+    triggerMagicalTransition(companyName, true);
     
     setCompanyButtonsDisabled(true);
     showProgressToast(`Switching to ${companyName}...`);
@@ -1219,7 +1617,7 @@ async function switchCompany(previousCompany = '') {
         
         // Don't block company switch for slow Excel meta-data fetch
         // Just refresh the dashboard data which is now only Firebase current month
-        fetchAllCompaniesData({ refreshArchiveMonths: false }).catch(e => {
+        await fetchAllCompaniesData({ refreshArchiveMonths: false }).catch(e => {
             console.warn('Silent update of all-company dashboard data', e);
         });
         
@@ -1257,14 +1655,17 @@ async function switchCompany(previousCompany = '') {
     } finally {
         AppState.isSwitchingCompany = false;
         setCompanyButtonsDisabled(false);
+        endMagicalTransition();
     }
 }
 
-function triggerMagicalTransition(companyName) {
+function triggerMagicalTransition(companyName, keepUntilDone = false) {
     const flash = document.getElementById('magical-flash');
     if (flash) {
         flash.classList.add('active');
-        setTimeout(() => flash.classList.remove('active'), 1000);
+        if (!keepUntilDone) {
+            setTimeout(() => flash.classList.remove('active'), 1000);
+        }
     }
 
     // Typing effect for the page title
@@ -1282,6 +1683,12 @@ function triggerMagicalTransition(companyName) {
              }, 1500);
         });
     }
+}
+
+function endMagicalTransition() {
+    const flash = document.getElementById('magical-flash');
+    if (!flash) return;
+    flash.classList.remove('active');
 }
 
 function typeWriterEffect(element, text, speed = 50, callback) {
@@ -1337,12 +1744,14 @@ function checkAuth() {
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.remove('hidden');
         applyRolePermissions();
+        updateBackendModeBanner();
         startAdminAutoSync();
         loadInitialData();
 
     } else {
         document.getElementById('login-screen').classList.remove('hidden');
         document.getElementById('app-screen').classList.add('hidden');
+        updateBackendModeBanner();
         if (_adminAutoSyncTimer) {
             clearInterval(_adminAutoSyncTimer);
             _adminAutoSyncTimer = null;
@@ -1719,11 +2128,20 @@ async function autoFixMismatchedAccountNames() {
 }
 
 async function loadInitialData() {
-    showLoader();
+    showLoader('Connecting to server...');
     try {
         console.log("🚀 [INITIALIZATION] Starting web app...");
         AppState.karigarCacheByCompany = {};
         FirebaseService.init();
+        const serverResponsive = await probeFirebaseWithCountdown(2);
+        if (!serverResponsive) {
+            enableSheetsFallbackMode();
+            setLoaderStatus('Server is down. Loading from Google Sheet (slow)...');
+        } else {
+            await tryRecoverFirestoreMode();
+            if (_useSheetsFallbackMode) disableSheetsFallbackMode();
+        }
+        updateBackendModeBanner();
         
         console.log("🚀 [INITIALIZATION] Checking legacy migration and seeds...");
         await ensureFirebaseSeeded();
@@ -1732,11 +2150,21 @@ async function loadInitialData() {
         await autoFixMismatchedAccountNames();
         await FirebaseService.migrateDatabaseToIds();
         
-        console.log("🚀 [INITIALIZATION] Fetching fresh data instantly from Firestore...");
-        await Promise.all([
-            fetchAccounts(),
-            fetchAllCompaniesData({ refreshArchiveMonths: false })
-        ]);
+        if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
+            setLoaderStatus('Server is down. Starting Sheet Mode (Slow)...');
+            console.log("🚀 [INITIALIZATION] Firestore quota mode active. Loading recent Sheet data...");
+            await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
+            updateBackendModeBanner();
+        } else {
+            setLoaderStatus('Loading Firebase data...');
+            console.log("🚀 [INITIALIZATION] Fetching fresh data instantly from Firestore...");
+            await Promise.all([
+                fetchAccounts(),
+                fetchAllCompaniesData({ refreshArchiveMonths: false })
+            ]);
+            // Always merge recent Sheet rows so UI never misses rows that reached Sheet first.
+            try { await mergeRecentSheetRowsIntoState(SHEETS_FALLBACK_DAYS); } catch (e) {}
+        }
         
         console.log("🚀 [INITIALIZATION] Local data ready. Booting UI in background...");
         loadAvailableSheetMonths(true).catch(e => console.warn('Background meta fetch:', e));
@@ -1756,7 +2184,28 @@ async function loadInitialData() {
         } else {
             navigateTo('data-sheet');
         }
-    } catch (err) { console.error(err); showToast("Error loading data: " + err.message, "error"); }
+    } catch (err) {
+        console.error(err);
+        if (isFirestoreQuotaError(err) || isFirestoreUnavailableError(err)) {
+            try {
+                setLoaderStatus('Server is down. Starting Sheet Mode (Slow)...');
+                enableSheetsFallbackMode();
+                await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
+                updateBackendModeBanner();
+                if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
+                    navigateTo('daily-order');
+                } else {
+                    navigateTo('data-sheet');
+                }
+                showToast('Server down. Running in Sheet Mode (Slow).', 'info');
+            } catch (sheetErr) {
+                console.error('Sheet mode bootstrap failed:', sheetErr);
+                showToast("Error loading data: " + (sheetErr?.message || err?.message || 'Unknown error'), "error");
+            }
+        } else {
+            showToast("Error loading data: " + err.message, "error");
+        }
+    }
     finally { hideLoader(); }
 }
 
@@ -1928,16 +2377,20 @@ async function fetchAllCompaniesData(options = {}) {
 
     const c1Accounts = toList(c1Acc);
     const c2Accounts = toList(c2Acc);
-    const fData1 = toList(f1) || [];
-    const fData2 = toList(f2) || [];
+    const fData1 = toList(f1);
+    const fData2 = toList(f2);
 
     if (c1Accounts !== null) AppState.company1Accounts = c1Accounts;
     if (c2Accounts !== null) AppState.company2Accounts = c2Accounts;
     if (c1Acc && c1Acc.details) AppState.company1Details = c1Acc.details;
     if (c2Acc && c2Acc.details) AppState.company2Details = c2Acc.details;
 
-    AppState.company1Data = applyPendingOrderOverrides(fData1, 'company1');
-    AppState.company2Data = applyPendingOrderOverrides(fData2, 'company2');
+    if (fData1 !== null) {
+        AppState.company1Data = applyPendingOrderOverrides(fData1, 'company1');
+    }
+    if (fData2 !== null) {
+        AppState.company2Data = applyPendingOrderOverrides(fData2, 'company2');
+    }
 
     if (refreshArchiveMonths) {
         try {
@@ -2785,12 +3238,69 @@ function toggleDateDetails(dateId) {
 async function apiRequest(payload) {
     const action = payload?.action;
     const companyId = payload?.companyId || AppState.currentCompany || 'company1';
+    const readActions = new Set(['getAccounts', 'getDashboardData', 'getRemarks', 'getMoneyBackups']);
+    const cacheKey = `${action}::${companyId}::${String(payload?.month || '')}`;
+    if (readActions.has(action)) {
+        const cached = _apiReadCache.get(cacheKey);
+        if (cached && (Date.now() - cached.ts) < READ_CACHE_TTL_MS) {
+            return cached.value;
+        }
+    }
+    if (isFirestoreQuotaBlocked()) {
+        const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
+        if (sheetRead) return sheetRead;
+        if (action === 'submitOrders') {
+            applyOptimisticOrdersBatch(payload.date, payload.orders || [], companyId);
+            const allRows = getLocalOrderRowsForDate(payload.date, companyId);
+            await syncOrdersDirectToSheet(payload.date, allRows.length ? allRows : (payload.orders || []), companyId, 'quota_sheet_mode_submit');
+            return { success: true, message: 'Saved to Google Sheet (quota mode)' };
+        }
+        if (action === 'updateOrder') {
+            const accountName = resolveAccountNameForSheet(payload.accountId, companyId) || payload.accountId;
+            applyOptimisticOrderUpdate(payload.date, payload.accountId, accountName, payload.value, companyId);
+            const allRows = getLocalOrderRowsForDate(payload.date, companyId);
+            await syncOrdersDirectToSheet(
+                payload.date,
+                allRows.length ? allRows : [{ accountId: payload.accountId, accountName, meesho: payload.value }],
+                companyId,
+                'quota_sheet_mode_update'
+            );
+            return { success: true, message: 'Saved to Google Sheet (quota mode)' };
+        }
+        if (action === 'saveRemark') {
+            await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
+            if (!_remarkCache) _remarkCache = {};
+            _remarkCache[payload.date] = payload.remark || '';
+            return { success: true, message: 'Remark saved to Google Sheet (quota mode)' };
+        }
+        if (action === 'addAccount' || action === 'editAccount' || action === 'deleteAccount' || action === 'updateAccountOrder') {
+            const passPayload = { ...payload, action, companyId };
+            const sheetRes = await sheetsApiRequest(passPayload);
+            return sheetRes && typeof sheetRes === 'object' ? sheetRes : { success: true };
+        }
+        const cached = buildCachedApiResult(action, companyId);
+        if (cached) return cached;
+        if (!readActions.has(action)) {
+            throw new Error('Firestore quota exceeded. Please retry after cooldown.');
+        }
+    }
     try {
         let result;
         let orderSheetSyncWarning = '';
         switch (action) {
             case 'getAccounts': result = await FirebaseService.getAccounts(companyId); break;
-            case 'getDashboardData': result = await FirebaseService.getOrders(companyId, payload.month); break;
+            case 'getDashboardData': {
+                result = await FirebaseService.getOrders(companyId, payload.month);
+                try {
+                    const sheetRes = await sheetsApiRequest({ action: 'getDashboardData', companyId, month: payload?.month || '' });
+                    const sheetRows = filterRecentRows(sheetRes?.data || [], SHEETS_FALLBACK_DAYS).map(r => ({ ...r, companyId }));
+                    const firebaseRows = Array.isArray(result?.data) ? result.data : [];
+                    result = { ...(result || {}), success: true, data: mergeOrderRowsUnique(firebaseRows, sheetRows) };
+                } catch (sheetMergeErr) {
+                    console.warn('Non-blocking: sheet merge failed for getDashboardData', sheetMergeErr);
+                }
+                break;
+            }
             case 'submitOrders':
                 result = await FirebaseService.submitOrders(payload.date, payload.orders, companyId);
                 if (result && result.success !== false) {
@@ -2808,11 +3318,46 @@ async function apiRequest(payload) {
                     }
                 }
                 break;
-            case 'addAccount': result = await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate); break;
-            case 'editAccount': result = await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate); break;
-            case 'deleteAccount': result = await FirebaseService.deleteAccount(payload.accountId, companyId); break;
-            case 'updateAccountOrder': result = await FirebaseService.updateAccountOrder(payload.orderedAccounts, companyId); break;
-            case 'saveRemark': result = await FirebaseService.saveRemark(payload.date, payload.remark); break;
+            case 'addAccount':
+                result = await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+                if (result && result.success !== false) {
+                    try {
+                        await sheetsApiRequest({ action: 'addAccount', accountName: payload.accountName, companyId, mobile: payload.mobile, gstin: payload.gstin, rechargeDate: payload.rechargeDate });
+                    } catch (e) { scheduleBackgroundSheetBackup('addAccount'); }
+                }
+                break;
+            case 'editAccount':
+                result = await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+                if (result && result.success !== false) {
+                    try {
+                        await sheetsApiRequest({ action: 'editAccount', accountId: payload.accountId, newName: payload.newName, companyId, mobile: payload.mobile, gstin: payload.gstin, rechargeDate: payload.rechargeDate });
+                    } catch (e) { scheduleBackgroundSheetBackup('editAccount'); }
+                }
+                break;
+            case 'deleteAccount':
+                result = await FirebaseService.deleteAccount(payload.accountId, companyId);
+                if (result && result.success !== false) {
+                    try {
+                        await sheetsApiRequest({ action: 'deleteAccount', accountId: payload.accountId, companyId });
+                    } catch (e) { scheduleBackgroundSheetBackup('deleteAccount'); }
+                }
+                break;
+            case 'updateAccountOrder':
+                result = await FirebaseService.updateAccountOrder(payload.orderedAccounts, companyId);
+                if (result && result.success !== false) {
+                    try {
+                        await sheetsApiRequest({ action: 'updateAccountOrder', orderedAccounts: payload.orderedAccounts, companyId });
+                    } catch (e) { scheduleBackgroundSheetBackup('updateAccountOrder'); }
+                }
+                break;
+            case 'saveRemark':
+                result = await FirebaseService.saveRemark(payload.date, payload.remark);
+                if (result && result.success !== false) {
+                    try {
+                        await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
+                    } catch (e) { scheduleBackgroundSheetBackup('saveRemark'); }
+                }
+                break;
             case 'getRemarks': result = await FirebaseService.getRemarks(); break;
             case 'updateOrder':
                 result = await FirebaseService.updateOrder(payload.date, payload.accountId, payload.field, payload.value, companyId);
@@ -2851,8 +3396,86 @@ async function apiRequest(payload) {
         if (orderSheetSyncWarning && result && typeof result === 'object') {
             result.sheetSyncWarning = orderSheetSyncWarning;
         }
+        if (readActions.has(action)) {
+            _apiReadCache.set(cacheKey, { ts: Date.now(), value: result });
+        }
+        if (!readActions.has(action)) {
+            _apiReadCache.clear();
+        }
+        if (_useSheetsFallbackMode && !isFirestoreQuotaBlocked() && readActions.has(action)) {
+            disableSheetsFallbackMode();
+        }
         return result;
     } catch (err) {
+        if (isFirestoreQuotaError(err)) {
+            activateFirestoreQuotaCooldown(err);
+            const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
+            if (sheetRead) return sheetRead;
+            if (action === 'submitOrders') {
+                applyOptimisticOrdersBatch(payload.date, payload.orders || [], companyId);
+                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
+                await syncOrdersDirectToSheet(payload.date, allRows.length ? allRows : (payload.orders || []), companyId, 'quota_sheet_mode_submit');
+                return { success: true, message: 'Saved to Google Sheet (quota mode)' };
+            }
+            if (action === 'updateOrder') {
+                const accountName = resolveAccountNameForSheet(payload.accountId, companyId) || payload.accountId;
+                applyOptimisticOrderUpdate(payload.date, payload.accountId, accountName, payload.value, companyId);
+                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
+                await syncOrdersDirectToSheet(
+                    payload.date,
+                    allRows.length ? allRows : [{ accountId: payload.accountId, accountName, meesho: payload.value }],
+                    companyId,
+                    'quota_sheet_mode_update'
+                );
+                return { success: true, message: 'Saved to Google Sheet (quota mode)' };
+            }
+            if (action === 'saveRemark') {
+                await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
+                if (!_remarkCache) _remarkCache = {};
+                _remarkCache[payload.date] = payload.remark || '';
+                return { success: true, message: 'Remark saved to Google Sheet (quota mode)' };
+            }
+            if (readActions.has(action)) {
+                try {
+                    await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
+                } catch (sheetErr) {
+                    console.warn('Sheet-mode load failed after quota error:', sheetErr);
+                }
+            }
+            const cached = buildCachedApiResult(action, companyId);
+            if (cached) return cached;
+        }
+        if (isFirestoreUnavailableError(err)) {
+            enableSheetsFallbackMode();
+            const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
+            if (sheetRead) return sheetRead;
+            if (action === 'submitOrders') {
+                applyOptimisticOrdersBatch(payload.date, payload.orders || [], companyId);
+                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
+                await syncOrdersDirectToSheet(payload.date, allRows.length ? allRows : (payload.orders || []), companyId, 'down_sheet_mode_submit');
+                return { success: true, message: 'Saved to Google Sheet (server down mode)' };
+            }
+            if (action === 'updateOrder') {
+                const accountName = resolveAccountNameForSheet(payload.accountId, companyId) || payload.accountId;
+                applyOptimisticOrderUpdate(payload.date, payload.accountId, accountName, payload.value, companyId);
+                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
+                await syncOrdersDirectToSheet(
+                    payload.date,
+                    allRows.length ? allRows : [{ accountId: payload.accountId, accountName, meesho: payload.value }],
+                    companyId,
+                    'down_sheet_mode_update'
+                );
+                return { success: true, message: 'Saved to Google Sheet (server down mode)' };
+            }
+            if (action === 'saveRemark') {
+                await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
+                if (!_remarkCache) _remarkCache = {};
+                _remarkCache[payload.date] = payload.remark || '';
+                return { success: true, message: 'Remark saved to Google Sheet (server down mode)' };
+            }
+            const cached = buildCachedApiResult(action, companyId);
+            if (cached) return cached;
+        }
         console.error(`Firebase ${action} error:`, err);
         throw err;
     }
@@ -3139,6 +3762,11 @@ function initSyncIndicator() {
                 scheduleBackgroundSheetBackup('firestore_saved');
             }
         }
+        if (status === 'error' && pending > 0 && !isFirestoreQuotaBlocked()) {
+            setTimeout(() => {
+                FirebaseService.flushWrites().catch(() => null);
+            }, 1800);
+        }
         if (el) {
             el.className = 'sync-indicator sync-' + status;
             const icons = {
@@ -3235,8 +3863,16 @@ function showToast(message, type = "success") {
         }, 3500);
     }
 }
-function showLoader() { document.getElementById('global-loader').classList.remove('hidden'); }
-function hideLoader() { document.getElementById('global-loader').classList.add('hidden'); }
+function showLoader(message = 'Loading...') {
+    const el = document.getElementById('global-loader');
+    if (el) el.classList.remove('hidden');
+    setLoaderStatus(message);
+}
+function hideLoader() {
+    const el = document.getElementById('global-loader');
+    if (el) el.classList.add('hidden');
+    setLoaderStatus('Loading...');
+}
 
 // Global exports
 window.app = { navigateTo };
@@ -3421,7 +4057,10 @@ async function renderDataSheet() {
     if (!thead || !tbody) return;
     
     const companyFilter = document.getElementById('sheet-company-filter').value;
-    const monthFilter = document.getElementById('sheet-month-filter').value;
+    const monthFilterEl = document.getElementById('sheet-month-filter');
+    const rawMonthFilter = monthFilterEl ? String(monthFilterEl.value || '').trim() : '';
+    const monthFilter = rawMonthFilter || 'all';
+    if (monthFilterEl && !rawMonthFilter) monthFilterEl.value = 'all';
     
     const sheetTitle = document.getElementById('sheet-title');
     if (sheetTitle) {
@@ -3589,7 +4228,7 @@ async function renderDataSheet() {
             
             // Buffer the write to Firebase (flushes after APP_CONFIG.writeBufferMs)
             FirebaseService.bufferWrite(`remark_${date}`, () =>
-                FirebaseService.saveRemark(date, val)
+                apiRequest({ action: 'saveRemark', date, remark: val, companyId: AppState.currentCompany })
             );
             scheduleQuickWriteFlush(1200);
         });
@@ -3609,18 +4248,8 @@ async function renderDataSheet() {
             
             // Buffer the write to Firebase
             FirebaseService.bufferWrite(`order_${date}_${accountId}_${field}`, () =>
-                FirebaseService.updateOrder(date, accountId, field, value, company)
+                apiRequest({ action: 'updateOrder', date, accountId, field, value, companyId: company })
             );
-            const accountName = String(inp.dataset.accountName || '').trim() || resolveAccountNameForSheet(accountId, company);
-            syncOrderDateForAllCompanies(
-                date,
-                { companyId: company, rows: [{ accountId, accountName, meesho: value }] },
-                'updateOrder'
-            ).catch((sheetErr) => {
-                console.warn('Inline order sheet sync failed, queued for full backup:', sheetErr);
-                _pendingDataChangesForBackup = true;
-                scheduleBackgroundSheetBackup('updateOrder');
-            });
             scheduleQuickWriteFlush(1200);
         });
     });
