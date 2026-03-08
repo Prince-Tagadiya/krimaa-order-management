@@ -5272,9 +5272,24 @@ async function renderSizePricesPage() {
         return `${datePart} ${timePart}`;
     };
 
+    let shouldRestoreRecycleAfterHistoryClose = false;
+    const closeHistoryModal = () => {
+        historyModal.classList.remove('show');
+        if (shouldRestoreRecycleAfterHistoryClose) {
+            recycleModal.classList.add('show');
+            shouldRestoreRecycleAfterHistoryClose = false;
+        }
+    };
+
     const openHistoryModal = (rawKey) => {
         const key = String(rawKey || '').trim().toUpperCase();
         const points = Array.isArray(historyMap[key]) ? historyMap[key] : [];
+        if (recycleModal.classList.contains('show')) {
+            shouldRestoreRecycleAfterHistoryClose = true;
+            recycleModal.classList.remove('show');
+        } else {
+            shouldRestoreRecycleAfterHistoryClose = false;
+        }
         historyTitle.textContent = `Price History: ${key || '-'}`;
         if (!points.length) {
             historyBody.innerHTML = '';
@@ -5301,12 +5316,12 @@ async function renderSizePricesPage() {
         historyModal.classList.add('show');
     };
     if (!historyCloseBtn.dataset.bound) {
-        historyCloseBtn.addEventListener('click', () => historyModal.classList.remove('show'));
+        historyCloseBtn.addEventListener('click', closeHistoryModal);
         historyCloseBtn.dataset.bound = 'true';
     }
     if (!historyModal.dataset.bound) {
         historyModal.addEventListener('click', (e) => {
-            if (e.target && e.target.id === 'size-price-history-modal') historyModal.classList.remove('show');
+            if (e.target && e.target.id === 'size-price-history-modal') closeHistoryModal();
         });
         historyModal.dataset.bound = 'true';
     }
