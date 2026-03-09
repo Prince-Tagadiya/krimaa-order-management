@@ -1,17 +1,21 @@
 // API_URL is now in env.js as SHEETS_API_URL
 
 // ===== Multi-User Auth System =====
-const USERS = (Array.isArray(window.AUTH_USERS) ? window.AUTH_USERS : [])
-    .map((u) => ({
-        username: String(u?.username || '').trim(),
-        password: String(u?.password || ''),
-        role: String(u?.role || '').trim(),
-        displayName: String(u?.displayName || u?.username || '').trim(),
-        allowedCompanies: Array.isArray(u?.allowedCompanies) && u.allowedCompanies.length
-            ? u.allowedCompanies.map(c => String(c || '').trim()).filter(Boolean)
-            : ['company1', 'company2']
-    }))
-    .filter(u => u.username && u.password && u.role);
+let USERS = [];
+function refreshUsersFromEnv() {
+    USERS = (Array.isArray(window.AUTH_USERS) ? window.AUTH_USERS : [])
+        .map((u) => ({
+            username: String(u?.username || '').trim(),
+            password: String(u?.password || ''),
+            role: String(u?.role || '').trim(),
+            displayName: String(u?.displayName || u?.username || '').trim(),
+            allowedCompanies: Array.isArray(u?.allowedCompanies) && u.allowedCompanies.length
+                ? u.allowedCompanies.map(c => String(c || '').trim()).filter(Boolean)
+                : ['company1', 'company2']
+        }))
+        .filter(u => u.username && u.password && u.role);
+    return USERS;
+}
 
 const DESIGN_PRICE_SCOPE = 'global';
 
@@ -539,9 +543,14 @@ function openReplaceFromSheetModal(defaultSelection = null) {
     });
 }
 
-document.addEventListener('DOMContentLoaded', () => { initApp(); });
+document.addEventListener('DOMContentLoaded', () => {
+    Promise.resolve(window.__envReady)
+        .catch(() => null)
+        .finally(() => { initApp(); });
+});
 
 function initApp() {
+    refreshUsersFromEnv();
     applyClientModeUI();
     restoreFirestoreQuotaCooldown();
     bootstrapSheetSyncStateFromStorage();
@@ -1881,8 +1890,9 @@ function attachEventListeners() {
     // Login
     document.getElementById('login-form').addEventListener('submit', (e) => {
         e.preventDefault();
+        refreshUsersFromEnv();
         if (!USERS.length) {
-            showToast("No dashboard users configured. Set AUTH_USERS_JSON in env and regenerate env.js.", "error");
+            showToast("No dashboard users configured. Set AUTH_USERS_JSON in hosting environment variables.", "error");
             return;
         }
         const user = document.getElementById('username').value;

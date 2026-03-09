@@ -33,6 +33,8 @@ Use env files and generate `env.js` (do not hardcode in app files).
 3. Start the app.
 4. On Vercel, set the same env variables in Project Settings → Environment Variables.
    - App loads runtime env from `/api/env.js` on deploy.
+5. On Netlify, set the same env variables in Site settings → Environment variables.
+   - App loads runtime env from `/.netlify/functions/env`.
 
 ## 4. Run the Application
 1. Open the `index.html` file in your preferred web browser. (Double click on the file).
