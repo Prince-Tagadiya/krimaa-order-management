@@ -13,8 +13,19 @@ function parseIntSafe(value, fallback) {
 
 function parseUsers(raw) {
   if (!raw) return [];
+  let value = String(raw).trim();
+  if (
+    (value.startsWith("'") && value.endsWith("'")) ||
+    (value.startsWith('"') && value.endsWith('"'))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(value);
+    if (typeof parsed === "string") {
+      const nested = JSON.parse(parsed);
+      return Array.isArray(nested) ? nested : [];
+    }
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) {
     return [];
@@ -53,6 +64,7 @@ module.exports = (req, res) => {
     `window.CLIENT_MODE = ${JSON.stringify(clientMode)};`,
     `window.CLIENT_COMPANY_NAME = ${JSON.stringify(clientCompanyName)};`,
     `window.AUTH_USERS = ${JSON.stringify(authUsers)};`,
+    `window.__AUTH_USERS_COUNT = ${authUsers.length};`,
     `window.APP_CONFIG = ${JSON.stringify(appConfig)};`
   ].join("\n");
 
