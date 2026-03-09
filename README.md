@@ -27,6 +27,7 @@ Use env files and generate `env.js` (do not hardcode in app files).
 
 1. Fill `.env` (or `.env.client1` / `.env.client2`) with Firebase + Sheets values.
    - Add dashboard users in `AUTH_USERS_JSON` (username/password/role/displayName/allowedCompanies).
+   - Do not commit real credentials in repo files; keep them only in local env or Vercel Environment Variables.
 2. Generate runtime config:
    - `./scripts/apply-env-to-config.sh .env`
 3. Start the app.

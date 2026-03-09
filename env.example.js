@@ -14,9 +14,7 @@ const FIREBASE_CONFIG = window.FIREBASE_CONFIG = {
 const SHEETS_API_URL = window.SHEETS_API_URL = "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL";
 const CLIENT_MODE = window.CLIENT_MODE = "multi_company"; // or single_company
 const CLIENT_COMPANY_NAME = window.CLIENT_COMPANY_NAME = "";
-const AUTH_USERS = window.AUTH_USERS = [
-    { username: "admin_user", password: "admin_pass", role: "admin", displayName: "Admin", allowedCompanies: ["company1", "company2"] }
-];
+const AUTH_USERS = window.AUTH_USERS = [];
 
 const APP_CONFIG = window.APP_CONFIG = {
     writeBufferMs: 600000,
