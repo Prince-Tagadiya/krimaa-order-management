@@ -263,6 +263,9 @@ function getRechargeText(rawDate) {
 }
 
 function getCompanyDisplayName(companyId = AppState.currentCompany) {
+    const singleMode = String(APP_CONFIG?.clientMode || window.CLIENT_MODE || '').trim().toLowerCase() === 'single_company';
+    const singleName = String(APP_CONFIG?.clientCompanyName || window.CLIENT_COMPANY_NAME || '').trim();
+    if (singleMode && singleName && (companyId === 'company1' || companyId === 'company2')) return singleName;
     const btn = document.querySelector(`.company-btn[data-company="${companyId}"]`);
     if (btn && btn.textContent) return btn.textContent.trim();
     if (companyId === 'company1') return 'Company 1';
@@ -270,7 +273,43 @@ function getCompanyDisplayName(companyId = AppState.currentCompany) {
     return companyId;
 }
 
+function isSingleCompanyMode() {
+    return String(APP_CONFIG?.clientMode || window.CLIENT_MODE || '').trim().toLowerCase() === 'single_company';
+}
+
+function getSingleCompanyName() {
+    return String(APP_CONFIG?.clientCompanyName || window.CLIENT_COMPANY_NAME || '').trim() || 'Company';
+}
+
+function applyClientModeUI() {
+    const singleMode = isSingleCompanyMode();
+    const accountInput = document.getElementById('new-account-name');
+    if (accountInput) accountInput.placeholder = 'e.g. Prince Tagadiya';
+
+    const companyButtons = Array.from(document.querySelectorAll('.company-btn'));
+    const company1Btn = companyButtons.find(b => b.dataset.company === 'company1');
+    const company2Btn = companyButtons.find(b => b.dataset.company === 'company2');
+    const sheetCompanyFilter = document.getElementById('sheet-company-filter');
+
+    if (!singleMode) return;
+
+    const name = getSingleCompanyName();
+    if (company1Btn) company1Btn.textContent = name;
+    if (company2Btn) company2Btn.style.display = 'none';
+    AppState.currentCompany = 'company1';
+    localStorage.setItem('selectedCompany', 'company1');
+
+    if (sheetCompanyFilter) {
+        sheetCompanyFilter.innerHTML = `<option value="company1">${name}</option>`;
+        sheetCompanyFilter.value = 'company1';
+        sheetCompanyFilter.disabled = true;
+        sheetCompanyFilter.style.pointerEvents = 'none';
+        sheetCompanyFilter.style.opacity = '0.9';
+    }
+}
+
 function getAllowedCompanies() {
+    if (isSingleCompanyMode()) return ['company1'];
     const allowed = AppState.currentUser?.allowedCompanies;
     if (Array.isArray(allowed) && allowed.length > 0) return allowed;
     return ['company1', 'company2'];
@@ -503,6 +542,7 @@ function openReplaceFromSheetModal(defaultSelection = null) {
 document.addEventListener('DOMContentLoaded', () => { initApp(); });
 
 function initApp() {
+    applyClientModeUI();
     restoreFirestoreQuotaCooldown();
     bootstrapSheetSyncStateFromStorage();
     bindSheetSyncLifecycleEvents();
@@ -630,6 +670,10 @@ function initApp() {
     const savedCompany = localStorage.getItem('selectedCompany');
     if (savedCompany) {
         AppState.currentCompany = savedCompany;
+    }
+    if (isSingleCompanyMode()) {
+        AppState.currentCompany = 'company1';
+        localStorage.setItem('selectedCompany', 'company1');
     }
     if (AppState.currentUser && !isCompanyAllowed(AppState.currentCompany)) {
         AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
@@ -4073,7 +4117,12 @@ function openReorderColumnsModal() {
     const list = document.getElementById('reorder-account-list');
     if (!modal || !list) return;
     
-    const companyFilter = document.getElementById('sheet-company-filter').value;
+    const companyFilterEl = document.getElementById('sheet-company-filter');
+    let companyFilter = companyFilterEl ? companyFilterEl.value : 'all';
+    if (isSingleCompanyMode()) {
+        companyFilter = 'company1';
+        if (companyFilterEl) companyFilterEl.value = 'company1';
+    }
     let accounts = [];
     if (companyFilter === 'company1') {
         accounts = [...AppState.company1Accounts];
@@ -4259,6 +4308,13 @@ async function renderDataSheet() {
                         <i class='bx bx-cloud-download'></i> Reload from Firestore
                     </button>
                     <p class="text-xs text-muted mt-2">Data source: Firestore (live).</p>
+                </div>
+            `;
+        } else if (accounts.length === 0) {
+            emptyMsg.innerHTML = `
+                <div class="p-8 text-center text-muted">
+                    <p class="mb-2">No accounts found.</p>
+                    <button class="btn btn-outline" onclick="window.app.navigateTo('add-account')">Add New Account</button>
                 </div>
             `;
         } else {
@@ -5212,8 +5268,9 @@ async function renderSizePricesPage() {
         AppState.designPricesByCompany[companyId] = map;
         AppState.designPrices = map;
     } catch (e) {
-        console.error('Failed to load size prices:', e);
-        showToast('Failed to load size prices', 'error');
+        console.warn('Size prices fallback: using cached/empty state', e);
+        map = AppState.designPricesByCompany[companyId] || AppState.designPrices || {};
+        rawHistoryMap = {};
     }
 
     const tbody = document.getElementById('size-price-tbody');
