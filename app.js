@@ -1,12 +1,17 @@
-// API_URL is now in config.js as SHEETS_API_URL
+// API_URL is now in env.js as SHEETS_API_URL
 
 // ===== Multi-User Auth System =====
-const USERS = [
-    { username: 'Krimaa', password: 'Krimaa4484', role: 'admin', displayName: 'Admin', allowedCompanies: ['company1', 'company2'] },
-    { username: 'Krimaa_Users', password: 'Krimaa123', role: 'order', displayName: 'Order Entry', allowedCompanies: ['company1', 'company2'] },
-    { username: 'Dhyan_Order', password: 'Dhyan123', role: 'order_c2', displayName: 'Dhyan Order', allowedCompanies: ['company2'] },
-    { username: 'dev', password: 'dev123', role: 'dev', displayName: 'Developer', allowedCompanies: ['company1', 'company2'] }
-];
+const USERS = (Array.isArray(window.AUTH_USERS) ? window.AUTH_USERS : [])
+    .map((u) => ({
+        username: String(u?.username || '').trim(),
+        password: String(u?.password || ''),
+        role: String(u?.role || '').trim(),
+        displayName: String(u?.displayName || u?.username || '').trim(),
+        allowedCompanies: Array.isArray(u?.allowedCompanies) && u.allowedCompanies.length
+            ? u.allowedCompanies.map(c => String(c || '').trim()).filter(Boolean)
+            : ['company1', 'company2']
+    }))
+    .filter(u => u.username && u.password && u.role);
 
 const DESIGN_PRICE_SCOPE = 'global';
 
@@ -324,6 +329,19 @@ function setCompanyButtonsDisabled(disabled) {
         btn.disabled = disabled;
         btn.classList.toggle('is-disabled', disabled);
     });
+}
+
+function applyCurrentCompanySnapshotFromMemory() {
+    const companyId = String(AppState.currentCompany || 'company1').trim() || 'company1';
+    if (companyId === 'company2') {
+        AppState.accounts = Array.isArray(AppState.company2Accounts) ? [...AppState.company2Accounts] : [];
+        AppState.accountDetails = Array.isArray(AppState.company2Details) ? [...AppState.company2Details] : [];
+        AppState.dashboardData = Array.isArray(AppState.company2Data) ? [...AppState.company2Data] : [];
+    } else {
+        AppState.accounts = Array.isArray(AppState.company1Accounts) ? [...AppState.company1Accounts] : [];
+        AppState.accountDetails = Array.isArray(AppState.company1Details) ? [...AppState.company1Details] : [];
+        AppState.dashboardData = Array.isArray(AppState.company1Data) ? [...AppState.company1Data] : [];
+    }
 }
 
 function setOrderDateDefaults(force = false) {
@@ -1601,28 +1619,50 @@ async function switchCompany(previousCompany = '') {
     showProgressToast(`Switching to ${companyName}...`);
 
     try {
-        // Force flush before switching (just to be safe although firebase queues these up beautifully)
+        // Soft flush with short timeout so switch remains instant.
         if (typeof FirebaseService !== 'undefined') {
-            await FirebaseService.flushWrites();
+            await Promise.race([
+                FirebaseService.flushWrites().catch(() => null),
+                new Promise(resolve => setTimeout(resolve, 300))
+            ]);
         }
-        
-        AppState.accounts = [];
-        AppState.dashboardData = [];
+
+        // Instant swap from in-memory company cache (no flicker).
+        applyCurrentCompanySnapshotFromMemory();
+        if (AppState.currentSection === 'dashboard') renderDashboard();
+        else if (AppState.currentSection === 'daily-order') {
+            setOrderDateDefaults();
+            renderOrderEntryTable();
+            checkExistingOrdersForDate();
+        }
+        else if (AppState.currentSection === 'add-account') renderAccountsList();
+        else if (AppState.currentSection === 'money-management') renderMoneyManagement();
+        else if (AppState.currentSection === 'money-backup') renderMoneyBackupPage();
+        else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
+        else if (AppState.currentSection === 'data-sheet') {
+            const cmFilter = document.getElementById('sheet-company-filter');
+            if (cmFilter) cmFilter.value = AppState.currentCompany;
+            populateSheetMonthFilter();
+            renderDataSheet();
+        }
+
         const isKarigarView = AppState.currentSection === 'karigar';
         if (!isKarigarView) {
-            await Promise.all([fetchAccounts(), fetchDashboardData()]);
+            await Promise.all([
+                fetchAccounts(),
+                fetchDashboardData({ skipSheetMerge: true })
+            ]);
         } else {
             // Keep karigar switch instant; refresh other sections silently in background.
             fetchAccounts().catch(() => null);
-            fetchDashboardData().catch(() => null);
+            fetchDashboardData({ skipSheetMerge: true }).catch(() => null);
         }
-        
-        // Don't block company switch for slow Excel meta-data fetch
-        // Just refresh the dashboard data which is now only Firebase current month
-        await fetchAllCompaniesData({ refreshArchiveMonths: false }).catch(e => {
+
+        // Background refresh of cross-company cache; do not block switch.
+        fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true }).catch(e => {
             console.warn('Silent update of all-company dashboard data', e);
         });
-        
+
         if (AppState.currentSection === 'dashboard') renderDashboard();
         else if (AppState.currentSection === 'daily-order') {
             setOrderDateDefaults();
@@ -1797,6 +1837,10 @@ function attachEventListeners() {
     // Login
     document.getElementById('login-form').addEventListener('submit', (e) => {
         e.preventDefault();
+        if (!USERS.length) {
+            showToast("No dashboard users configured. Set AUTH_USERS_JSON in env and regenerate env.js.", "error");
+            return;
+        }
         const user = document.getElementById('username').value;
         const pass = document.getElementById('password').value;
         
@@ -2425,9 +2469,13 @@ async function backgroundSheetsSync() {
     hideBackgroundLoader();
 }
 
-async function fetchDashboardData() {
+async function fetchDashboardData(options = {}) {
     try {
-        const res = await apiRequest({ action: 'getDashboardData', companyId: AppState.currentCompany });
+        const res = await apiRequest({
+            action: 'getDashboardData',
+            companyId: AppState.currentCompany,
+            skipSheetMerge: !!options.skipSheetMerge
+        });
         const fbData = Array.isArray(res?.data) ? res.data : [];
         AppState.dashboardData = applyPendingOrderOverrides(fbData, AppState.currentCompany);
         if (AppState.currentCompany === 'company1') AppState.company1Data = AppState.dashboardData;
@@ -2440,6 +2488,7 @@ async function fetchDashboardData() {
 
 async function fetchAllCompaniesData(options = {}) {
     const refreshArchiveMonths = !!options.refreshArchiveMonths;
+    const skipSheetMerge = !!options.skipSheetMerge;
     const toList = (res) => {
         if (!res || res.success === false) return null;
         if (Array.isArray(res?.data)) return res.data;
@@ -2450,8 +2499,8 @@ async function fetchAllCompaniesData(options = {}) {
     const [c1Acc, c2Acc, f1, f2] = await Promise.all([
         apiRequest({ action: 'getAccounts', companyId: 'company1' }).catch(() => null),
         apiRequest({ action: 'getAccounts', companyId: 'company2' }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company1' }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company2' }).catch(() => null)
+        apiRequest({ action: 'getDashboardData', companyId: 'company1', skipSheetMerge }).catch(() => null),
+        apiRequest({ action: 'getDashboardData', companyId: 'company2', skipSheetMerge }).catch(() => null)
     ]);
 
     const c1Accounts = toList(c1Acc);
@@ -3370,13 +3419,15 @@ async function apiRequest(payload) {
             case 'getAccounts': result = await FirebaseService.getAccounts(companyId); break;
             case 'getDashboardData': {
                 result = await FirebaseService.getOrders(companyId, payload.month);
-                try {
-                    const sheetRes = await sheetsApiRequest({ action: 'getDashboardData', companyId, month: payload?.month || '' });
-                    const sheetRows = filterRecentRows(sheetRes?.data || [], SHEETS_FALLBACK_DAYS).map(r => ({ ...r, companyId }));
-                    const firebaseRows = Array.isArray(result?.data) ? result.data : [];
-                    result = { ...(result || {}), success: true, data: mergeOrderRowsUnique(firebaseRows, sheetRows) };
-                } catch (sheetMergeErr) {
-                    console.warn('Non-blocking: sheet merge failed for getDashboardData', sheetMergeErr);
+                if (!payload?.skipSheetMerge) {
+                    try {
+                        const sheetRes = await sheetsApiRequest({ action: 'getDashboardData', companyId, month: payload?.month || '' });
+                        const sheetRows = filterRecentRows(sheetRes?.data || [], SHEETS_FALLBACK_DAYS).map(r => ({ ...r, companyId }));
+                        const firebaseRows = Array.isArray(result?.data) ? result.data : [];
+                        result = { ...(result || {}), success: true, data: mergeOrderRowsUnique(firebaseRows, sheetRows) };
+                    } catch (sheetMergeErr) {
+                        console.warn('Non-blocking: sheet merge failed for getDashboardData', sheetMergeErr);
+                    }
                 }
                 break;
             }

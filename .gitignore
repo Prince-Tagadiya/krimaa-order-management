@@ -1,5 +1,8 @@
 # Config with secrets
 .env
+.env.*
+!.env.example
+/env.js
 
 # OS files
 .DS_Store

@@ -23,19 +23,37 @@ Welcome to the Krimaa Order Management App setup. This project contains a modern
 8. Copy this URL.
 
 ## 3. Connect Frontend
-1. Open up `app.js` in this project folder.
-2. Find the very first line:
-   ```javascript
-   const API_URL = "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL";
-   ```
-3. Replace the text inside quotes with the **Web app URL** you copied in the previous step.
-4. Save `app.js`.
+Use env files and generate `env.js` (do not hardcode in app files).
+
+1. Fill `.env` (or `.env.client1` / `.env.client2`) with Firebase + Sheets values.
+   - Add dashboard users in `AUTH_USERS_JSON` (username/password/role/displayName/allowedCompanies).
+2. Generate runtime config:
+   - `./scripts/apply-env-to-config.sh .env`
+3. Start the app.
+4. On Vercel, set the same env variables in Project Settings → Environment Variables.
+   - App loads runtime env from `/api/env.js` on deploy.
 
 ## 4. Run the Application
 1. Open the `index.html` file in your preferred web browser. (Double click on the file).
-2. Login with the hardcoded credentials:
-   - **Username**: `admin`
-   - **Password**: `admin123`
+2. Login with credentials defined in `AUTH_USERS_JSON` in your selected env file.
 3. Start adding Accounts like "Anandi Fashion". The API will automatically create the required Sheets and columns in your Google Sheet!
 
 Enjoy!
+
+## Multi-client config (separate Firebase + Sheets)
+Use separate env files per client and generate `env.js` before deploy/run.
+
+1. Fill values in:
+   - `.env.client1`
+   - `.env.client2`
+2. Generate config for client 1:
+   - `./scripts/apply-env-to-config.sh .env.client1`
+3. Generate config for client 2:
+   - `./scripts/apply-env-to-config.sh .env.client2`
+
+Client mode options:
+- `CLIENT_MODE=multi_company` for normal 2-company mode
+- `CLIENT_MODE=single_company` for one-company client
+- `CLIENT_COMPANY_NAME=...` to set single-company display name
+
+This keeps the same code logic but isolates each client on their own Firebase project and Google Sheet.
