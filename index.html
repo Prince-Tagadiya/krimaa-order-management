@@ -738,7 +738,12 @@
             </div>
             <form id="karigar-upad-form">
                 <input type="hidden" id="karigar-upad-id">
-                <p class="text-sm font-bold text-main mb-2">Karigar: <span id="karigar-upad-name-display"></span></p>
+                <div class="input-group" style="margin-bottom:0.75rem;">
+                    <label>Karigar</label>
+                    <select id="karigar-upad-select" class="date-input" style="width:100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px;">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
                 <div class="input-group">
                     <label>Date</label>
                     <input type="date" id="karigar-upad-date" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>

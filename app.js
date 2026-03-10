@@ -6149,8 +6149,10 @@ function setupKarigarListeners() {
     const upadBalanceDisplay = document.getElementById('karigar-upad-balance-display');
     if (upadAmount && !upadAmount.dataset.bound) {
         upadAmount.addEventListener('input', () => {
-            const id = document.getElementById('karigar-upad-id').value;
-            const name = document.getElementById('karigar-upad-name-display').textContent;
+            const sel = document.getElementById('karigar-upad-select');
+            const id = String((sel ? sel.value : document.getElementById('karigar-upad-id')?.value) || '').trim();
+            let name = '';
+            if (sel && sel.selectedOptions && sel.selectedOptions[0]) name = String(sel.selectedOptions[0].textContent || '').trim();
             const stats = calculateKarigarBalance(id, name);
             const borrow = parseFloat(upadAmount.value) || 0;
             const newBal = stats.balance - borrow;
@@ -6277,8 +6279,14 @@ function setupKarigarListeners() {
         upadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!isAdminUser()) return showToast('Only admin can add Borrow (Upad)', 'error');
-            const rawKarigarId = document.getElementById('karigar-upad-id').value;
-            const karigarName = document.getElementById('karigar-upad-name-display').textContent;
+            const sel = document.getElementById('karigar-upad-select');
+            const rawKarigarId = String((sel ? sel.value : document.getElementById('karigar-upad-id')?.value) || '').trim();
+            let karigarName = '';
+            if (sel && sel.selectedOptions && sel.selectedOptions[0]) karigarName = String(sel.selectedOptions[0].textContent || '').trim();
+            if (!karigarName && rawKarigarId) {
+                const k = (AppState.karigars || []).find(x => String(x?.id || '').trim() === rawKarigarId);
+                karigarName = String(k?.name || '').trim();
+            }
             const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
             if (!karigarId) return showToast('Invalid karigar ID', 'error');
             const date = document.getElementById('karigar-upad-date').value;
@@ -6313,6 +6321,12 @@ function openKarigarJamaModal(id, name) {
     // Populate Karigar dropdown for bulk entry.
     const select = document.getElementById('karigar-jama-select');
     if (select) {
+        const esc = (v) => String(v ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
         const karigars = Array.isArray(AppState.karigars) ? [...AppState.karigars] : [];
         karigars.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' }));
         const safeId = String(id || '').trim();
@@ -6321,7 +6335,7 @@ function openKarigarJamaModal(id, name) {
             const kid = String(k?.id || '').trim();
             const kname = String(k?.name || '').trim();
             const sel = (kid && kid === currentVal) ? ' selected' : '';
-            return `<option value="${escapeHtml(kid)}"${sel}>${escapeHtml(kname || kid)}</option>`;
+            return `<option value="${esc(kid)}"${sel}>${esc(kname || kid)}</option>`;
         }).join('') || `<option value="">No karigars</option>`;
         if (safeId) select.value = safeId;
 
@@ -6379,8 +6393,50 @@ function openKarigarJamaModal(id, name) {
 function openKarigarUpadModal(id, name) {
     if (!isAdminUser()) return showToast('Only admin can add Borrow (Upad)', 'error');
     const stats = calculateKarigarBalance(id, name);
-    document.getElementById('karigar-upad-id').value = id;
-    document.getElementById('karigar-upad-name-display').textContent = name;
+    const sel = document.getElementById('karigar-upad-select');
+    if (sel) {
+        const esc = (v) => String(v ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        const karigars = Array.isArray(AppState.karigars) ? [...AppState.karigars] : [];
+        karigars.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' }));
+        const safeId = String(id || '').trim();
+        const currentVal = safeId || String(sel.value || '').trim();
+        sel.innerHTML = karigars.map(k => {
+            const kid = String(k?.id || '').trim();
+            const kname = String(k?.name || '').trim();
+            const selected = (kid && kid === currentVal) ? ' selected' : '';
+            return `<option value="${esc(kid)}"${selected}>${esc(kname || kid)}</option>`;
+        }).join('') || `<option value="">No karigars</option>`;
+        if (safeId) sel.value = safeId;
+
+        const syncHidden = () => {
+            const v = String(sel.value || '').trim();
+            const hid = document.getElementById('karigar-upad-id');
+            if (hid) hid.value = v;
+        };
+        if (!sel.dataset.bound) {
+            sel.addEventListener('change', () => {
+                syncHidden();
+                // Update the summary when switching karigar.
+                const curId = String(sel.value || '').trim();
+                const curName = String(sel.selectedOptions?.[0]?.textContent || '').trim();
+                const s = calculateKarigarBalance(curId, curName);
+                document.getElementById('karigar-upad-jama-display').textContent = '₹' + s.totalJama.toFixed(2);
+                const bd = document.getElementById('karigar-upad-balance-display');
+                bd.textContent = '₹' + s.balance.toFixed(2);
+                bd.classList.remove('text-danger', 'text-primary', 'text-success');
+                if (s.balance < 0) bd.classList.add('text-danger'); else bd.classList.add('text-primary');
+            });
+            sel.dataset.bound = 'true';
+        }
+        syncHidden();
+    } else {
+        document.getElementById('karigar-upad-id').value = id;
+    }
     document.getElementById('karigar-upad-date').value = getTodayISODate();
     document.getElementById('karigar-upad-time').value = getCurrentLocalTimeInput();
     document.getElementById('karigar-upad-amount').value = '';
