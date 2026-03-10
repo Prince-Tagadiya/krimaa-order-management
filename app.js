@@ -6195,8 +6195,16 @@ function setupKarigarListeners() {
     if (jamaForm && !jamaForm.dataset.bound) {
         jamaForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const rawKarigarId = document.getElementById('karigar-jama-id').value;
-            const karigarName = document.getElementById('karigar-jama-name-display').textContent;
+            const select = document.getElementById('karigar-jama-select');
+            const rawKarigarId = String((select ? select.value : document.getElementById('karigar-jama-id')?.value) || '').trim();
+            let karigarName = '';
+            if (select && select.selectedOptions && select.selectedOptions[0]) {
+                karigarName = String(select.selectedOptions[0].textContent || '').trim();
+            }
+            if (!karigarName && rawKarigarId) {
+                const k = (AppState.karigars || []).find(x => String(x?.id || '').trim() === rawKarigarId);
+                karigarName = String(k?.name || '').trim();
+            }
             const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
             if (!karigarId) return showToast('Invalid karigar ID', 'error');
             const date = document.getElementById('karigar-jama-date').value;
@@ -6208,6 +6216,9 @@ function setupKarigarListeners() {
             const upadAmount = isAdminUser() ? (document.getElementById('karigar-jama-upad').value || 0) : 0;
             const transactionDateTime = combineDateAndTimeToISO(date, time);
             if (!transactionDateTime) return showToast('Invalid date/time', 'error');
+
+            const bulkMode = !!document.getElementById('karigar-jama-bulk-mode')?.checked;
+            const autoNext = !!document.getElementById('karigar-jama-auto-next')?.checked;
             
             showLoader();
             try {
@@ -6219,11 +6230,41 @@ function setupKarigarListeners() {
                 });
                 _pendingDataChangesForBackup = true;
                 scheduleBackgroundSheetBackup('addKarigarJama');
-                document.getElementById('karigar-jama-modal').classList.remove('show');
-                showToast("Maal (Jama) added successfully!", "success");
+                showToast("Maal (Jama) saved!", "success");
 
-                invalidateKarigarCache();
-                await renderKarigarPage(true);
+                if (bulkMode) {
+                    // Prepare next entry without closing popup.
+                    document.getElementById('karigar-jama-design').value = '';
+                    document.getElementById('karigar-jama-size').value = '';
+                    document.getElementById('karigar-jama-pic').value = '';
+                    document.getElementById('karigar-jama-price').value = '';
+                    if (isAdminUser()) document.getElementById('karigar-jama-upad').value = '';
+                    document.getElementById('karigar-jama-total-display').textContent = '0';
+                    // Keep same date; refresh time to now for convenience.
+                    const timeEl = document.getElementById('karigar-jama-time');
+                    if (timeEl) timeEl.value = getCurrentLocalTimeInput();
+
+                    if (autoNext && select && select.options && select.options.length > 0) {
+                        const idx = Math.max(0, select.selectedIndex);
+                        const nextIdx = (idx + 1) % select.options.length;
+                        select.selectedIndex = nextIdx;
+                        // Sync hidden id (if any legacy paths read it)
+                        const hid = document.getElementById('karigar-jama-id');
+                        if (hid) hid.value = String(select.value || '').trim();
+                    }
+
+                    // Refresh background data but keep modal open.
+                    invalidateKarigarCache();
+                    await renderKarigarPage(true);
+                    document.getElementById('karigar-jama-modal').classList.add('show');
+                    setTimeout(() => {
+                        document.getElementById('karigar-jama-design')?.focus();
+                    }, 0);
+                } else {
+                    document.getElementById('karigar-jama-modal').classList.remove('show');
+                    invalidateKarigarCache();
+                    await renderKarigarPage(true);
+                }
             } catch (err) { showToast("Failed to add", "error"); }
             finally { hideLoader(); }
         });
@@ -6269,8 +6310,35 @@ function setupKarigarListeners() {
 }
 
 function openKarigarJamaModal(id, name) {
-    document.getElementById('karigar-jama-id').value = id;
-    document.getElementById('karigar-jama-name-display').textContent = name;
+    // Populate Karigar dropdown for bulk entry.
+    const select = document.getElementById('karigar-jama-select');
+    if (select) {
+        const karigars = Array.isArray(AppState.karigars) ? [...AppState.karigars] : [];
+        karigars.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' }));
+        const safeId = String(id || '').trim();
+        const currentVal = safeId || String(select.value || '').trim();
+        select.innerHTML = karigars.map(k => {
+            const kid = String(k?.id || '').trim();
+            const kname = String(k?.name || '').trim();
+            const sel = (kid && kid === currentVal) ? ' selected' : '';
+            return `<option value="${escapeHtml(kid)}"${sel}>${escapeHtml(kname || kid)}</option>`;
+        }).join('') || `<option value="">No karigars</option>`;
+        if (safeId) select.value = safeId;
+
+        const syncHidden = () => {
+            const v = String(select.value || '').trim();
+            const hid = document.getElementById('karigar-jama-id');
+            if (hid) hid.value = v;
+        };
+        if (!select.dataset.bound) {
+            select.addEventListener('change', syncHidden);
+            select.dataset.bound = 'true';
+        }
+        syncHidden();
+    }
+    if (!select) {
+        document.getElementById('karigar-jama-id').value = String(id || '').trim();
+    }
     document.getElementById('karigar-jama-date').value = getTodayISODate();
     document.getElementById('karigar-jama-time').value = getCurrentLocalTimeInput();
     document.getElementById('karigar-jama-design').value = '';
@@ -6301,6 +6369,11 @@ function openKarigarJamaModal(id, name) {
     }
     document.getElementById('karigar-jama-total-display').textContent = '0';
     document.getElementById('karigar-jama-modal').classList.add('show');
+
+    // Bulk entry UX: focus design field immediately.
+    setTimeout(() => {
+        document.getElementById('karigar-jama-design')?.focus();
+    }, 0);
 }
 
 function openKarigarUpadModal(id, name) {
