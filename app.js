@@ -5988,15 +5988,36 @@ function setupKarigarListeners() {
     };
     if (!window.__karigarEscShortcutBound) {
         document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape') return;
-            // Close only Karigar modals, topmost-first.
             const ids = ['karigar-history-modal', 'karigar-upad-modal', 'karigar-jama-modal', 'karigar-create-modal'];
-            for (const id of ids) {
-                const m = document.getElementById(id);
-                if (m && m.classList.contains('show')) {
-                    e.preventDefault();
-                    m.classList.remove('show');
-                    break;
+
+            // Esc closes topmost Karigar modal.
+            if (e.key === 'Escape') {
+                for (const id of ids) {
+                    const m = document.getElementById(id);
+                    if (m && m.classList.contains('show')) {
+                        e.preventDefault();
+                        m.classList.remove('show');
+                        break;
+                    }
+                }
+                return;
+            }
+
+            // Enter closes read-only Karigar modals (no form), when not typing in a field/button.
+            if (e.key === 'Enter') {
+                if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+                const t = e.target;
+                const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
+                if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'A'].includes(tag)) return;
+                for (const id of ids) {
+                    const m = document.getElementById(id);
+                    if (m && m.classList.contains('show')) {
+                        // Only close if this modal doesn't contain a form (read-only modal)
+                        if (m.querySelector('form')) break;
+                        e.preventDefault();
+                        m.classList.remove('show');
+                        break;
+                    }
                 }
             }
         });
