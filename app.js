@@ -230,11 +230,12 @@ function normalizeKarigarNameKey(name) {
 function getKarigarTransactionsFor(karigarId) {
     const targetId = String(karigarId || '').trim();
     if (!targetId) return [];
+    const byId = AppState.karigarTransactionsById;
+    if (byId && typeof byId === 'object' && Array.isArray(byId[targetId])) {
+        return byId[targetId];
+    }
     return (AppState.karigarTransactions || [])
-        .filter(t => {
-            const txId = String(t.karigarId || '').trim();
-            return txId && txId === targetId;
-        })
+        .filter(t => String(t.karigarId || '').trim() === targetId)
         .sort((a, b) => getKarigarTxTimestampMs(b) - getKarigarTxTimestampMs(a));
 }
 
@@ -5718,6 +5719,7 @@ async function loadKarigarData(forceReload = false) {
     if (!forceReload && cached) {
         AppState.karigars = cached.karigars || [];
         AppState.karigarTransactions = cached.transactions || [];
+        rebuildKarigarComputedCache();
         AppState.designPrices = cached.designPrices || {};
         AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = AppState.designPrices;
         AppState.designPriceHistoryByCompany[DESIGN_PRICE_SCOPE] = cached.designPriceHistory || {};
@@ -5763,6 +5765,7 @@ async function loadKarigarData(forceReload = false) {
                     };
                 })
                 .sort((a, b) => getKarigarTxTimestampMs(b) - getKarigarTxTimestampMs(a));
+            rebuildKarigarComputedCache();
         }
         if (pRes.success) {
             AppState.designPrices = pRes.data || {};
@@ -5793,8 +5796,66 @@ function resolveKarigarIdFromState(karigarId, karigarName) {
     return '';
 }
 
+function rebuildKarigarComputedCache() {
+    const txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    const byId = {};
+    const statsById = {};
+    const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const toAmount = (v) => {
+        const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    for (const t of txs) {
+        const id = String(t?.karigarId || '').trim();
+        if (!id) continue;
+        if (!byId[id]) byId[id] = [];
+        byId[id].push(t);
+
+        if (!statsById[id]) {
+            statsById[id] = { totalJama: 0, totalUpad: 0, totalPics: 0, lastTx: null };
+        }
+        const s = statsById[id];
+        const type = String(t?.type || '').trim().toLowerCase();
+        if (type === 'jama') {
+            s.totalJama = round2(s.totalJama + toAmount(t.total));
+            s.totalUpad = round2(s.totalUpad + toAmount(t.upadAmount));
+            const pics = parseInt(String(t.pic ?? '').replace(/[^0-9-]/g, ''), 10);
+            if (Number.isFinite(pics) && pics > 0) s.totalPics += pics;
+        } else if (type === 'upad') {
+            s.totalUpad = round2(s.totalUpad + toAmount(t.amount));
+        }
+
+        const curTs = getKarigarTxTimestampMs(t);
+        const prevTs = s.lastTx ? getKarigarTxTimestampMs(s.lastTx) : -1;
+        if (!s.lastTx || curTs > prevTs) s.lastTx = t;
+    }
+
+    Object.keys(byId).forEach(id => {
+        byId[id].sort((a, b) => getKarigarTxTimestampMs(b) - getKarigarTxTimestampMs(a));
+    });
+
+    Object.keys(statsById).forEach(id => {
+        const s = statsById[id];
+        s.balance = round2((s.totalJama || 0) - (s.totalUpad || 0));
+    });
+
+    AppState.karigarTransactionsById = byId;
+    AppState.karigarStatsById = statsById;
+}
+
 function calculateKarigarBalance(karigarId, karigarName) {
     if (!karigarId) return { totalJama: 0, totalUpad: 0, totalPics: 0, balance: 0, lastTx: null };
+    const s = AppState.karigarStatsById?.[String(karigarId || '').trim()];
+    if (s) {
+        return {
+            totalJama: s.totalJama || 0,
+            totalUpad: s.totalUpad || 0,
+            totalPics: s.totalPics || 0,
+            balance: s.balance || 0,
+            lastTx: s.lastTx || null
+        };
+    }
     const tx = getKarigarTransactionsFor(karigarId);
     const toAmount = (v) => {
         const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
@@ -6579,6 +6640,7 @@ async function deleteKarigarHistory(txId, karigarId, karigarName) {
         
         // Remove locally without full fetch
         AppState.karigarTransactions = AppState.karigarTransactions.filter(t => t.id !== txId);
+        rebuildKarigarComputedCache();
         invalidateKarigarCache();
         
         // Refresh the open modal and background grid immediately
@@ -6708,6 +6770,7 @@ async function confirmKarigarMonthlyReset(targetCompanyId = '') {
             // Update UI & memory state
             if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
                 AppState.karigarTransactions = [];
+                rebuildKarigarComputedCache();
             }
             invalidateKarigarCache(safeCompanyId);
             const currentMonth = getTodayISODate().substring(0, 7);

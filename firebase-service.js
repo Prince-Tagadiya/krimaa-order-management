@@ -1735,80 +1735,39 @@ const FirebaseService = (() => {
     async function getKarigarTransactions(companyId = 'company1') {
         init();
         const safeCompanyId = String(companyId || 'company1').trim();
-        if (Object.keys(_allKarigarsMap).length === 0) {
+        // Fast path: query by companyId. Avoid doing any writes during read (saves quota + boosts speed).
+        let snap = null;
+        try {
+            snap = await db.collection('karigar_transactions')
+                .where('companyId', '==', safeCompanyId)
+                .get();
+        } catch (e) {
+            console.warn('Fast karigar tx query failed, falling back to full scan:', e);
+        }
+
+        // If companyId was missing in legacy rows, fast query might return empty.
+        // Fallback scan is still read-only and happens only when needed.
+        if (!snap) {
+            snap = await db.collection('karigar_transactions').get();
+        } else if (snap.empty) {
             try {
-                await Promise.all([getKarigars('company1'), getKarigars('company2')]);
+                const any = await db.collection('karigar_transactions').limit(1).get();
+                if (!any.empty) {
+                    snap = await db.collection('karigar_transactions').get();
+                }
             } catch (e) {
-                console.warn('Karigar map bootstrap failed:', e);
+                // ignore
             }
         }
 
-        const karigarNameToIdByCompany = { company1: {}, company2: {} };
-        const karigarIdToName = {};
-        Object.values(_allKarigarsMap).forEach(k => {
-            if (!k || typeof k !== 'object') return;
-            const id = String(k.id || '').trim();
-            const name = String(k.name || '').trim();
-            const cid = String(k.companyId || 'company1').trim();
-            if (!id) return;
-            if (name) karigarNameToIdByCompany[cid][normalizeNameKey(name)] = id;
-            if (name) karigarIdToName[id] = name;
-        });
-
-        const snap = await db.collection('karigar_transactions').get();
         const results = [];
-        for (const doc of snap.docs) {
+        for (const doc of (snap.docs || [])) {
             const data = doc.data() || {};
-            const rawId = String(data.karigarId || '').trim();
-            const rawName = String(data.karigarName || '').trim();
             const rawCompanyId = String(data.companyId || '').trim();
-            const nameKey = normalizeNameKey(rawName);
-
-            let resolvedId = rawId;
-            let resolvedCompanyId = rawCompanyId;
-
-            if (!isPrefixedId(resolvedId, 'kar_')) {
-                if (resolvedCompanyId && karigarNameToIdByCompany[resolvedCompanyId] && nameKey) {
-                    resolvedId = karigarNameToIdByCompany[resolvedCompanyId][nameKey] || resolvedId;
-                } else if (nameKey) {
-                    const c1Id = karigarNameToIdByCompany.company1[nameKey] || '';
-                    const c2Id = karigarNameToIdByCompany.company2[nameKey] || '';
-                    if (c1Id && !c2Id) {
-                        resolvedId = c1Id;
-                        resolvedCompanyId = 'company1';
-                    } else if (c2Id && !c1Id) {
-                        resolvedId = c2Id;
-                        resolvedCompanyId = 'company2';
-                    }
-                }
-            }
-
-            if (!resolvedCompanyId && isPrefixedId(resolvedId, 'kar_')) {
-                resolvedCompanyId = String(_allKarigarsMap[resolvedId]?.companyId || '').trim();
-            }
-            if (!resolvedCompanyId) resolvedCompanyId = safeCompanyId;
+            // If this is a full scan fallback, include legacy rows with missing companyId as current company.
+            const resolvedCompanyId = rawCompanyId || safeCompanyId;
             if (resolvedCompanyId !== safeCompanyId) continue;
-
-            let resolvedName = rawName;
-            if (!resolvedName && resolvedId && karigarIdToName[resolvedId]) {
-                resolvedName = karigarIdToName[resolvedId];
-            }
-
-            const patch = {};
-            if (resolvedId && resolvedId !== rawId) patch.karigarId = resolvedId;
-            if (resolvedName && resolvedName !== rawName) patch.karigarName = resolvedName;
-            if (resolvedCompanyId && resolvedCompanyId !== rawCompanyId) patch.companyId = resolvedCompanyId;
-            if (Object.keys(patch).length > 0) {
-                await doc.ref.update(patch);
-            }
-
-            results.push({
-                id: doc.id,
-                ...data,
-                companyId: resolvedCompanyId,
-                karigarId: resolvedId || rawId,
-                karigarName: resolvedName || rawName
-            });
+            results.push({ id: doc.id, ...data, companyId: resolvedCompanyId });
         }
         return { success: true, data: results };
     }
