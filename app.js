@@ -5964,6 +5964,44 @@ function setupKarigarListeners() {
         searchInput.addEventListener('input', renderKarigarGrid);
         searchInput.dataset.bound = 'true';
     }
+
+    // Keyboard shortcuts (Karigar modals)
+    // - Enter: submit current modal form
+    // - Esc: close topmost Karigar modal
+    const bindKarigarFormEnterToSubmit = (form, modalEl) => {
+        if (!form || form.dataset.shortcutBound) return;
+        form.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            const t = e.target;
+            const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
+            if (tag === 'TEXTAREA') return;
+            if (modalEl && !modalEl.classList.contains('show')) return;
+            e.preventDefault();
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+                return;
+            }
+            form.querySelector('button[type=\"submit\"], input[type=\"submit\"]')?.click();
+        }, true);
+        form.dataset.shortcutBound = 'true';
+    };
+    if (!window.__karigarEscShortcutBound) {
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            // Close only Karigar modals, topmost-first.
+            const ids = ['karigar-history-modal', 'karigar-upad-modal', 'karigar-jama-modal', 'karigar-create-modal'];
+            for (const id of ids) {
+                const m = document.getElementById(id);
+                if (m && m.classList.contains('show')) {
+                    e.preventDefault();
+                    m.classList.remove('show');
+                    break;
+                }
+            }
+        });
+        window.__karigarEscShortcutBound = true;
+    }
     
     const createBtn = document.getElementById('btn-create-karigar');
     if (createBtn && !createBtn.dataset.bound) {
@@ -6130,6 +6168,7 @@ function setupKarigarListeners() {
         });
         createForm.dataset.bound = 'true';
     }
+    bindKarigarFormEnterToSubmit(createForm, document.getElementById('karigar-create-modal'));
     
     const jamaForm = document.getElementById('karigar-jama-form');
     if (jamaForm && !jamaForm.dataset.bound) {
@@ -6169,6 +6208,7 @@ function setupKarigarListeners() {
         });
         jamaForm.dataset.bound = 'true';
     }
+    bindKarigarFormEnterToSubmit(jamaForm, document.getElementById('karigar-jama-modal'));
     
     const upadForm = document.getElementById('karigar-upad-form');
     if (upadForm && !upadForm.dataset.bound) {
@@ -6204,6 +6244,7 @@ function setupKarigarListeners() {
         });
         upadForm.dataset.bound = 'true';
     }
+    bindKarigarFormEnterToSubmit(upadForm, document.getElementById('karigar-upad-modal'));
 }
 
 function openKarigarJamaModal(id, name) {
