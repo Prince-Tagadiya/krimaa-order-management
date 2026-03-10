@@ -1060,8 +1060,8 @@ async function checkFirestoreResponsive(timeoutMs = 5000) {
     }
 }
 
-async function probeFirebaseWithCountdown(seconds = 2) {
-    const safeSeconds = Math.max(1, parseInt(seconds, 10) || 2);
+async function probeFirebaseWithCountdown(seconds = 5) {
+    const safeSeconds = Math.max(1, parseInt(seconds, 10) || 5);
     const timeoutMs = safeSeconds * 1000;
     const endTs = Date.now() + timeoutMs;
     const updateText = () => {
@@ -1616,7 +1616,7 @@ function startAdminAutoSync() {
 async function refreshAppDataManually() {
     showLoader('Checking server status...');
     try {
-        const serverResponsive = await probeFirebaseWithCountdown(2);
+        const serverResponsive = await probeFirebaseWithCountdown(5);
         if (!serverResponsive) {
             enableSheetsFallbackMode();
             updateBackendModeBanner();
@@ -2332,7 +2332,7 @@ async function loadInitialData() {
         console.log("🚀 [INITIALIZATION] Starting web app...");
         AppState.karigarCacheByCompany = {};
         FirebaseService.init();
-        const serverResponsive = await probeFirebaseWithCountdown(2);
+        const serverResponsive = await probeFirebaseWithCountdown(5);
         if (!serverResponsive) {
             enableSheetsFallbackMode();
             setLoaderStatus('Server is down. Loading from Google Sheet (slow)...');
