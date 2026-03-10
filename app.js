@@ -6219,8 +6219,8 @@ function setupKarigarListeners() {
             const transactionDateTime = combineDateAndTimeToISO(date, time);
             if (!transactionDateTime) return showToast('Invalid date/time', 'error');
 
-            const bulkMode = !!document.getElementById('karigar-jama-bulk-mode')?.checked;
-            const autoNext = !!document.getElementById('karigar-jama-auto-next')?.checked;
+            const bulkMode = true; // always-on bulk entry
+            const autoNext = false; // keep current selected karigar unless user changes
             
             showLoader();
             try {
