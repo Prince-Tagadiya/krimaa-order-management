@@ -331,6 +331,11 @@ function isDevUser() {
     return String(AppState.currentUser?.role || '').trim() === 'dev';
 }
 
+function isOrderUser() {
+    const role = String(AppState.currentUser?.role || '').trim();
+    return role === 'order' || role === 'order_c2';
+}
+
 function getCurrentDashboardLabel() {
     const labels = {
         dashboard: 'Dashboard',
@@ -1866,9 +1871,9 @@ function applyRolePermissions() {
     userInfo.innerHTML = `<span>${AppState.currentUser.displayName}</span>`;
     
     if (role === 'order' || role === 'order_c2') {
-        // Hide Dashboard, Data Sheet and Manage Accounts for order role
+        // Order role: allow Daily Order + Data Sheet only
         document.getElementById('nav-dashboard').style.display = 'none';
-        document.getElementById('nav-data-sheet').style.display = 'none';
+        document.getElementById('nav-data-sheet').style.display = '';
         document.getElementById('nav-manage-accounts').style.display = 'none';
         document.getElementById('nav-money-management').style.display = 'none';
     } else {
@@ -1884,6 +1889,17 @@ function applyRolePermissions() {
         btn.style.display = allowed ? '' : 'none';
         btn.disabled = !allowed;
     });
+
+    // Data Sheet company filter should respect allowed companies for order users.
+    const sheetCompanyFilter = document.getElementById('sheet-company-filter');
+    if (sheetCompanyFilter && isOrderUser() && !isSingleCompanyMode()) {
+        const allowed = getAllowedCompanies();
+        const options = allowed.map(cid => `<option value="${cid}">${getCompanyDisplayName(cid)}</option>`).join('');
+        sheetCompanyFilter.innerHTML = options;
+        if (!allowed.includes(sheetCompanyFilter.value)) {
+            sheetCompanyFilter.value = allowed[0] || 'company1';
+        }
+    }
 }
 
 function attachEventListeners() {
@@ -2064,7 +2080,7 @@ function attachEventListeners() {
 function navigateTo(sectionId) {
     
     // Permission check for order role
-    if ((AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'data-sheet' || sectionId === 'money-management' || sectionId === 'money-backup')) {
+    if ((AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') && (sectionId === 'add-account' || sectionId === 'dashboard' || sectionId === 'money-management' || sectionId === 'money-backup')) {
         showToast("Access denied", "error"); return;
     }
     
@@ -4245,7 +4261,17 @@ async function renderDataSheet() {
     const wrapper = document.querySelector('.sheet-wrapper');
     if (!thead || !tbody) return;
     
-    const companyFilter = document.getElementById('sheet-company-filter').value;
+    const companyFilterEl = document.getElementById('sheet-company-filter');
+    let companyFilter = companyFilterEl ? companyFilterEl.value : 'all';
+    if (isSingleCompanyMode()) {
+        companyFilter = 'company1';
+        if (companyFilterEl) companyFilterEl.value = 'company1';
+    } else if (isOrderUser()) {
+        // Order users should not combine companies.
+        const allowed = getAllowedCompanies();
+        companyFilter = allowed.includes(companyFilter) ? companyFilter : (allowed[0] || 'company1');
+        if (companyFilterEl) companyFilterEl.value = companyFilter;
+    }
     const monthFilterEl = document.getElementById('sheet-month-filter');
     const rawMonthFilter = monthFilterEl ? String(monthFilterEl.value || '').trim() : '';
     const monthFilter = rawMonthFilter || 'all';
@@ -4399,15 +4425,17 @@ async function renderDataSheet() {
         bodyHtml += '</tr>';
     });
     
-    // Grand total row
-    bodyHtml += '<tr class="sheet-grand-row">';
-    bodyHtml += '<td class="sheet-date-cell">TOTAL</td>';
-    accounts.forEach((_, idx) => {
-        bodyHtml += `<td class="sheet-acct-border">${grandTotals.meesho[idx]}</td>`;
-    });
-    bodyHtml += `<td class="sheet-total-cell">${grandTotals.total}</td>`;
-    bodyHtml += '<td></td>';
-    bodyHtml += '</tr>';
+    // Grand total row (hide for order users; they only need daily totals)
+    if (!isOrderUser()) {
+        bodyHtml += '<tr class="sheet-grand-row">';
+        bodyHtml += '<td class="sheet-date-cell">TOTAL</td>';
+        accounts.forEach((_, idx) => {
+            bodyHtml += `<td class="sheet-acct-border">${grandTotals.meesho[idx]}</td>`;
+        });
+        bodyHtml += `<td class="sheet-total-cell">${grandTotals.total}</td>`;
+        bodyHtml += '<td></td>';
+        bodyHtml += '</tr>';
+    }
     
     tbody.innerHTML = bodyHtml;
     
