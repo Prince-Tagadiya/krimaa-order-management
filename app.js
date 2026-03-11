@@ -6034,6 +6034,10 @@ function setupKarigarListeners() {
         form.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
             if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            if (form.dataset.submitting === 'true') {
+                e.preventDefault();
+                return;
+            }
             const t = e.target;
             const tag = (t && t.tagName) ? String(t.tagName).toUpperCase() : '';
             if (tag === 'TEXTAREA') return;
@@ -6235,8 +6239,16 @@ function setupKarigarListeners() {
     if (createForm && !createForm.dataset.bound) {
         createForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (createForm.dataset.submitting === 'true') return;
+            createForm.dataset.submitting = 'true';
+            const submitBtn = createForm.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitBtn) submitBtn.disabled = true;
             const name = document.getElementById('karigar-create-name').value.trim();
-            if (!name) return;
+            if (!name) {
+                createForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
             showLoader();
             try {
                 await FirebaseService.addKarigar(name, AppState.currentCompany, buildAuditActor());
@@ -6248,7 +6260,11 @@ function setupKarigarListeners() {
                 invalidateKarigarCache();
                 await renderKarigarPage(true);
             } catch (err) { showToast("Failed to create", "error"); }
-            finally { hideLoader(); }
+            finally {
+                hideLoader();
+                createForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+            }
         });
         createForm.dataset.bound = 'true';
     }
@@ -6258,6 +6274,10 @@ function setupKarigarListeners() {
     if (jamaForm && !jamaForm.dataset.bound) {
         jamaForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (jamaForm.dataset.submitting === 'true') return;
+            jamaForm.dataset.submitting = 'true';
+            const submitBtn = jamaForm.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitBtn) submitBtn.disabled = true;
             const select = document.getElementById('karigar-jama-select');
             const rawKarigarId = String((select ? select.value : document.getElementById('karigar-jama-id')?.value) || '').trim();
             let karigarName = '';
@@ -6269,7 +6289,12 @@ function setupKarigarListeners() {
                 karigarName = String(k?.name || '').trim();
             }
             const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
-            if (!karigarId) return showToast('Invalid karigar ID', 'error');
+            if (!karigarId) {
+                showToast('Invalid karigar ID', 'error');
+                jamaForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
             const date = document.getElementById('karigar-jama-date').value;
             const time = document.getElementById('karigar-jama-time').value;
             const designName = document.getElementById('karigar-jama-design').value;
@@ -6278,7 +6303,12 @@ function setupKarigarListeners() {
             const price = document.getElementById('karigar-jama-price').value;
             const upadAmount = isAdminUser() ? (document.getElementById('karigar-jama-upad').value || 0) : 0;
             const transactionDateTime = combineDateAndTimeToISO(date, time);
-            if (!transactionDateTime) return showToast('Invalid date/time', 'error');
+            if (!transactionDateTime) {
+                showToast('Invalid date/time', 'error');
+                jamaForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
 
             const bulkMode = true; // always-on bulk entry
             const autoNext = false; // keep current selected karigar unless user changes
@@ -6329,7 +6359,11 @@ function setupKarigarListeners() {
                     await renderKarigarPage(true);
                 }
             } catch (err) { showToast("Failed to add", "error"); }
-            finally { hideLoader(); }
+            finally {
+                hideLoader();
+                jamaForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+            }
         });
         jamaForm.dataset.bound = 'true';
     }
@@ -6339,6 +6373,10 @@ function setupKarigarListeners() {
     if (upadForm && !upadForm.dataset.bound) {
         upadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (upadForm.dataset.submitting === 'true') return;
+            upadForm.dataset.submitting = 'true';
+            const submitBtn = upadForm.querySelector('button[type="submit"], input[type="submit"]');
+            if (submitBtn) submitBtn.disabled = true;
             if (!isAdminUser()) return showToast('Only admin can add Borrow (Upad)', 'error');
             const sel = document.getElementById('karigar-upad-select');
             const rawKarigarId = String((sel ? sel.value : document.getElementById('karigar-upad-id')?.value) || '').trim();
@@ -6349,12 +6387,22 @@ function setupKarigarListeners() {
                 karigarName = String(k?.name || '').trim();
             }
             const karigarId = resolveKarigarIdFromState(rawKarigarId, karigarName);
-            if (!karigarId) return showToast('Invalid karigar ID', 'error');
+            if (!karigarId) {
+                showToast('Invalid karigar ID', 'error');
+                upadForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
             const date = document.getElementById('karigar-upad-date').value;
             const time = document.getElementById('karigar-upad-time').value;
             const amount = document.getElementById('karigar-upad-amount').value;
             const transactionDateTime = combineDateAndTimeToISO(date, time);
-            if (!transactionDateTime) return showToast('Invalid date/time', 'error');
+            if (!transactionDateTime) {
+                showToast('Invalid date/time', 'error');
+                upadForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+                return;
+            }
             
             showLoader();
             try {
@@ -6371,7 +6419,11 @@ function setupKarigarListeners() {
                 invalidateKarigarCache();
                 await renderKarigarPage(true);
             } catch (err) { showToast("Failed to add", "error"); }
-            finally { hideLoader(); }
+            finally {
+                hideLoader();
+                upadForm.dataset.submitting = 'false';
+                if (submitBtn) submitBtn.disabled = false;
+            }
         });
         upadForm.dataset.bound = 'true';
     }
