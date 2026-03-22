@@ -449,6 +449,95 @@ function getSortedAccounts() {
     return [...AppState.accounts];
 }
 
+function getCompanyAccountDetails(companyId) {
+    return companyId === 'company2'
+        ? (AppState.company2Details || [])
+        : (AppState.company1Details || []);
+}
+
+function getOrderedCompanyAccounts(companyId) {
+    const details = getCompanyAccountDetails(companyId);
+    const rawOrder = companyId === 'company2'
+        ? (AppState.company2Accounts || [])
+        : (AppState.company1Accounts || []);
+    const byId = new Map();
+    const byName = new Map();
+
+    details.forEach((detail, idx) => {
+        const safeId = String(detail?.accountId || '').trim();
+        const safeName = String(detail?.name || '').trim();
+        const normalized = {
+            ...detail,
+            accountId: safeId,
+            name: safeName || safeId,
+            position: Number.isFinite(parseInt(detail?.position, 10)) ? parseInt(detail.position, 10) : idx
+        };
+        if (safeId) byId.set(safeId, normalized);
+        if (safeName) byName.set(safeName, normalized);
+    });
+
+    const ordered = [];
+    const usedIds = new Set();
+    rawOrder.forEach((entry) => {
+        const safeEntry = String(entry || '').trim();
+        if (!safeEntry) return;
+        const match = byId.get(safeEntry) || byName.get(safeEntry);
+        if (!match || usedIds.has(match.accountId)) return;
+        ordered.push(match);
+        usedIds.add(match.accountId);
+    });
+
+    details
+        .slice()
+        .sort((a, b) => (parseInt(a?.position, 10) || 9999) - (parseInt(b?.position, 10) || 9999))
+        .forEach((detail) => {
+            const safeId = String(detail?.accountId || '').trim();
+            if (!safeId || usedIds.has(safeId)) return;
+            ordered.push({
+                ...detail,
+                accountId: safeId,
+                name: String(detail?.name || safeId).trim()
+            });
+            usedIds.add(safeId);
+        });
+
+    return ordered;
+}
+
+function syncCompanyAccountOrderState(companyId, orderedAccounts) {
+    const orderedDetails = getOrderedCompanyAccounts(companyId);
+    const ids = orderedDetails.map(detail => detail.accountId);
+    const targetIds = Array.isArray(orderedAccounts) && orderedAccounts.length
+        ? orderedAccounts.map(item => {
+            const safeItem = String(item || '').trim();
+            const match = orderedDetails.find(detail => detail.accountId === safeItem || detail.name === safeItem);
+            return match?.accountId || safeItem;
+        }).filter(Boolean)
+        : ids;
+    const finalIds = [...new Set([...targetIds, ...ids])];
+
+    if (companyId === 'company2') {
+        AppState.company2Accounts = finalIds;
+        AppState.company2Details = finalIds
+            .map(id => orderedDetails.find(detail => detail.accountId === id))
+            .filter(Boolean)
+            .map((detail, idx) => ({ ...detail, position: idx }));
+    } else {
+        AppState.company1Accounts = finalIds;
+        AppState.company1Details = finalIds
+            .map(id => orderedDetails.find(detail => detail.accountId === id))
+            .filter(Boolean)
+            .map((detail, idx) => ({ ...detail, position: idx }));
+    }
+
+    if (AppState.currentCompany === companyId) {
+        AppState.accounts = [...finalIds];
+        AppState.accountDetails = companyId === 'company2'
+            ? [...AppState.company2Details]
+            : [...AppState.company1Details];
+    }
+}
+
 function getReplaceSheetSelectionLabels(selection) {
     const labels = [];
     if (selection.accounts) labels.push('Manage Accounts');
@@ -2763,7 +2852,15 @@ function initDragAndDrop() {
 async function saveAccountOrderToSheet(orderedAccounts, paramCompanyId) {
     const compId = paramCompanyId || AppState.currentCompany;
     try {
-        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts, companyId: compId });
+        const normalizedOrder = (Array.isArray(orderedAccounts) ? orderedAccounts : [])
+            .map(item => String(item || '').trim())
+            .filter(Boolean)
+            .map(item => {
+                const match = getCompanyAccountDetails(compId).find(detail => detail.accountId === item || detail.name === item);
+                return match?.accountId || item;
+            });
+        syncCompanyAccountOrderState(compId, normalizedOrder);
+        const res = await apiRequest({ action: 'updateAccountOrder', orderedAccounts: normalizedOrder, companyId: compId });
         if (res.success) showToast('Position saved!', 'success');
         else showToast(res.message || 'Failed', 'error');
     } catch(err) { showToast('Position saved locally, sheet sync failed', 'error'); }
@@ -4160,10 +4257,10 @@ function openReorderColumnsModal() {
         return;
     }
     
-    list.innerHTML = accounts.map(acc => `
-        <div class="account-item reorder-item" data-account="${acc.replace(/'/g, "\\'")}" style="cursor: grab; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: #f8fafc; display: flex; align-items: center; gap: 0.75rem;">
+    list.innerHTML = getOrderedCompanyAccounts(companyFilter).map(acc => `
+        <div class="account-item reorder-item" data-account="${String(acc.accountId || '').replace(/'/g, "\\'")}" style="cursor: grab; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: #f8fafc; display: flex; align-items: center; gap: 0.75rem;">
             <i class='bx bx-menu text-muted'></i>
-            <span class="font-bold text-sm">${acc}</span>
+            <span class="font-bold text-sm">${acc.name}</span>
         </div>
     `).join('');
     
@@ -4295,14 +4392,14 @@ async function renderDataSheet() {
     let rawData = [];
     
     if (companyFilter === 'company1') {
-        accounts = AppState.company1Details.map(ad => ({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
+        accounts = getOrderedCompanyAccounts('company1').map(ad => ({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
         rawData = [...AppState.company1Data];
     } else if (companyFilter === 'company2') {
-        accounts = AppState.company2Details.map(ad => ({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
+        accounts = getOrderedCompanyAccounts('company2').map(ad => ({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
         rawData = [...AppState.company2Data];
     } else {
-        AppState.company1Details.forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
-        AppState.company2Details.forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
+        getOrderedCompanyAccounts('company1').forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
+        getOrderedCompanyAccounts('company2').forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
         rawData = [...AppState.company1Data, ...AppState.company2Data];
     }
     
@@ -4566,15 +4663,13 @@ async function renderMoneyManagement() {
     const sortedCompanies = AppState.currentCompany === 'company2' ? ['company2', 'company1'] : ['company1', 'company2'];
     
     sortedCompanies.forEach(compId => {
-        const accounts = compId === 'company1' ? AppState.company1Accounts : AppState.company2Accounts;
-        const detailsList = compId === 'company1' ? AppState.company1Details : AppState.company2Details;
+        const accounts = getOrderedCompanyAccounts(compId);
         const companyLabel = compId === 'company1' ? 'Company 1' : 'Company 2';
         
-        (accounts || []).forEach(accName => {
-            const details = (detailsList || []).find(d => d.name === accName) || {};
+        (accounts || []).forEach(details => {
             mgmtAccounts.push({
                 id: details.accountId || '',
-                name: accName,
+                name: details.name || '',
                 company: companyLabel,
                 companyId: compId,
                 money: parseInt(details.money) || 0,
@@ -4669,13 +4764,13 @@ async function renderMoneyManagement() {
             Array.from(tbody.children).forEach((row, idx) => {
                 row.querySelector('.position-number').textContent = idx + 1;
                 const companyId = row.dataset.companyId;
-                const accountName = row.dataset.account;
-                if (companyId === 'company1') newOrder1.push(accountName);
-                if (companyId === 'company2') newOrder2.push(accountName);
+                const accountId = row.dataset.accountId;
+                if (companyId === 'company1' && accountId) newOrder1.push(accountId);
+                if (companyId === 'company2' && accountId) newOrder2.push(accountId);
             });
             // Update UI/local state visually and trigger sheet updates
-            AppState.company1Accounts = newOrder1;
-            AppState.company2Accounts = newOrder2;
+            syncCompanyAccountOrderState('company1', newOrder1);
+            syncCompanyAccountOrderState('company2', newOrder2);
             
             showToast('Saving new order...', 'info');
             Promise.all([
@@ -4690,14 +4785,13 @@ function buildCurrentMoneySnapshotRows() {
     const rows = [];
 
     const addCompanyRows = (companyId, companyName, accounts, detailsList) => {
-        (accounts || []).forEach(accountName => {
-            const details = (detailsList || []).find(d => d.name === accountName) || {};
+        getOrderedCompanyAccounts(companyId).forEach(details => {
             const money = parseInt(details.money) || 0;
             const expense = parseInt(details.expense) || 0;
             rows.push({
                 companyId,
                 companyName,
-                accountName,
+                accountName: details.name || '',
                 money,
                 expense,
                 balance: money - expense

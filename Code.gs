@@ -613,10 +613,18 @@ function updateAccountOrder(orderedAccountIds, companyId) {
   var sheet = ss.getSheetByName(company.accountsSheet);
   var data = sheet.getDataRange().getValues();
   var startIdx = (data[0][0] === 'Account ID') ? 1 : 0;
+  var orderMap = {};
+
+  for (var j = 0; j < orderedAccountIds.length; j++) {
+    var rawKey = String(orderedAccountIds[j] || '').trim();
+    if (!rawKey) continue;
+    orderMap[rawKey] = j;
+  }
   
   for (var i = startIdx; i < data.length; i++) {
     var id = data[i][0].toString().trim();
-    var posIndex = orderedAccountIds.indexOf(id);
+    var name = String(data[i][1] || '').trim();
+    var posIndex = orderMap.hasOwnProperty(id) ? orderMap[id] : (orderMap.hasOwnProperty(name) ? orderMap[name] : -1);
     if (posIndex !== -1) {
       sheet.getRange(i + 1, 4).setValue(posIndex); // Position in Column D
     }
