@@ -611,14 +611,25 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     border-bottom: 1px solid #c7d6f0;
     font-size: 0.68rem;
     letter-spacing: 0.02em;
+    white-space: normal;
+    line-height: 1.15;
+    word-break: normal;
+    overflow-wrap: break-word;
 }
 
 .sheet-header-name {
     display: block;
     width: 100%;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+    line-height: 1.15;
+    max-height: 2.3em;
     overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
     text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .sheet-table thead th.sheet-sub-col {
