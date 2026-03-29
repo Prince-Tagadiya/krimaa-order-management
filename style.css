@@ -565,20 +565,22 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 
 .sheet-wrapper {
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
     max-height: calc(100vh - 200px);
     border: 1px solid var(--border-color);
     border-radius: 0.75rem;
     background: white;
     box-shadow: var(--shadow-sm);
+    width: 100%;
 }
 
 .sheet-table {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 0.78rem;
-    table-layout: auto;
+    font-size: 0.74rem;
+    table-layout: fixed;
 }
 
 /* Sticky header */
@@ -592,11 +594,12 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    padding: 0.55rem 0.6rem;
+    padding: 0.45rem 0.35rem;
     border-bottom: 2px solid var(--border-color);
     border-right: 1px solid #e2e8f0;
     white-space: nowrap;
     text-align: center;
+    overflow: hidden;
 }
 .sheet-table thead th:last-child { border-right: none; }
 
@@ -606,8 +609,16 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     color: var(--primary);
     font-weight: 800;
     border-bottom: 1px solid #c7d6f0;
-    font-size: 0.72rem;
+    font-size: 0.68rem;
     letter-spacing: 0.02em;
+}
+
+.sheet-header-name {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .sheet-table thead th.sheet-sub-col {
@@ -628,7 +639,9 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     font-weight: 800;
     border-right: 2px solid #cbd5e1;
     white-space: nowrap;
-    min-width: 100px;
+    width: clamp(84px, 10vw, 112px);
+    min-width: clamp(84px, 10vw, 112px);
+    max-width: clamp(84px, 10vw, 112px);
     text-align: left;
 }
 
@@ -639,13 +652,15 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 .sheet-table tbody td.sheet-date-cell {
     background: #f8fafc;
     color: var(--text-main);
-    font-size: 0.78rem;
-    padding: 0.4rem 0.6rem;
+    font-size: 0.74rem;
+    padding: 0.35rem 0.45rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Body cells */
 .sheet-table tbody td {
-    padding: 0.35rem 0.45rem;
+    padding: 0.32rem 0.2rem;
     border-bottom: 1px solid #f1f5f9;
     border-right: 1px solid #f1f5f9;
     text-align: center;
@@ -653,6 +668,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     color: var(--text-main);
     font-variant-numeric: tabular-nums;
     transition: background 0.15s;
+    overflow: hidden;
 }
 .sheet-table tbody td:last-child { border-right: none; }
 
@@ -675,7 +691,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 /* Editable cells */
 .sheet-table tbody td.sheet-editable {
     cursor: text;
-    min-width: 52px;
+    min-width: 0;
 }
 .sheet-table tbody td.sheet-editable:focus-within {
     background: #fff7ed;
@@ -685,16 +701,19 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 
 .sheet-cell-input {
     width: 100%;
+    min-width: 0;
     border: none;
     background: transparent;
     text-align: center;
-    font-size: 0.78rem;
+    font-size: 0.74rem;
     font-weight: 600;
     color: var(--text-main);
     font-family: inherit;
     outline: none;
     padding: 0;
     -moz-appearance: textfield;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .sheet-cell-input::-webkit-outer-spin-button,
 .sheet-cell-input::-webkit-inner-spin-button {
@@ -703,7 +722,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 .sheet-cell-input.sheet-remark-input {
     text-align: left;
-    min-width: 120px;
+    min-width: 0;
 }
 
 /* Total column */
@@ -718,11 +737,24 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     color: white;
     z-index: 30;
     border-bottom: none;
+    width: clamp(58px, 6vw, 76px);
+    min-width: clamp(58px, 6vw, 76px);
+    max-width: clamp(58px, 6vw, 76px);
 }
 .sheet-table tbody td.sheet-total-cell {
     font-weight: 800;
     color: var(--primary);
     background: #f0f6ff;
+    width: clamp(58px, 6vw, 76px);
+    min-width: clamp(58px, 6vw, 76px);
+    max-width: clamp(58px, 6vw, 76px);
+}
+
+.sheet-table thead th.sheet-remarks-col,
+.sheet-table tbody td:last-child {
+    width: clamp(104px, 12vw, 132px);
+    min-width: clamp(104px, 12vw, 132px);
+    max-width: clamp(104px, 12vw, 132px);
 }
 
 /* Grand total row */
@@ -740,10 +772,10 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 /* Day name chip */
 .sheet-day-chip {
     display: inline-block;
-    font-size: 0.62rem;
+    font-size: 0.56rem;
     color: var(--text-muted);
     font-weight: 600;
-    margin-left: 0.3rem;
+    margin-left: 0.2rem;
     vertical-align: middle;
 }
 .sheet-day-chip.sheet-today {
@@ -756,10 +788,13 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 /* Company badge in header */
 .sheet-company-tag {
     display: block;
-    font-size: 0.58rem;
+    font-size: 0.54rem;
     font-weight: 700;
     color: var(--text-muted);
     margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Sticky grand total row */
@@ -880,6 +915,52 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 .sheet-wrapper {
     position: relative;
+}
+
+@media (max-width: 1280px) {
+    .sheet-table {
+        font-size: 0.7rem;
+    }
+
+    .sheet-table thead th {
+        font-size: 0.64rem;
+        padding: 0.38rem 0.18rem;
+    }
+
+    .sheet-table thead th.sheet-acct-group {
+        font-size: 0.62rem;
+    }
+
+    .sheet-table tbody td.sheet-date-cell {
+        font-size: 0.69rem;
+    }
+
+    .sheet-cell-input {
+        font-size: 0.68rem;
+    }
+}
+
+@media (max-width: 1100px) {
+    .sheet-table thead th.sheet-date-col,
+    .sheet-table tbody td.sheet-date-cell {
+        width: 82px;
+        min-width: 82px;
+        max-width: 82px;
+    }
+
+    .sheet-table thead th.sheet-total-col,
+    .sheet-table tbody td.sheet-total-cell {
+        width: 56px;
+        min-width: 56px;
+        max-width: 56px;
+    }
+
+    .sheet-table thead th.sheet-remarks-col,
+    .sheet-table tbody td:last-child {
+        width: 96px;
+        min-width: 96px;
+        max-width: 96px;
+    }
 }
 
 /* ===== MODERN PREMIUM TOAST ===== */

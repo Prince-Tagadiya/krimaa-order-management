@@ -4481,10 +4481,10 @@ async function renderDataSheet() {
     let headerRow1 = '<tr><th class="sheet-date-col">Date</th>';
     accounts.forEach((acc, idx) => {
         const compTag = companyFilter === 'all' ? `<span class="sheet-company-tag">${acc.label}</span>` : '';
-        headerRow1 += `<th class="sheet-acct-group sheet-acct-border">${acc.name}${compTag}</th>`;
+        headerRow1 += `<th class="sheet-acct-group sheet-acct-border" title="${String(acc.name).replace(/"/g, '&quot;')}"><span class="sheet-header-name">${acc.name}</span>${compTag}</th>`;
     });
     headerRow1 += '<th class="sheet-acct-group sheet-total-col">Total</th>';
-    headerRow1 += '<th class="sheet-acct-group" style="min-width:140px;">Remarks</th>';
+    headerRow1 += '<th class="sheet-acct-group sheet-remarks-col">Remarks</th>';
     headerRow1 += '</tr>';
     
     let headerRow2 = ''; // Removed second header row for headers
