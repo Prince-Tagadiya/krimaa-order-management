@@ -1295,6 +1295,22 @@ function isDataSheetEditActive() {
     return false;
 }
 
+function closeMobileSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (sidebar) sidebar.classList.remove('open');
+    if (overlay) overlay.classList.remove('show');
+}
+
+function toggleMobileSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebar-overlay');
+    if (!sidebar) return;
+    const shouldOpen = !sidebar.classList.contains('open');
+    sidebar.classList.toggle('open', shouldOpen);
+    if (overlay) overlay.classList.toggle('show', shouldOpen);
+}
+
 function buildPendingOrderOverrideKey(companyId, date, accountId, accountName) {
     const safeCompanyId = String(companyId || '').trim();
     const safeDate = normalizeToISODate(date);
@@ -2054,12 +2070,14 @@ function attachEventListeners() {
             
             navigateTo(target);
             const sidebar = document.getElementById('sidebar');
-            if(window.innerWidth <= 768 && sidebar.classList.contains('open')) sidebar.classList.remove('open');
+            if(window.innerWidth <= 768 && sidebar.classList.contains('open')) closeMobileSidebar();
         });
     });
 
-    document.getElementById('menu-toggle').addEventListener('click', () => {
-        document.getElementById('sidebar').classList.toggle('open');
+    document.getElementById('menu-toggle').addEventListener('click', toggleMobileSidebar);
+    document.getElementById('sidebar-overlay')?.addEventListener('click', closeMobileSidebar);
+    window.addEventListener('resize', () => {
+        if (window.innerWidth > 768) closeMobileSidebar();
     });
 
     // Add Account

@@ -131,6 +131,19 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     display: flex; flex-direction: column; height: 100vh; position: sticky; top: 0;
     flex-shrink: 0; padding: 1rem; gap: 0.5rem; transition: transform 0.3s ease;
 }
+.sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.42);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    z-index: 90;
+}
+.sidebar-overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+}
 .sidebar-footer {
     margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--border-color);
 }
@@ -536,10 +549,27 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 @media (max-width: 768px) {
     .sidebar { position: fixed; transform: translateX(-100%); transition: transform 0.3s; z-index: 100; box-shadow: var(--shadow); }
     .sidebar.open { transform: translateX(0); }
-    #menu-toggle { display: block; }
+    #menu-toggle { display: none; }
     .status-banner-stats { flex-wrap: wrap; justify-content: center; width: 100%; gap: 1rem; }
     .stat-divider { display: none; }
     .kpi-3-col { grid-template-columns: 1fr; }
+    .topbar {
+        padding: 0.75rem 1rem;
+    }
+    .sections-container {
+        padding: 1rem;
+    }
+    .topbar-right {
+        gap: 0.5rem;
+    }
+    .sync-indicator span,
+    .sidebar-user-info {
+        display: none;
+    }
+    .company-switcher-topbar .company-btn {
+        padding: 0.35rem 0.75rem;
+        font-size: 0.7rem;
+    }
 }
 
 /* ===== DATA SHEET ===== */
@@ -562,6 +592,33 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     display: flex;
     align-items: center;
     gap: 0.5rem;
+}
+.sheet-mobile-hint {
+    display: none;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid #c7d2fe;
+    border-radius: 0.9rem;
+    background: linear-gradient(135deg, #eef2ff, #f8fafc);
+    color: #1e293b;
+    margin-bottom: 0.75rem;
+}
+.sheet-mobile-hint i {
+    font-size: 1.4rem;
+    color: var(--primary);
+    margin-top: 0.05rem;
+}
+.sheet-mobile-hint strong {
+    display: block;
+    font-size: 0.88rem;
+    margin-bottom: 0.12rem;
+}
+.sheet-mobile-hint span {
+    display: block;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    line-height: 1.35;
 }
 
 .sheet-wrapper {
@@ -971,6 +1028,56 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
         width: 96px;
         min-width: 96px;
         max-width: 96px;
+    }
+}
+
+@media (max-width: 768px) and (orientation: portrait) {
+    .sheet-mobile-hint {
+        display: flex;
+    }
+
+    .sheet-wrapper {
+        display: none;
+    }
+}
+
+@media (max-width: 768px) and (orientation: landscape) {
+    #menu-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        background: #fff;
+    }
+
+    .sheet-mobile-hint {
+        display: flex;
+        padding: 0.65rem 0.8rem;
+    }
+
+    .sheet-wrapper {
+        display: block;
+        overflow-x: auto;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .sheet-table {
+        min-width: 920px;
+        table-layout: auto;
+    }
+
+    .sheet-table thead th.sheet-date-col,
+    .sheet-table tbody td.sheet-date-cell {
+        position: sticky;
+        left: 0;
+    }
+
+    .main-content {
+        overflow-x: hidden;
     }
 }
 
