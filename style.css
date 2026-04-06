@@ -549,26 +549,53 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 @media (max-width: 768px) {
     .sidebar { position: fixed; transform: translateX(-100%); transition: transform 0.3s; z-index: 100; box-shadow: var(--shadow); }
     .sidebar.open { transform: translateX(0); }
-    #menu-toggle { display: none; }
+    #menu-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        background: #fff;
+        flex-shrink: 0;
+    }
     .status-banner-stats { flex-wrap: wrap; justify-content: center; width: 100%; gap: 1rem; }
     .stat-divider { display: none; }
     .kpi-3-col { grid-template-columns: 1fr; }
     .topbar {
-        padding: 0.75rem 1rem;
+        padding: 0.7rem 0.85rem;
+        gap: 0.5rem;
     }
     .sections-container {
-        padding: 1rem;
+        padding: 0.85rem;
     }
     .topbar-right {
         gap: 0.5rem;
+        flex-shrink: 0;
     }
     .sync-indicator span,
     .sidebar-user-info {
         display: none;
     }
+    .company-switcher-topbar {
+        margin-left: 0;
+        min-width: 0;
+        max-width: calc(100vw - 170px);
+        overflow: hidden;
+    }
     .company-switcher-topbar .company-btn {
-        padding: 0.35rem 0.75rem;
-        font-size: 0.7rem;
+        padding: 0.35rem 0.65rem;
+        font-size: 0.68rem;
+        min-width: 0;
+    }
+    .sheet-toolbar-left,
+    .sheet-toolbar-right {
+        width: 100%;
+    }
+    .sheet-toolbar-right {
+        justify-content: flex-start;
+        flex-wrap: wrap;
     }
 }
 
@@ -1042,20 +1069,8 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 
 @media (max-width: 768px) and (orientation: landscape) {
-    #menu-toggle {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 40px;
-        height: 40px;
-        border: 1px solid var(--border-color);
-        border-radius: 10px;
-        background: #fff;
-    }
-
     .sheet-mobile-hint {
-        display: flex;
-        padding: 0.65rem 0.8rem;
+        display: none;
     }
 
     .sheet-wrapper {
