@@ -449,6 +449,47 @@ function getSortedAccounts() {
     return [...AppState.accounts];
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getMonthLabelFromKey(monthKey) {
+    const [year, month] = String(monthKey || '').split('-');
+    const idx = parseInt(month, 10) - 1;
+    const names = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    if (!year || idx < 0 || idx > 11) return String(monthKey || '');
+    return `${names[idx]} ${year}`;
+}
+
+function getLastDayOfMonthISO(monthKey) {
+    const [year, month] = String(monthKey || '').split('-').map(v => parseInt(v, 10));
+    if (!year || !month) return '';
+    const last = new Date(year, month, 0);
+    return normalizeToISODate(last);
+}
+
+function buildDateRangeDescending(startISO, endISO) {
+    const start = normalizeToISODate(startISO);
+    const end = normalizeToISODate(endISO);
+    if (!start || !end) return [];
+    const startDate = new Date(`${start}T00:00:00`);
+    const endDate = new Date(`${end}T00:00:00`);
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || startDate > endDate) return [];
+
+    const out = [];
+    const cursor = new Date(endDate);
+    while (cursor >= startDate) {
+        out.push(normalizeToISODate(cursor));
+        cursor.setDate(cursor.getDate() - 1);
+    }
+    return out;
+}
+
 function getCompanyAccountDetails(companyId) {
     return companyId === 'company2'
         ? (AppState.company2Details || [])
@@ -4430,7 +4471,7 @@ async function renderDataSheet() {
         });
     }
     
-    // Collect unique dates, newest first
+    // Collect unique dates, then expand the sheet so zero-order days still show.
     const dateSet = new Set();
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
@@ -4443,7 +4484,18 @@ async function renderDataSheet() {
         dateSet.add(todayStr);
     }
     
-    const dates = [...dateSet].sort().reverse();
+    const sortedExistingDates = [...dateSet].sort();
+    let dates = [];
+    if (monthFilter && monthFilter !== 'all') {
+        const monthStart = `${monthFilter}-01`;
+        const monthEnd = monthFilter === currentMonth ? todayStr : getLastDayOfMonthISO(monthFilter);
+        dates = buildDateRangeDescending(monthStart, monthEnd);
+    } else if (sortedExistingDates.length > 0) {
+        const firstDate = sortedExistingDates[0];
+        const lastDate = sortedExistingDates[sortedExistingDates.length - 1] || todayStr;
+        const endDate = lastDate > todayStr ? lastDate : todayStr;
+        dates = buildDateRangeDescending(firstDate, endDate);
+    }
     
     if (accounts.length === 0 || dates.length === 0) {
         wrapper.classList.add('hidden');
@@ -4455,7 +4507,7 @@ async function renderDataSheet() {
             emptyMsg.innerHTML = `
                 <div class="p-8 text-center">
                     <i class='bx bx-history text-4xl text-muted mb-4'></i>
-                    <p class="mb-4">No local data found for ${monthFilter}.</p>
+                    <p class="mb-4">No local data found for ${escapeHtml(monthFilter)}.</p>
                     <button class="btn btn-primary" onclick="loadHistoricalData('${compId}', '${monthFilter}')">
                         <i class='bx bx-cloud-download'></i> Reload from Firestore
                     </button>
@@ -4511,33 +4563,53 @@ async function renderDataSheet() {
     // === BODY ===
     let bodyHtml = '';
     const grandTotals = { meesho: new Array(accounts.length).fill(0), total: 0 };
+    const monthTotals = {};
+    dates.forEach(date => {
+        const monthKey = date.substring(0, 7);
+        if (!monthTotals[monthKey]) monthTotals[monthKey] = { total: 0, accountTotals: new Array(accounts.length).fill(0) };
+        accounts.forEach((acc, idx) => {
+            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
+            const qty = parseInt(cell.meesho, 10) || 0;
+            monthTotals[monthKey].accountTotals[idx] += qty;
+            monthTotals[monthKey].total += parseInt(cell.total, 10) || 0;
+        });
+    });
+    let activeMonth = '';
+    const fullColspan = accounts.length + 3;
     
     dates.forEach(date => {
         const [y, m, d] = date.split('-');
+        const monthKey = `${y}-${m}`;
+        if (monthKey !== activeMonth) {
+            activeMonth = monthKey;
+            const monthSummary = monthTotals[monthKey] || { total: 0 };
+            bodyHtml += `<tr class="sheet-month-row" data-month="${monthKey}"><td colspan="${fullColspan}"><span>${getMonthLabelFromKey(monthKey)}</span><strong>Total Orders: <b class="sheet-month-total">${monthSummary.total}</b></strong></td></tr>`;
+        }
         const dateObj = new Date(parseInt(y), parseInt(m)-1, parseInt(d));
         const dayName = dayNames[dateObj.getDay()];
         const isToday = date === todayStr;
         const dayChipClass = isToday ? 'sheet-day-chip sheet-today' : 'sheet-day-chip';
         const formattedDate = `${d}/${m}/${y}`;
         
-        bodyHtml += '<tr>';
+        bodyHtml += `<tr data-month="${monthKey}">`;
         bodyHtml += `<td class="sheet-date-cell">${formattedDate} <span class="${dayChipClass}">${dayName}</span></td>`;
         
         let rowTotal = 0;
         accounts.forEach((acc, idx) => {
             const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
-            const meeshoVal = cell.meesho || '';
-            rowTotal += cell.total;
-            grandTotals.meesho[idx] += cell.meesho;
+            const meeshoVal = parseInt(cell.meesho, 10) || 0;
+            const cellTotal = parseInt(cell.total, 10) || 0;
+            rowTotal += cellTotal;
+            grandTotals.meesho[idx] += meeshoVal;
             
-            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${meeshoVal || ''}" data-date="${date}" data-account-id="${acc.id}" data-account-name="${acc.name}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="-"></td>`;
+            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${meeshoVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="0"></td>`;
         });
         grandTotals.total += rowTotal;
         
         bodyHtml += `<td class="sheet-total-cell">${rowTotal}</td>`;
         
         const remarkVal = savedRemarks[date] || '';
-        bodyHtml += `<td class="sheet-editable"><input type="text" class="sheet-cell-input sheet-remark-input" value="${remarkVal.replace(/"/g, '&quot;')}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
+        bodyHtml += `<td class="sheet-editable"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
         bodyHtml += '</tr>';
     });
     
@@ -4608,9 +4680,23 @@ function recalcSheetRowTotal(inputEl) {
     // Also recalculate grand total row
     const tbody = document.getElementById('sheet-tbody');
     if (!tbody) return;
+    const monthKey = tr.dataset.month;
+    if (monthKey) {
+        const monthRow = tbody.querySelector(`.sheet-month-row[data-month="${monthKey}"]`);
+        const monthTotalEl = monthRow?.querySelector('.sheet-month-total');
+        if (monthTotalEl) {
+            let monthTotal = 0;
+            tbody.querySelectorAll(`tr[data-month="${monthKey}"]:not(.sheet-month-row)`).forEach(row => {
+                const tc = row.querySelector('.sheet-total-cell');
+                if (tc) monthTotal += parseInt(tc.textContent) || 0;
+            });
+            monthTotalEl.textContent = monthTotal;
+        }
+    }
+
     const grandRow = tbody.querySelector('.sheet-grand-row');
     if (!grandRow) return;
-    const allRows = tbody.querySelectorAll('tr:not(.sheet-grand-row)');
+    const allRows = tbody.querySelectorAll('tr:not(.sheet-grand-row):not(.sheet-month-row)');
     let grandTotal = 0;
     allRows.forEach(row => {
         const tc = row.querySelector('.sheet-total-cell');
@@ -4639,7 +4725,7 @@ function exportSheetCSV() {
     headerRow.push('Total', 'Remarks');
     rows.push(headerRow);
     
-    table.querySelectorAll('tbody tr:not(.sheet-grand-row)').forEach(tr => {
+    table.querySelectorAll('tbody tr:not(.sheet-grand-row):not(.sheet-month-row)').forEach(tr => {
         const cells = tr.querySelectorAll('td');
         const row = [];
         cells.forEach(td => {

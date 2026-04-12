@@ -775,9 +775,38 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     background: #f1f5f9;
 }
 
+.sheet-table tbody tr.sheet-month-row td {
+    background: linear-gradient(90deg, #dc2626, #ef4444) !important;
+    color: white;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    padding: 0.48rem 0.75rem;
+    text-align: left;
+    border-top: 2px solid #991b1b;
+    border-bottom: 2px solid #991b1b;
+    border-right: none;
+    position: sticky;
+    top: 31px;
+    z-index: 19;
+}
+
+.sheet-table tbody tr.sheet-month-row td span {
+    display: inline-block;
+    margin-right: 1rem;
+    text-transform: uppercase;
+}
+
+.sheet-table tbody tr.sheet-month-row td strong {
+    display: inline-block;
+    font-size: 0.78rem;
+}
+
 /* Hover */
 .sheet-table tbody tr:hover td {
     background: #eff6ff;
+}
+.sheet-table tbody tr.sheet-month-row:hover td {
+    background: linear-gradient(90deg, #b91c1c, #dc2626) !important;
 }
 .sheet-table tbody tr:hover td.sheet-date-cell {
     background: #dbeafe;
