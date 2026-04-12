@@ -729,7 +729,6 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 .sheet-table tbody td.sheet-date-cell {
     position: sticky;
     left: 0;
-    z-index: 21;
     background: #f8fafc;
     font-weight: 800;
     border-right: 2px solid #cbd5e1;
@@ -738,6 +737,12 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     min-width: clamp(84px, 10vw, 112px);
     max-width: clamp(84px, 10vw, 112px);
     text-align: left;
+}
+.sheet-table thead th.sheet-date-col {
+    z-index: 18;
+}
+.sheet-table tbody td.sheet-date-cell {
+    z-index: 4;
 }
 
 /* Dark separator between account groups */
@@ -787,7 +792,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     border-right: none;
     position: sticky;
     top: 31px;
-    z-index: 19;
+    z-index: 6;
 }
 
 .sheet-table tbody tr.sheet-month-row td span {

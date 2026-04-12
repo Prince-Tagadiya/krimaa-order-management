@@ -449,6 +449,8 @@ function getSortedAccounts() {
     return [...AppState.accounts];
 }
 
+const DATA_SHEET_START_DATE = '2026-03-14';
+
 function escapeHtml(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -488,6 +490,14 @@ function buildDateRangeDescending(startISO, endISO) {
         cursor.setDate(cursor.getDate() - 1);
     }
     return out;
+}
+
+function getDataSheetStartDateForMonth(monthKey) {
+    const monthStart = `${monthKey}-01`;
+    if (monthKey === DATA_SHEET_START_DATE.substring(0, 7)) {
+        return DATA_SHEET_START_DATE;
+    }
+    return monthStart > DATA_SHEET_START_DATE ? monthStart : DATA_SHEET_START_DATE;
 }
 
 function getCompanyAccountDetails(companyId) {
@@ -4487,11 +4497,11 @@ async function renderDataSheet() {
     const sortedExistingDates = [...dateSet].sort();
     let dates = [];
     if (monthFilter && monthFilter !== 'all') {
-        const monthStart = `${monthFilter}-01`;
+        const monthStart = getDataSheetStartDateForMonth(monthFilter);
         const monthEnd = monthFilter === currentMonth ? todayStr : getLastDayOfMonthISO(monthFilter);
         dates = buildDateRangeDescending(monthStart, monthEnd);
-    } else if (sortedExistingDates.length > 0) {
-        const firstDate = sortedExistingDates[0];
+    } else {
+        const firstDate = DATA_SHEET_START_DATE;
         const lastDate = sortedExistingDates[sortedExistingDates.length - 1] || todayStr;
         const endDate = lastDate > todayStr ? lastDate : todayStr;
         dates = buildDateRangeDescending(firstDate, endDate);
