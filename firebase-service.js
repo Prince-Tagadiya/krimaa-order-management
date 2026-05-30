@@ -1,6 +1,243 @@
-// ===== FIREBASE SERVICE =====
-// All Firestore CRUD operations for accounts, orders, remarks, and backups.
-// Uses firebase-compat SDK loaded via CDN.
+// ===== FIRESTORE TO REALTIME DATABASE SHIM =====
+// Emulates the firestore API over Firebase Realtime Database to bypass document read/write limits.
+function isFirestoreTimestamp(v) {
+    if (!v || typeof v !== 'object') return false;
+    if (v.constructor && (v.constructor.name === 'FieldValue' || v.constructor.name === 'Sentinel')) return true;
+    if (typeof v.isEqual === 'function' && typeof v.toString === 'function') {
+        const str = v.toString();
+        if (str.indexOf('FieldValue') >= 0 || str.indexOf('serverTimestamp') >= 0) return true;
+    }
+    return false;
+}
+
+function replaceServerTimestamp(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (isFirestoreTimestamp(obj)) {
+        return firebase.database.ServerValue.TIMESTAMP;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(item => replaceServerTimestamp(item));
+    }
+    if (typeof obj === 'object') {
+        const copy = {};
+        for (const [k, v] of Object.entries(obj)) {
+            if (isFirestoreTimestamp(v)) {
+                copy[k] = firebase.database.ServerValue.TIMESTAMP;
+            } else {
+                copy[k] = replaceServerTimestamp(v);
+            }
+        }
+        return copy;
+    }
+    return obj;
+}
+
+class RtdbShim {
+    constructor() {
+        this.rtdb = firebase.database();
+    }
+
+    batch() {
+        const updates = {};
+        return {
+            set: (docRef, data, options) => {
+                const path = docRef._path;
+                const clean = replaceServerTimestamp(data);
+                if (options && options.merge) {
+                    if (clean && typeof clean === 'object' && !Array.isArray(clean)) {
+                        Object.keys(clean).forEach(k => {
+                            updates[`${path}/${k}`] = clean[k];
+                        });
+                    } else {
+                        updates[path] = clean;
+                    }
+                } else {
+                    updates[path] = clean;
+                }
+            },
+            update: (docRef, data) => {
+                const path = docRef._path;
+                const clean = replaceServerTimestamp(data);
+                Object.keys(clean).forEach(k => {
+                    updates[`${path}/${k}`] = clean[k];
+                });
+            },
+            delete: (docRef) => {
+                const path = docRef._path;
+                updates[path] = null;
+            },
+            commit: async () => {
+                await this.rtdb.ref().update(updates);
+            }
+        };
+    }
+
+    async runTransaction(fn) {
+        const ops = [];
+        const tx = {
+            get: async (docRef) => {
+                return docRef.get();
+            },
+            set: (docRef, data, options) => {
+                ops.push(() => docRef.set(data, options));
+            },
+            update: (docRef, data) => {
+                ops.push(() => docRef.update(data));
+            },
+            delete: (docRef) => {
+                ops.push(() => docRef.delete());
+            }
+        };
+        await fn(tx);
+        for (const op of ops) {
+            await op();
+        }
+    }
+
+    collection(name) {
+        return new RtdbCollectionRef(this.rtdb, name);
+    }
+}
+
+class RtdbCollectionRef {
+    constructor(rtdb, name, queries = []) {
+        this.rtdb = rtdb;
+        this.name = name;
+        this._path = `/${name}`;
+        this.queries = queries;
+        this._orderBy = null;
+        this._limit = null;
+    }
+
+    doc(docId) {
+        const id = docId ? String(docId).trim() : this.rtdb.ref(this._path).push().key;
+        return new RtdbDocRef(this.rtdb, `${this._path}/${id}`, id);
+    }
+
+    where(field, op, val) {
+        return new RtdbCollectionRef(this.rtdb, this.name, [...this.queries, { field, op, val }]);
+    }
+
+    orderBy(field, dir = 'asc') {
+        const ref = new RtdbCollectionRef(this.rtdb, this.name, this.queries);
+        ref._orderBy = { field, dir };
+        return ref;
+    }
+
+    limit(n) {
+        const ref = new RtdbCollectionRef(this.rtdb, this.name, this.queries);
+        ref._limit = n;
+        return ref;
+    }
+
+    async add(data) {
+        const newRef = this.rtdb.ref(this._path).push();
+        const id = newRef.key;
+        const cleanData = replaceServerTimestamp(data);
+        await newRef.set(cleanData);
+        return new RtdbDocRef(this.rtdb, `${this._path}/${id}`, id);
+    }
+
+    async get() {
+        const snapshot = await this.rtdb.ref(this._path).once('value');
+        const docs = [];
+        
+        snapshot.forEach(child => {
+            const childId = child.key;
+            let val = child.val();
+            
+            let matches = true;
+            for (const q of this.queries) {
+                const rowVal = val ? val[q.field] : undefined;
+                if (q.op === '==') {
+                    if (String(rowVal ?? '').trim() !== String(q.val ?? '').trim()) matches = false;
+                } else if (q.op === '>=') {
+                    if (!(rowVal >= q.val)) matches = false;
+                } else if (q.op === '<=') {
+                    if (!(rowVal <= q.val)) matches = false;
+                }
+            }
+            
+            if (matches) {
+                const docRef = new RtdbDocRef(this.rtdb, `${this._path}/${childId}`, childId);
+                docs.push(new RtdbDocSnapshot(childId, val, true, docRef));
+            }
+        });
+
+        if (this._orderBy) {
+            const { field, dir } = this._orderBy;
+            docs.sort((a, b) => {
+                const av = a.data()?.[field] || '';
+                const bv = b.data()?.[field] || '';
+                const comp = String(av).localeCompare(String(bv));
+                return dir === 'desc' ? -comp : comp;
+            });
+        }
+
+        let finalDocs = docs;
+        if (this._limit !== null) {
+            finalDocs = docs.slice(0, this._limit);
+        }
+
+        return {
+            empty: finalDocs.length === 0,
+            size: finalDocs.length,
+            docs: finalDocs,
+            forEach: (cb) => finalDocs.forEach(cb)
+        };
+    }
+}
+
+class RtdbDocRef {
+    constructor(rtdb, path, id) {
+        this.rtdb = rtdb;
+        this._path = path;
+        this.id = id;
+        this.ref = this;
+    }
+
+    async get() {
+        const snapshot = await this.rtdb.ref(this._path).once('value');
+        return new RtdbDocSnapshot(this.id, snapshot.val(), snapshot.exists(), this);
+    }
+
+    async set(data, options) {
+        const cleanData = replaceServerTimestamp(data);
+        if (options && options.merge) {
+            const current = await this.get();
+            const merged = { ...(current.data() || {}), ...cleanData };
+            await this.rtdb.ref(this._path).set(merged);
+        } else {
+            await this.rtdb.ref(this._path).set(cleanData);
+        }
+    }
+
+    async update(data) {
+        const cleanData = replaceServerTimestamp(data);
+        const updates = {};
+        Object.keys(cleanData).forEach(k => {
+            updates[k] = cleanData[k];
+        });
+        await this.rtdb.ref(this._path).update(updates);
+    }
+
+    async delete() {
+        await this.rtdb.ref(this._path).remove();
+    }
+}
+
+class RtdbDocSnapshot {
+    constructor(id, val, existsFlag = null, docRef = null) {
+        this.id = id;
+        this._val = val || null;
+        this.exists = existsFlag !== null ? existsFlag : (val !== null && val !== undefined);
+        this.ref = docRef;
+    }
+
+    data() {
+        return this._val;
+    }
+}
 
 const FirebaseService = (() => {
     let db = null;
@@ -18,7 +255,7 @@ const FirebaseService = (() => {
     function init() {
         if (_initialized) return;
         firebase.initializeApp(FIREBASE_CONFIG);
-        db = firebase.firestore();
+        db = new RtdbShim();
         
         // Keep default online mode to avoid deprecated persistence API warnings.
         _initialized = true;
