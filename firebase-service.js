@@ -8,6 +8,10 @@ function isFirestoreTimestamp(v) {
         if (str.indexOf('FieldValue') >= 0 || str.indexOf('serverTimestamp') >= 0) return true;
     }
     return false;
+}function invalidateCache() {
+    if (typeof window !== 'undefined' && typeof window.clearApiReadCache === 'function') {
+        window.clearApiReadCache();
+    }
 }
 
 function replaceServerTimestamp(obj) {
@@ -68,6 +72,7 @@ class RtdbShim {
             },
             commit: async () => {
                 await this.rtdb.ref().update(updates);
+                invalidateCache();
             }
         };
     }
@@ -135,6 +140,7 @@ class RtdbCollectionRef {
         const id = newRef.key;
         const cleanData = replaceServerTimestamp(data);
         await newRef.set(cleanData);
+        invalidateCache();
         return new RtdbDocRef(this.rtdb, `${this._path}/${id}`, id);
     }
 
@@ -210,6 +216,7 @@ class RtdbDocRef {
         } else {
             await this.rtdb.ref(this._path).set(cleanData);
         }
+        invalidateCache();
     }
 
     async update(data) {
@@ -219,10 +226,12 @@ class RtdbDocRef {
             updates[k] = cleanData[k];
         });
         await this.rtdb.ref(this._path).update(updates);
+        invalidateCache();
     }
 
     async delete() {
         await this.rtdb.ref(this._path).remove();
+        invalidateCache();
     }
 }
 

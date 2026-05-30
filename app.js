@@ -923,13 +923,16 @@ let _firestoreQuotaLastToastMs = 0;
 let _useSheetsFallbackMode = false;
 let _sheetsFallbackLastLoadMs = 0;
 const _apiReadCache = new Map();
+window.clearApiReadCache = function() {
+    _apiReadCache.clear();
+};
 const SHEET_SYNC_PENDING_KEY = 'sheet_sync_pending_v3';
 const SHEET_SYNC_LAST_SUCCESS_KEY = 'sheet_sync_last_success_v3';
 const FIRESTORE_QUOTA_UNTIL_KEY = 'firestore_quota_until_v1';
 const SHEET_RECONCILE_MAX_STALE_MS = 3 * 60 * 1000;
 const FIRESTORE_QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
 const SHEETS_FALLBACK_DAYS = 7;
-const READ_CACHE_TTL_MS = 15000;
+const READ_CACHE_TTL_MS = 180000; // 3 minutes cache to avoid constant Firestore/Firebase reads
 
 function isFirestoreQuotaError(err) {
     const msg = String(err?.message || err || '').toLowerCase();
@@ -3620,7 +3623,7 @@ function toggleDateDetails(dateId) {
 async function apiRequest(payload) {
     const action = payload?.action;
     const companyId = payload?.companyId || AppState.currentCompany || 'company1';
-    const readActions = new Set(['getAccounts', 'getDashboardData', 'getRemarks', 'getMoneyBackups']);
+    const readActions = new Set(['getAccounts', 'getDashboardData', 'getRemarks', 'getMoneyBackups', 'getKarigars', 'getKarigarTransactions', 'getDesignPrices']);
     const cacheKey = `${action}::${companyId}::${String(payload?.month || '')}`;
     if (readActions.has(action)) {
         const cached = _apiReadCache.get(cacheKey);
@@ -3766,6 +3769,9 @@ async function apiRequest(payload) {
             case 'createMoneyBackup': result = await FirebaseService.createMoneyBackup(payload.date, payload.rows, payload.reason); break;
             case 'getMoneyBackups': result = await FirebaseService.getMoneyBackups(); break;
             case 'deleteMoneyBackup': result = await FirebaseService.deleteMoneyBackup(payload.backupId); break;
+            case 'getKarigars': result = await FirebaseService.getKarigars(companyId); break;
+            case 'getKarigarTransactions': result = await FirebaseService.getKarigarTransactions(companyId); break;
+            case 'getDesignPrices': result = await FirebaseService.getDesignPrices(payload.DESIGN_PRICE_SCOPE || 'global'); break;
             default: throw new Error('Unknown action: ' + action);
         }
         const mutatingActions = new Set([
@@ -5952,10 +5958,10 @@ async function loadKarigarData(forceReload = false) {
     }
 
     try {
-        const kRes = await FirebaseService.getKarigars(companyId);
+        const kRes = await apiRequest({ action: 'getKarigars', companyId });
         const [tRes, pRes] = await Promise.all([
-            FirebaseService.getKarigarTransactions(companyId),
-            FirebaseService.getDesignPrices(DESIGN_PRICE_SCOPE)
+            apiRequest({ action: 'getKarigarTransactions', companyId }),
+            apiRequest({ action: 'getDesignPrices', companyId, DESIGN_PRICE_SCOPE })
         ]);
         
         if (kRes.success) AppState.karigars = kRes.data || [];
