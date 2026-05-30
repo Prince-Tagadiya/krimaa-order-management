@@ -1001,7 +1001,7 @@ function updateBackendModeBanner() {
     if (!el) return;
     if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
         el.classList.remove('hidden');
-        el.innerHTML = `<i class='bx bx-error-circle'></i><span>Server down • Sheet Mode (Slow)</span>`;
+        el.innerHTML = `<i class='bx bx-error-circle'></i><span>Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow).</span>`;
     } else {
         el.classList.add('hidden');
     }
@@ -1777,7 +1777,7 @@ async function refreshAppDataManually() {
         if (!serverResponsive) {
             enableSheetsFallbackMode();
             updateBackendModeBanner();
-            setLoaderStatus('Server is down. Loading from Google Sheet (slow)...');
+            setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
             await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
             await loadAvailableSheetMonths(true);
             if (AppState.currentSection === 'data-sheet') renderDataSheet();
@@ -2492,7 +2492,7 @@ async function loadInitialData() {
         const serverResponsive = await probeFirebaseWithCountdown(5);
         if (!serverResponsive) {
             enableSheetsFallbackMode();
-            setLoaderStatus('Server is down. Loading from Google Sheet (slow)...');
+            setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
         } else {
             await tryRecoverFirestoreMode();
             if (_useSheetsFallbackMode) disableSheetsFallbackMode();
@@ -2503,7 +2503,7 @@ async function loadInitialData() {
         await ensureFirebaseSeeded();
         
         if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
-            setLoaderStatus('Server is down. Starting Sheet Mode (Slow)...');
+            setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
             console.log("🚀 [INITIALIZATION] Firestore quota mode active. Loading recent Sheet data...");
             await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
             updateBackendModeBanner();
@@ -2539,7 +2539,7 @@ async function loadInitialData() {
         console.error(err);
         if (isFirestoreQuotaError(err) || isFirestoreUnavailableError(err)) {
             try {
-                setLoaderStatus('Server is down. Starting Sheet Mode (Slow)...');
+                setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
                 enableSheetsFallbackMode();
                 await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
                 updateBackendModeBanner();
@@ -2548,7 +2548,7 @@ async function loadInitialData() {
                 } else {
                     navigateTo('data-sheet');
                 }
-                showToast('Server down. Running in Sheet Mode (Slow).', 'info');
+                showToast('Firebase server down. Please use the app from tomorrow 1:00 PM. Running in Sheet Mode (Slow).', 'info');
             } catch (sheetErr) {
                 console.error('Sheet mode bootstrap failed:', sheetErr);
                 showToast("Error loading data: " + (sheetErr?.message || err?.message || 'Unknown error'), "error");
