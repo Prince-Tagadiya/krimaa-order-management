@@ -1322,9 +1322,7 @@ function bindSheetSyncLifecycleEvents() {
 
 function scheduleQuickWriteFlush(delayMs = 1200) {
     if (_quickWriteFlushTimer) clearTimeout(_quickWriteFlushTimer);
-    // Manual Save button is primary; auto-save is fallback based on APP_CONFIG.writeBufferMs.
-    const configured = Math.max(600000, parseInt(APP_CONFIG?.writeBufferMs, 10) || 600000);
-    const wait = Math.max(configured, parseInt(delayMs, 10) || configured);
+    const wait = parseInt(delayMs, 10) || 1200;
     _quickWriteFlushTimer = setTimeout(async () => {
         try {
             await FirebaseService.flushWrites();
@@ -2180,14 +2178,12 @@ function attachEventListeners() {
             if (submitRes?.sheetSyncWarning) {
                 showToast(`Saved to Firebase. Sheet sync retrying in background (${submitRes.sheetSyncWarning}).`, "info");
             }
-            document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
-            document.querySelectorAll('.row-total').forEach(tot => tot.textContent = '0');
-            calculateGrandTotals();
             await fetchDashboardData();
             try { await fetchAllCompaniesData(); } catch (e) { console.warn('Non-blocking: failed to refresh all-company data after submit', e); }
             // Order role stays on daily-order, admin goes to dashboard
             if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
                 showToast('Orders saved! You can enter more orders.', 'success');
+                checkExistingOrdersForDate();
             } else {
                 navigateTo('dashboard');
             }
@@ -2965,6 +2961,27 @@ function checkExistingOrdersForDate() {
             </div>
         `;
         formContainer.classList.remove('hidden');
+
+        // Pre-populate input fields with existing values so edits won't overwrite other data with 0
+        document.querySelectorAll('.order-row').forEach(row => {
+            const accId = row.dataset.accountId;
+            const accName = row.dataset.accountName;
+            const match = existingOrders.find(o => 
+                (accId && String(o.accountId || '').trim() === String(accId).trim()) ||
+                (accName && String(o.accountName || '').trim().toLowerCase() === String(accName).trim().toLowerCase())
+            );
+            const inp = row.querySelector('.inp-meesho');
+            const totalSpan = row.querySelector('.row-total');
+            if (inp) {
+                const qty = match ? (parseInt(match.meesho, 10) || 0) : 0;
+                inp.value = qty > 0 ? qty : '';
+                if (totalSpan) {
+                    totalSpan.textContent = qty;
+                }
+            }
+        });
+        calculateGrandTotals();
+
         let gm = 0, gt = 0;
         const modalBody = document.getElementById('modal-details-tbody');
         modalBody.innerHTML = existingOrders.map(o => {
