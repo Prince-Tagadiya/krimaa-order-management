@@ -747,6 +747,44 @@ async function initApp() {
     } else {
         showFolderSetupScreen();
     }
+
+    startLanFolderWatcher();
+}
+
+let _currentFolderHash = '';
+function startLanFolderWatcher() {
+    if (window._lanFolderWatcherStarted) return;
+    window._lanFolderWatcherStarted = true;
+
+    setInterval(async () => {
+        if (!LanStorageService.isConnected()) {
+            _currentFolderHash = '';
+            return;
+        }
+        try {
+            const hash = await LanStorageService.getFolderHash();
+            if (!hash) return;
+            if (!_currentFolderHash) {
+                _currentFolderHash = hash;
+                return;
+            }
+            if (_currentFolderHash !== hash) {
+                console.log('🔄 [LAN] Local folder files changed! Reloading data...');
+                _currentFolderHash = hash;
+                if (typeof _apiReadCache !== 'undefined') {
+                    _apiReadCache.clear();
+                }
+                await fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true });
+                if (typeof navigateTo === 'function') {
+                    const activeSection = document.querySelector('.nav-btn.active')?.dataset.section || 'data-sheet';
+                    navigateTo(activeSection);
+                }
+                showToast('🔄 LAN folder updated! Data reloaded smoothly.', 'info');
+            }
+        } catch (e) {
+            console.warn('[LAN] Folder watcher error:', e);
+        }
+    }, 4000);
 }
 
 
@@ -2221,7 +2259,50 @@ function attachEventListeners() {
         } catch(err) { showToast("Network Error!", "error"); }
         finally { hideLoader(); }
     });
+
+    // ──── PWA Installation ────
+    const folderSetupInstallBtn = document.getElementById('folder-setup-install-btn');
+    const pwaInstallBtn = document.getElementById('pwa-install-btn');
+
+    async function triggerInstallPrompt() {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        console.log(`User response to install prompt: ${outcome}`);
+        if (outcome === 'accepted') {
+            deferredPrompt = null;
+            if (folderSetupInstallBtn) folderSetupInstallBtn.classList.add('hidden');
+            if (pwaInstallBtn) pwaInstallBtn.classList.add('hidden');
+        }
+    }
+
+    if (folderSetupInstallBtn) {
+        folderSetupInstallBtn.addEventListener('click', triggerInstallPrompt);
+    }
+    if (pwaInstallBtn) {
+        pwaInstallBtn.addEventListener('click', triggerInstallPrompt);
+    }
 }
+
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const folderSetupInstallBtn = document.getElementById('folder-setup-install-btn');
+    const pwaInstallBtn = document.getElementById('pwa-install-btn');
+    if (folderSetupInstallBtn) folderSetupInstallBtn.classList.remove('hidden');
+    if (pwaInstallBtn) pwaInstallBtn.classList.remove('hidden');
+});
+
+window.addEventListener('appinstalled', (evt) => {
+    console.log('Krimaa App was installed successfully.');
+    deferredPrompt = null;
+    const folderSetupInstallBtn = document.getElementById('folder-setup-install-btn');
+    const pwaInstallBtn = document.getElementById('pwa-install-btn');
+    if (folderSetupInstallBtn) folderSetupInstallBtn.classList.add('hidden');
+    if (pwaInstallBtn) pwaInstallBtn.classList.add('hidden');
+    showToast('🎉 Krimaa installed successfully!', 'success');
+});
 
 function navigateTo(sectionId) {
     

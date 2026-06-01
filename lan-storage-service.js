@@ -381,10 +381,25 @@ const LanStorageService = (() => {
             }
             if (action === 'getDashboardData') {
                 const month = payload.month; // e.g. "2024-03"
-                if (!month) return { success: true, data: [] };
-                const y = month.split('-')[0];
-                const m = month.split('-')[1];
-                const all = await readFile(`orders_${y}_${m}`, []);
+                let all = [];
+                if (month) {
+                    const y = month.split('-')[0];
+                    const m = month.split('-')[1];
+                    all = await readFile(`orders_${y}_${m}`, []);
+                } else {
+                    try {
+                        for await (const entry of _dirHandle.values()) {
+                            if (entry.kind === 'file' && entry.name.startsWith('orders_') && entry.name.endsWith('.json')) {
+                                const fileData = await readFile(entry.name, []);
+                                if (Array.isArray(fileData)) {
+                                    all.push(...fileData);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.warn('[LAN] Error reading all monthly files:', err);
+                    }
+                }
                 const filtered = all.filter(o => o.companyId === companyId);
                 return { success: true, data: filtered };
             }
@@ -395,10 +410,24 @@ const LanStorageService = (() => {
         } catch (e) {
             console.error('[LAN] fetchFromLocal failed:', e);
         }
-        return undefined; // Let it fallback or be unhandled
+    async function getFolderHash() {
+        if (!_dirHandle || _status !== 'connected') return '';
+        try {
+            let hashParts = [];
+            for await (const entry of _dirHandle.values()) {
+                if (entry.kind === 'file') {
+                    const file = await entry.getFile();
+                    hashParts.push(`${entry.name}:${file.lastModified}`);
+                }
+            }
+            return hashParts.sort().join('|');
+        } catch (e) {
+            return '';
+        }
     }
 
     return {
+        getFolderHash,
         connect,
         autoReconnect,
         requestUnlock,

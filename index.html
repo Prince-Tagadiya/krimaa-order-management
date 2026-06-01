@@ -8,6 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
     <script>
         // Register Service Worker for full offline support
         if ('serviceWorker' in navigator) {
@@ -50,6 +51,9 @@
             </button>
             <button type="button" id="folder-setup-continue-btn" class="btn btn-outline w-100 hidden" style="margin-bottom:12px;">
                 <i class='bx bx-arrow-back'></i> Continue to Login
+            </button>
+            <button type="button" id="folder-setup-install-btn" class="btn btn-primary w-100 hidden" style="margin-bottom:12px; background: #059669; border-color: #059669;">
+                <i class='bx bx-plus-circle'></i> Install Desktop App
             </button>
             <button type="button" id="folder-setup-skip-btn" class="btn btn-outline w-100" style="margin-bottom:12px; color: #64748b; border-color: #cbd5e1;">
                 Skip for now (Cloud Mode)
@@ -116,6 +120,9 @@
                 </button>
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-accent" id="lan-settings-btn" title="Configure LAN storage and sync settings">
                     <i class='bx bx-hdd'></i> LAN Drive
+                </button>
+                <button type="button" class="btn btn-primary btn-sm w-100 mb-1 hidden" id="pwa-install-btn" style="background: #059669; border-color: #059669;" title="Install Krimaa App on this device">
+                    <i class='bx bx-plus-circle'></i> Install App
                 </button>
                 <div id="last-backup-time" class="text-xs text-muted text-center mb-2" style="font-size: 0.65rem;"></div>
                 <a href="#" id="logout-btn" class="nav-btn logout-link" data-target="logout"><i class='bx bx-log-out'></i> Logout</a>

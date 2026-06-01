@@ -1,7 +1,7 @@
 // ===== KRIMAA SERVICE WORKER — OFFLINE-FIRST =====
 // Cache all app shell + CDN assets. Serve from cache first, network as fallback.
 // Increment CACHE_VER whenever you deploy new code.
-const CACHE_VER = 'krimaa-v9';
+const CACHE_VER = 'krimaa-v10';
 
 const SHELL_FILES = [
     '/',
@@ -11,6 +11,7 @@ const SHELL_FILES = [
     '/firebase-service.js',
     '/lan-storage-service.js',
     '/runtime-env-loader.js',
+    '/manifest.json',
 ];
 
 // External CDN files that must also be cached for full offline use
