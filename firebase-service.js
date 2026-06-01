@@ -87,60 +87,62 @@ class RtdbShim {
     }
 
     batch() {
-        const updates = {};
-        return {
-            set: (docRef, data, options) => {
-                const path = docRef._path;
-                const clean = replaceServerTimestamp(data);
-                if (options && options.merge) {
-                    if (clean && typeof clean === 'object' && !Array.isArray(clean)) {
-                        Object.keys(clean).forEach(k => {
-                            updates[`${path}/${k}`] = clean[k];
-                        });
-                    } else {
-                        updates[path] = clean;
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const updates = [];
+            return {
+                set: (docRef, data, options) => {
+                    updates.push({ op: 'set', docRef, data, options });
+                },
+                update: (docRef, data) => {
+                    updates.push({ op: 'update', docRef, data });
+                },
+                delete: (docRef) => {
+                    updates.push({ op: 'delete', docRef });
+                },
+                commit: async () => {
+                    for (const u of updates) {
+                        const parts = u.docRef._path.split('/').filter(Boolean);
+                        const colName = parts[0];
+                        const docId = u.docRef.id;
+                        if (u.op === 'set') {
+                            await _writeLocalDoc(colName, docId, u.data, !!(u.options && u.options.merge));
+                        } else if (u.op === 'update') {
+                            await _writeLocalDoc(colName, docId, u.data, true);
+                        } else if (u.op === 'delete') {
+                            await _deleteLocalDoc(colName, docId);
+                        }
                     }
-                } else {
-                    updates[path] = clean;
+                    invalidateCache();
                 }
-            },
-            update: (docRef, data) => {
-                const path = docRef._path;
-                const clean = replaceServerTimestamp(data);
-                Object.keys(clean).forEach(k => {
-                    updates[`${path}/${k}`] = clean[k];
-                });
-            },
-            delete: (docRef) => {
-                const path = docRef._path;
-                updates[path] = null;
-            },
-            commit: async () => {
-                await this.rtdb.ref().update(updates);
-                invalidateCache();
-            }
-        };
+            };
+        } else {
+            return firebase.firestore().batch();
+        }
     }
 
     async runTransaction(fn) {
-        const ops = [];
-        const tx = {
-            get: async (docRef) => {
-                return docRef.get();
-            },
-            set: (docRef, data, options) => {
-                ops.push(() => docRef.set(data, options));
-            },
-            update: (docRef, data) => {
-                ops.push(() => docRef.update(data));
-            },
-            delete: (docRef) => {
-                ops.push(() => docRef.delete());
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const ops = [];
+            const tx = {
+                get: async (docRef) => {
+                    return docRef.get();
+                },
+                set: (docRef, data, options) => {
+                    ops.push(() => docRef.set(data, options));
+                },
+                update: (docRef, data) => {
+                    ops.push(() => docRef.update(data));
+                },
+                delete: (docRef) => {
+                    ops.push(() => docRef.delete());
+                }
+            };
+            await fn(tx);
+            for (const op of ops) {
+                await op();
             }
-        };
-        await fn(tx);
-        for (const op of ops) {
-            await op();
+        } else {
+            return firebase.firestore().runTransaction(fn);
         }
     }
 
