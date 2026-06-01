@@ -400,12 +400,33 @@ const LanStorageService = (() => {
                         console.warn('[LAN] Error reading all monthly files:', err);
                     }
                 }
-                const filtered = all.filter(o => (o.companyId || o.masterCompany) === companyId);
+                
+                // Chronological Deduplication: keep only the latest submitted order entry for each date + company + account
+                const dedupMap = new Map();
+                all.forEach(o => {
+                    const d = o.date;
+                    const comp = o.companyId || o.masterCompany || 'company1';
+                    const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                    const key = `${d}__${comp}__${accName}`;
+                    dedupMap.set(key, o);
+                });
+                
+                const uniqueOrders = Array.from(dedupMap.values());
+                const filtered = uniqueOrders.filter(o => (o.companyId || o.masterCompany) === companyId);
                 return { success: true, data: filtered };
             }
             if (action === 'getOrders') {
                 const all = await readFile('daily_orders', []);
-                return { success: true, data: all.filter(o => (o.companyId || o.masterCompany) === companyId) };
+                const dedupMap = new Map();
+                all.forEach(o => {
+                    const d = o.date;
+                    const comp = o.companyId || o.masterCompany || 'company1';
+                    const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                    const key = `${d}__${comp}__${accName}`;
+                    dedupMap.set(key, o);
+                });
+                const unique = Array.from(dedupMap.values());
+                return { success: true, data: unique.filter(o => (o.companyId || o.masterCompany) === companyId) };
             }
         } catch (e) {
             console.error('[LAN] fetchFromLocal failed:', e);
