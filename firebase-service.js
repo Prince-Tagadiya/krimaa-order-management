@@ -66,7 +66,7 @@ async function _deleteLocalDoc(colName, docId) {
 function _syncToCloudInBackground(colName, docId, data, op) {
     (async () => {
         try {
-            const rtdb = firebase.database("https://krimaa-f7fc3-default-rtdb.asia-southeast1.firebasedatabase.app/");
+            const rtdb = firebase.database();
             const path = `/${colName}/${docId}`;
             if (op === 'delete') {
                 await rtdb.ref(path).remove();
@@ -85,7 +85,7 @@ function _syncToCloudInBackground(colName, docId, data, op) {
 
 class RtdbShim {
     constructor() {
-        this.rtdb = firebase.database("https://krimaa-f7fc3-default-rtdb.asia-southeast1.firebasedatabase.app/");
+        this.rtdb = firebase.database();
     }
 
     batch() {
@@ -341,6 +341,9 @@ const FirebaseService = (() => {
     // ───── INIT ─────
     function init() {
         if (_initialized) return;
+        if (typeof FIREBASE_CONFIG !== 'undefined') {
+            FIREBASE_CONFIG.databaseURL = "https://krimaa-f7fc3-default-rtdb.asia-southeast1.firebasedatabase.app/";
+        }
         firebase.initializeApp(FIREBASE_CONFIG);
         db = new RtdbShim();
         
