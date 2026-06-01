@@ -66,16 +66,14 @@ async function _deleteLocalDoc(colName, docId) {
 function _syncToCloudInBackground(colName, docId, data, op) {
     (async () => {
         try {
-            const rtdb = firebase.database();
-            const path = `/${colName}/${docId}`;
+            const db = firebase.firestore();
+            const ref = db.collection(colName).doc(docId);
             if (op === 'delete') {
-                await rtdb.ref(path).remove();
+                await ref.delete();
             } else if (op === 'merge') {
-                const snapshot = await rtdb.ref(path).once('value');
-                const merged = { ...(snapshot.val() || {}), ...data };
-                await rtdb.ref(path).set(merged);
+                await ref.set(data, { merge: true });
             } else {
-                await rtdb.ref(path).set(data);
+                await ref.set(data);
             }
         } catch (e) {
             console.warn("Background cloud sync paused (offline):", e.message);
@@ -85,7 +83,7 @@ function _syncToCloudInBackground(colName, docId, data, op) {
 
 class RtdbShim {
     constructor() {
-        this.rtdb = firebase.database();
+        this.rtdb = firebase.firestore();
     }
 
     batch() {
@@ -162,7 +160,7 @@ class RtdbCollectionRef {
     }
 
     doc(docId) {
-        const id = docId ? String(docId).trim() : this.rtdb.ref(this._path).push().key;
+        const id = docId ? String(docId).trim() : 'push_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         return new RtdbDocRef(this.rtdb, `${this._path}/${id}`, id);
     }
 
@@ -195,8 +193,8 @@ class RtdbCollectionRef {
     }
 
     async get() {
-        let valMap = {};
         if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            let valMap = {};
             const list = await window.LanStorageService.readEncryptedFile(this.name + ".enc", []);
             list.forEach(doc => {
                 if (doc && doc.id) {
@@ -204,52 +202,62 @@ class RtdbCollectionRef {
                     delete valMap[doc.id].id;
                 }
             });
-        } else {
-            const snapshot = await this.rtdb.ref(this._path).once('value');
-            valMap = snapshot.val() || {};
-        }
 
-        const docs = [];
-        Object.entries(valMap).forEach(([childId, val]) => {
-            let matches = true;
-            for (const q of this.queries) {
-                const rowVal = val ? val[q.field] : undefined;
-                if (q.op === '==') {
-                    if (String(rowVal ?? '').trim() !== String(q.val ?? '').trim()) matches = false;
-                } else if (q.op === '>=') {
-                    if (!(rowVal >= q.val)) matches = false;
-                } else if (q.op === '<=') {
-                    if (!(rowVal <= q.val)) matches = false;
+            const docs = [];
+            Object.entries(valMap).forEach(([childId, val]) => {
+                let matches = true;
+                for (const q of this.queries) {
+                    const rowVal = val ? val[q.field] : undefined;
+                    if (q.op === '==') {
+                        if (String(rowVal ?? '').trim() !== String(q.val ?? '').trim()) matches = false;
+                    } else if (q.op === '>=') {
+                        if (!(rowVal >= q.val)) matches = false;
+                    } else if (q.op === '<=') {
+                        if (!(rowVal <= q.val)) matches = false;
+                    }
                 }
-            }
-            
-            if (matches) {
-                const docRef = new RtdbDocRef(this.rtdb, `${this._path}/${childId}`, childId);
-                docs.push(new RtdbDocSnapshot(childId, val, true, docRef));
-            }
-        });
-
-        if (this._orderBy) {
-            const { field, dir } = this._orderBy;
-            docs.sort((a, b) => {
-                const av = a.data()?.[field] || '';
-                const bv = b.data()?.[field] || '';
-                const comp = String(av).localeCompare(String(bv));
-                return dir === 'desc' ? -comp : comp;
+                
+                if (matches) {
+                    const docRef = new RtdbDocRef(this.rtdb, `${this._path}/${childId}`, childId);
+                    docs.push(new RtdbDocSnapshot(childId, val, true, docRef));
+                }
             });
-        }
 
-        let finalDocs = docs;
-        if (this._limit !== null) {
-            finalDocs = docs.slice(0, this._limit);
-        }
+            if (this._orderBy) {
+                const { field, dir } = this._orderBy;
+                docs.sort((a, b) => {
+                    const av = a.data()?.[field] || '';
+                    const bv = b.data()?.[field] || '';
+                    const comp = String(av).localeCompare(String(bv));
+                    return dir === 'desc' ? -comp : comp;
+                });
+            }
 
-        return {
-            empty: finalDocs.length === 0,
-            size: finalDocs.length,
-            docs: finalDocs,
-            forEach: (cb) => finalDocs.forEach(cb)
-        };
+            let finalDocs = docs;
+            if (this._limit !== null) {
+                finalDocs = docs.slice(0, this._limit);
+            }
+
+            return {
+                empty: finalDocs.length === 0,
+                size: finalDocs.length,
+                docs: finalDocs,
+                forEach: (cb) => finalDocs.forEach(cb)
+            };
+        } else {
+            let query = firebase.firestore().collection(this.name);
+            for (const q of this.queries) {
+                query = query.where(q.field, q.op, q.val);
+            }
+            if (this._orderBy) {
+                query = query.orderBy(this._orderBy.field, this._orderBy.dir);
+            }
+            if (this._limit !== null) {
+                query = query.limit(this._limit);
+            }
+            const snap = await query.get();
+            return snap;
+        }
     }
 }
 
@@ -273,9 +281,12 @@ class RtdbDocRef {
                 return new RtdbDocSnapshot(this.id, clean, true, this);
             }
             return new RtdbDocSnapshot(this.id, null, false, this);
+        } else {
+            const parts = this._path.split('/').filter(Boolean);
+            const colName = parts[0];
+            const snap = await firebase.firestore().collection(colName).doc(this.id).get();
+            return snap;
         }
-        const snapshot = await this.rtdb.ref(this._path).once('value');
-        return new RtdbDocSnapshot(this.id, snapshot.val(), snapshot.exists(), this);
     }
 
     async set(data, options) {
