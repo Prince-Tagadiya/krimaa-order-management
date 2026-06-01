@@ -2123,6 +2123,23 @@ function attachEventListeners() {
         }
     });
 
+
+    // Navigation
+    document.querySelectorAll('.company-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.disabled || btn.classList.contains('is-disabled') || AppState.isSwitchingCompany) return;
+            const targetCompany = btn.dataset.company;
+            if (AppState.currentCompany === targetCompany) return;
+            
+            document.querySelectorAll('.company-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            const prev = AppState.currentCompany;
+            AppState.currentCompany = targetCompany;
+            switchCompany(prev);
+        });
+    });
+
     // Navigation
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
