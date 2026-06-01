@@ -400,12 +400,12 @@ const LanStorageService = (() => {
                         console.warn('[LAN] Error reading all monthly files:', err);
                     }
                 }
-                const filtered = all.filter(o => o.companyId === companyId);
+                const filtered = all.filter(o => (o.companyId || o.masterCompany) === companyId);
                 return { success: true, data: filtered };
             }
             if (action === 'getOrders') {
                 const all = await readFile('daily_orders', []);
-                return { success: true, data: all.filter(o => o.companyId === companyId) };
+                return { success: true, data: all.filter(o => (o.companyId || o.masterCompany) === companyId) };
             }
         } catch (e) {
             console.error('[LAN] fetchFromLocal failed:', e);
