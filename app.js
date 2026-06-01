@@ -1994,8 +1994,16 @@ function attachEventListeners() {
     // ──── Folder Setup Screen ────
     const folderSetupLinkBtn = document.getElementById('folder-setup-link-btn');
     const folderSetupContinueBtn = document.getElementById('folder-setup-continue-btn');
+    const folderSetupSkipBtn = document.getElementById('folder-setup-skip-btn');
     const loginChangeFolderBtn = document.getElementById('login-change-folder-btn');
     const folderSetupStatus = document.getElementById('folder-setup-status');
+
+    if (folderSetupSkipBtn) {
+        folderSetupSkipBtn.addEventListener('click', () => {
+            document.getElementById('folder-setup-screen').classList.add('hidden');
+            checkAuth();
+        });
+    }
 
     if (folderSetupLinkBtn) {
         folderSetupLinkBtn.addEventListener('click', async () => {
@@ -2014,7 +2022,11 @@ function attachEventListeners() {
                 if (folderSetupContinueBtn) folderSetupContinueBtn.classList.remove('hidden');
                 showToast('Folder linked! Click "Continue to Login" to proceed.', 'success');
             } else {
-                showToast('Failed to link folder: ' + (res.error || 'Unknown error'), 'error');
+                if (res.error && res.error.includes('aborted')) {
+                    console.log('Folder selection aborted by user.');
+                } else {
+                    showToast('Failed to link folder: ' + (res.error || 'Unknown error'), 'error');
+                }
             }
         });
     }
