@@ -419,16 +419,20 @@ const LanStorageService = (() => {
                     }
                 }
                 
+
                 // Realistic Decoding: Group duplicate records and pick the minimum positive, non-zero order count to discard glitch 40s
                 const dedupMap = new Map();
                 all.forEach(o => {
+                    o.meesho = parseInt(o.meesho, 10) || parseInt(o.quantity, 10) || parseInt(o.total, 10) || 0;
                     const d = o.date;
                     const comp = o.companyId || o.masterCompany || 'company1';
                     const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
                     if (!d || !accName) return;
+                    if ((parseInt(o.meesho, 10) === 40 || parseInt(o.quantity, 10) === 40) && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
+                    
                     const key = `${d}__${comp}__${accName}`;
-                                        if (parseInt(o.meesho, 10) === 40 && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
-                    const val = parseInt(o.meesho, 10) || 0;
+                    const val = o.meesho;
+
                     
                     const existing = dedupMap.get(key);
                     if (existing) {
@@ -457,8 +461,9 @@ const LanStorageService = (() => {
                     const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
                     if (!d || !accName) return;
                     const key = `${d}__${comp}__${accName}`;
-                                        if (parseInt(o.meesho, 10) === 40 && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
-                    const val = parseInt(o.meesho, 10) || 0;
+                                        if ((parseInt(o.meesho, 10) === 40 || parseInt(o.quantity, 10) === 40) && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
+                    o.meesho = parseInt(o.meesho, 10) || parseInt(o.quantity, 10) || parseInt(o.total, 10) || 0;
+                    const val = o.meesho;
                     
                     const existing = dedupMap.get(key);
                     if (existing) {
@@ -497,7 +502,8 @@ const LanStorageService = (() => {
                 
                 const existing = await readFile(filename, []);
                 orders.forEach(newOrder => {
-                    if (parseInt(newOrder.meesho, 10) === 40 && String(newOrder.accountId || '').startsWith('acc_')) return;
+                    if ((parseInt(newOrder.meesho, 10) === 40 || parseInt(newOrder.quantity, 10) === 40) && String(newOrder.accountId || '').startsWith('acc_')) return;
+                    newOrder.meesho = parseInt(newOrder.meesho, 10) || parseInt(newOrder.quantity, 10) || 0;
                     newOrder.companyId = companyId;
                     newOrder.date = date;
                     const idx = existing.findIndex(o => o.date === date && (o.accountId === newOrder.accountId || o.accountName === newOrder.accountName) && (o.companyId || o.masterCompany) === companyId);
@@ -511,7 +517,8 @@ const LanStorageService = (() => {
                 
                 const daily = await readFile('daily_orders', []);
                 orders.forEach(newOrder => {
-                    if (parseInt(newOrder.meesho, 10) === 40 && String(newOrder.accountId || '').startsWith('acc_')) return;
+                    if ((parseInt(newOrder.meesho, 10) === 40 || parseInt(newOrder.quantity, 10) === 40) && String(newOrder.accountId || '').startsWith('acc_')) return;
+                    newOrder.meesho = parseInt(newOrder.meesho, 10) || parseInt(newOrder.quantity, 10) || 0;
                     const idx = daily.findIndex(o => o.date === date && (o.accountId === newOrder.accountId || o.accountName === newOrder.accountName) && (o.companyId || o.masterCompany) === companyId);
                     if (idx >= 0) {
                         daily[idx] = newOrder;
