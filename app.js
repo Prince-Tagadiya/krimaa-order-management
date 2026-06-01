@@ -4659,13 +4659,29 @@ async function renderDataSheet() {
     wrapper.classList.remove('hidden');
     emptyMsg.classList.add('hidden');
     
-    // Build lookup: { date -> { accountId -> { meesho, total, company } } }
+    // Map active account names to their current active IDs to handle any past ID mismatches
+    const activeIdByName = {};
+    accounts.forEach(acc => {
+        if (acc.name) {
+            activeIdByName[acc.name.toLowerCase().trim()] = acc.id;
+        }
+    });
+
+    // Build lookup: { date -> { accountId -> { meesho, total } } }
     const lookup = {};
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (!d) return;
         if (!lookup[d]) lookup[d] = {};
-        const key = r.accountId || r.accountName;
+        
+        let key = r.accountId;
+        const nameLower = r.accountName ? r.accountName.toLowerCase().trim() : '';
+        if (activeIdByName[nameLower]) {
+            key = activeIdByName[nameLower];
+        } else if (!key) {
+            key = r.accountName;
+        }
+
         if (!lookup[d][key]) lookup[d][key] = { meesho: 0, total: 0 };
         const meeshoVal = parseInt(r.meesho) || 0;
         const totalVal = typeof r.total !== 'undefined' ? (parseInt(r.total) || 0) : meeshoVal;
