@@ -162,9 +162,27 @@ const LanStorageService = (() => {
         if (!_dirHandle) throw new Error("No folder selected");
         if (_status === "read-only") throw new Error("LAN folder is read-only.");
         const fname = _normalize(filename);
+        
+        let cleanedData = data;
+        // Enforce Database Unique Constraint: (date + company + accountName) for order arrays
+        if (Array.isArray(data) && (fname.startsWith('orders_') || fname === 'daily_orders.json')) {
+            const dedupMap = new Map();
+            data.forEach(o => {
+                const d = o.date;
+                const comp = o.companyId || o.masterCompany || 'company1';
+                const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                if (d && accName) {
+                    const key = `${d}__${comp}__${accName}`;
+                    // Keep the latest submitted entry for that unique key
+                    dedupMap.set(key, o);
+                }
+            });
+            cleanedData = Array.from(dedupMap.values());
+        }
+
         const fileHandle = await _dirHandle.getFileHandle(fname, { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(JSON.stringify(data, null, 2));
+        await writable.write(JSON.stringify(cleanedData, null, 2));
         await writable.close();
     }
 
@@ -401,14 +419,28 @@ const LanStorageService = (() => {
                     }
                 }
                 
-                // Chronological Deduplication: keep only the latest submitted order entry for each date + company + account
+                // Realistic Decoding: Group duplicate records and pick the minimum positive, non-zero order count to discard glitch 40s
                 const dedupMap = new Map();
                 all.forEach(o => {
                     const d = o.date;
                     const comp = o.companyId || o.masterCompany || 'company1';
                     const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                    if (!d || !accName) return;
                     const key = `${d}__${comp}__${accName}`;
-                    dedupMap.set(key, o);
+                    const val = parseInt(o.meesho, 10) || 0;
+                    
+                    const existing = dedupMap.get(key);
+                    if (existing) {
+                        const existingVal = parseInt(existing.meesho, 10) || 0;
+                        // Select the minimum realistic non-zero value
+                        if (existingVal === 0) {
+                            dedupMap.set(key, o);
+                        } else if (val > 0 && val < existingVal) {
+                            dedupMap.set(key, o);
+                        }
+                    } else {
+                        dedupMap.set(key, o);
+                    }
                 });
                 
                 const uniqueOrders = Array.from(dedupMap.values());
@@ -422,8 +454,21 @@ const LanStorageService = (() => {
                     const d = o.date;
                     const comp = o.companyId || o.masterCompany || 'company1';
                     const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                    if (!d || !accName) return;
                     const key = `${d}__${comp}__${accName}`;
-                    dedupMap.set(key, o);
+                    const val = parseInt(o.meesho, 10) || 0;
+                    
+                    const existing = dedupMap.get(key);
+                    if (existing) {
+                        const existingVal = parseInt(existing.meesho, 10) || 0;
+                        if (existingVal === 0) {
+                            dedupMap.set(key, o);
+                        } else if (val > 0 && val < existingVal) {
+                            dedupMap.set(key, o);
+                        }
+                    } else {
+                        dedupMap.set(key, o);
+                    }
                 });
                 const unique = Array.from(dedupMap.values());
                 return { success: true, data: unique.filter(o => (o.companyId || o.masterCompany) === companyId) };
