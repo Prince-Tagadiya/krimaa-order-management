@@ -7328,17 +7328,18 @@ function initLanSettingsUI() {
     });
 
     exportBtn.addEventListener('click', async () => {
-        showLoader("Generating payload...");
+        showLoader("Generating ZIP Archive...");
         try {
-            const payload = await LanStorageService.generateBackupPayload();
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
+            const blob = await LanStorageService.generateBackupPayload();
+            const url = URL.createObjectURL(blob);
             const downloadAnchor = document.createElement('a');
-            downloadAnchor.setAttribute("href", dataStr);
-            downloadAnchor.setAttribute("download", `krimaa_lan_backup_${getTodayISODate()}.json`);
+            downloadAnchor.setAttribute("href", url);
+            downloadAnchor.setAttribute("download", `krimaa_lan_shared_drive_${getTodayISODate()}.zip`);
             document.body.appendChild(downloadAnchor);
             downloadAnchor.click();
             downloadAnchor.remove();
-            showToast("Backup exported successfully!", "success");
+            URL.revokeObjectURL(url);
+            showToast("LAN backup ZIP exported successfully!", "success");
         } catch (e) {
             console.error(e);
             showToast("Export failed: " + e.message, "error");

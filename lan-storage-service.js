@@ -179,7 +179,7 @@ const LanStorageService = (() => {
         }
     }
 
-    // ───── EXPORT / IMPORT (CONSOLIDATED DATABASE FILE) ─────
+    // ───── EXPORT / IMPORT (CONSOLIDATED DATABASE ZIP FILE) ─────
     async function generateBackupPayload() {
         const collections = [
             "accounts", "daily_orders", "daily_summary", "karigars", "karigar_reset_backups",
@@ -196,12 +196,9 @@ const LanStorageService = (() => {
             }
         }
 
-        const payload = {
-            exportedAt: new Date().toISOString(),
-            data: {}
-        };
-
+        const zip = new JSZip();
         const db = firebase.firestore();
+        
         for (const colName of collections) {
             try {
                 const snap = await db.collection(colName).get();
@@ -210,13 +207,22 @@ const LanStorageService = (() => {
                     snap.forEach(doc => {
                         docs.push({ id: doc.id, ...doc.data() });
                     });
-                    payload.data[colName] = docs;
+                    zip.file(`${colName}.json`, JSON.stringify(docs, null, 2));
                 }
             } catch (e) {
                 console.warn(`Export skipped for ${colName}:`, e.message);
             }
         }
-        return payload;
+
+        // Write setup lock marker
+        zip.file(".krimaa_lan_lock", JSON.stringify({
+            active: true,
+            updatedAt: new Date().toISOString(),
+            bootstrapped: true
+        }, null, 2));
+
+        const blob = await zip.generateAsync({ type: "blob" });
+        return blob;
     }
 
     async function bootstrapFolderFromBackup(backupPayload) {
