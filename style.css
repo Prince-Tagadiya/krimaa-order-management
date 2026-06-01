@@ -1368,10 +1368,10 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 }
 
 /* ===== LAN READ ONLY BLOCKING ===== */
-body.lan-read-only input, 
-body.lan-read-only select, 
-body.lan-read-only button,
-body.lan-read-only textarea {
+body.lan-read-only #app-screen input, 
+body.lan-read-only #app-screen select, 
+body.lan-read-only #app-screen button,
+body.lan-read-only #app-screen textarea {
     pointer-events: none !important;
     opacity: 0.65 !important;
 }
