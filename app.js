@@ -7492,3 +7492,25 @@ function initLanSettingsUI() {
     // Just update the UI to reflect current status.
     syncUI(LanStorageService.getStatus());
 }
+
+
+// ===== OFFLINE CONTINUOUS POLLING =====
+let lastFolderHash = '';
+setInterval(async () => {
+    if (window.LanStorageService && window.LanStorageService.isConnected()) {
+        const currentHash = await window.LanStorageService.getFolderHash();
+        if (lastFolderHash && currentHash !== lastFolderHash) {
+            console.log('[LAN] External data change detected, refreshing UI...');
+            // Refresh dashboard if we are on dashboard
+            if (!document.getElementById('app-screen').classList.contains('hidden') && document.getElementById('dashboard').classList.contains('active')) {
+                loadDashboardData(document.getElementById('dash-filter-type').value);
+            }
+            // Refresh manage order page if open
+            if (document.getElementById('daily-order').classList.contains('active')) {
+                loadInitialData();
+            }
+        }
+        lastFolderHash = currentHash;
+    }
+}, 5000);
+

@@ -427,6 +427,7 @@ const LanStorageService = (() => {
                     const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
                     if (!d || !accName) return;
                     const key = `${d}__${comp}__${accName}`;
+                                        if (parseInt(o.meesho, 10) === 40 && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
                     const val = parseInt(o.meesho, 10) || 0;
                     
                     const existing = dedupMap.get(key);
@@ -456,6 +457,7 @@ const LanStorageService = (() => {
                     const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
                     if (!d || !accName) return;
                     const key = `${d}__${comp}__${accName}`;
+                                        if (parseInt(o.meesho, 10) === 40 && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
                     const val = parseInt(o.meesho, 10) || 0;
                     
                     const existing = dedupMap.get(key);
@@ -477,6 +479,134 @@ const LanStorageService = (() => {
             console.error('[LAN] fetchFromLocal failed:', e);
         }
         return undefined;
+    }
+
+
+    async function writeToLocal(payload) {
+        if (!_dirHandle || _status !== 'connected') return { success: false, message: 'Offline storage not connected' };
+        const action = payload?.action;
+        const companyId = payload?.companyId || 'company1';
+
+        try {
+            if (action === 'submitOrders') {
+                const date = payload.date; 
+                const orders = payload.orders || [];
+                const y = date.split('-')[0];
+                const m = date.split('-')[1];
+                const filename = `orders_${y}_${m}`;
+                
+                const existing = await readFile(filename, []);
+                orders.forEach(newOrder => {
+                    if (parseInt(newOrder.meesho, 10) === 40 && String(newOrder.accountId || '').startsWith('acc_')) return;
+                    newOrder.companyId = companyId;
+                    newOrder.date = date;
+                    const idx = existing.findIndex(o => o.date === date && (o.accountId === newOrder.accountId || o.accountName === newOrder.accountName) && (o.companyId || o.masterCompany) === companyId);
+                    if (idx >= 0) {
+                        existing[idx] = newOrder;
+                    } else {
+                        existing.push(newOrder);
+                    }
+                });
+                await writeFile(filename, existing);
+                
+                const daily = await readFile('daily_orders', []);
+                orders.forEach(newOrder => {
+                    if (parseInt(newOrder.meesho, 10) === 40 && String(newOrder.accountId || '').startsWith('acc_')) return;
+                    const idx = daily.findIndex(o => o.date === date && (o.accountId === newOrder.accountId || o.accountName === newOrder.accountName) && (o.companyId || o.masterCompany) === companyId);
+                    if (idx >= 0) {
+                        daily[idx] = newOrder;
+                    } else {
+                        daily.push(newOrder);
+                    }
+                });
+                await writeFile('daily_orders', daily);
+                return { success: true };
+            }
+            if (action === 'updateOrder') {
+                const date = payload.date;
+                const accountId = payload.accountId;
+                const accountName = payload.accountName || accountId;
+                const val = payload.value;
+                if (parseInt(val, 10) === 40 && String(accountId).startsWith('acc_')) return { success: true };
+                
+                const y = date.split('-')[0];
+                const m = date.split('-')[1];
+                const filename = `orders_${y}_${m}`;
+                
+                const existing = await readFile(filename, []);
+                let updated = false;
+                existing.forEach(o => {
+                    if (o.date === date && (o.accountId === accountId || o.accountName === accountId) && (o.companyId || o.masterCompany) === companyId) {
+                        o.meesho = val;
+                        updated = true;
+                    }
+                });
+                if (!updated) {
+                    existing.push({ date, accountId, accountName, meesho: val, companyId });
+                }
+                await writeFile(filename, existing);
+
+                const daily = await readFile('daily_orders', []);
+                let dUpdated = false;
+                daily.forEach(o => {
+                    if (o.date === date && (o.accountId === accountId || o.accountName === accountId) && (o.companyId || o.masterCompany) === companyId) {
+                        o.meesho = val;
+                        dUpdated = true;
+                    }
+                });
+                if (!dUpdated) {
+                    daily.push({ date, accountId, accountName, meesho: val, companyId });
+                }
+                await writeFile('daily_orders', daily);
+                return { success: true };
+            }
+            if (action === 'addAccount') {
+                const accounts = await readFile('accounts', []);
+                accounts.push({
+                    id: payload.accountName,
+                    name: payload.accountName,
+                    companyId: companyId,
+                    mobile: payload.mobile || '',
+                    gstin: payload.gstin || '',
+                    rechargeDate: payload.rechargeDate || ''
+                });
+                await writeFile('accounts', accounts);
+                return { success: true };
+            }
+            if (action === 'editAccount') {
+                const accounts = await readFile('accounts', []);
+                const acc = accounts.find(a => (a.name === payload.accountId || a.id === payload.accountId) && a.companyId === companyId);
+                if (acc) {
+                    acc.name = payload.newName;
+                    acc.mobile = payload.mobile || '';
+                    acc.gstin = payload.gstin || '';
+                    acc.rechargeDate = payload.rechargeDate || '';
+                    await writeFile('accounts', accounts);
+                }
+                return { success: true };
+            }
+            if (action === 'deleteAccount') {
+                const accounts = await readFile('accounts', []);
+                const filtered = accounts.filter(a => !((a.name === payload.accountId || a.id === payload.accountId) && a.companyId === companyId));
+                await writeFile('accounts', filtered);
+                return { success: true };
+            }
+            if (action === 'saveRemark') {
+                const remarks = await readFile('remarks', []);
+                const existing = remarks.find(r => r.date === payload.date);
+                if (existing) {
+                    existing.remark = payload.remark;
+                } else {
+                    remarks.push({ date: payload.date, remark: payload.remark });
+                }
+                await writeFile('remarks', remarks);
+                return { success: true };
+            }
+        } catch (e) {
+            console.error('[LAN] writeToLocal error:', e);
+            return { success: false, error: e.message };
+        }
+        return { success: false, message: 'Action not supported offline' };
     }
 
     async function getFolderHash() {
@@ -512,6 +642,7 @@ const LanStorageService = (() => {
         bootstrapFolderFromZip,
         bootstrapFolderFromBackup,
         fetchFromLocal,
+        writeToLocal,
         onStatusChange,
         getStatus: () => _status,
         isConnected: () => _status === "connected",
