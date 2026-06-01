@@ -8,6 +8,24 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
     <link rel="stylesheet" href="style.css">
+    <script>
+        // Register Service Worker for full offline support
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then(reg => {
+                    console.log('[SW] Registered. Scope:', reg.scope);
+                    reg.addEventListener('updatefound', () => {
+                        const worker = reg.installing;
+                        worker.addEventListener('statechange', () => {
+                            if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+                                console.log('[SW] New version available — will activate on next reload.');
+                            }
+                        });
+                    });
+                }).catch(e => console.warn('[SW] Registration failed:', e));
+            });
+        }
+    </script>
 </head>
 <body>
 
@@ -16,12 +34,38 @@
     <div id="magical-flash" class="magical-flash"></div>
 
 
-    <!-- Login Screen -->
-    <div id="login-screen" class="screen flex-center">
+    <!-- ===== FOLDER SETUP SCREEN (shown before login if no folder linked) ===== -->
+    <div id="folder-setup-screen" class="screen flex-center hidden">
+        <div class="login-card" style="max-width:460px;">
+            <div class="login-header">
+                <div style="font-size:3rem;margin-bottom:0.5rem;">📂</div>
+                <h2>Link Your Data Folder</h2>
+                <p>Krimaa works fully offline. First, link the shared local folder where your data is stored.</p>
+            </div>
+            <div id="folder-setup-status" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:0.85rem;color:#475569;">
+                <i class='bx bx-info-circle'></i> No folder linked yet. Click the button below to select your shared LAN folder.
+            </div>
+            <button type="button" id="folder-setup-link-btn" class="btn btn-primary w-100 btn-lg" style="margin-bottom:12px;">
+                <i class='bx bx-folder-open'></i> Select Shared Folder
+            </button>
+            <button type="button" id="folder-setup-continue-btn" class="btn btn-outline w-100 hidden" style="margin-bottom:12px;">
+                <i class='bx bx-arrow-back'></i> Continue to Login
+            </button>
+            <div class="text-center" style="margin-top:12px;">
+                <p class="text-xs text-muted">The folder is saved — you only need to do this once per browser.<br>This app works 100% offline after the first setup.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== LOGIN SCREEN ===== -->
+    <div id="login-screen" class="screen flex-center hidden">
         <div class="login-card">
             <div class="login-header">
                 <h2>Krimaa Admin</h2>
                 <p>Sign in to manage daily orders</p>
+            </div>
+            <div id="login-lan-status" style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:0.8rem;color:#166534;display:none;">
+                <i class='bx bx-check-circle'></i> <span id="login-lan-status-text">Folder linked</span>
             </div>
             <form id="login-form">
                 <div class="input-group">
@@ -34,6 +78,9 @@
                 </div>
                 <button type="submit" class="btn btn-primary w-100 btn-lg">Login</button>
             </form>
+            <div class="text-center" style="margin-top:14px;">
+                <a href="#" id="login-change-folder-btn" class="text-xs text-muted" style="text-decoration:underline;">Change data folder</a>
+            </div>
         </div>
     </div>
 
@@ -93,9 +140,9 @@
                         <i class='bx bx-server'></i>
                         <span>LAN: Off</span>
                     </div>
-                    <div class="sync-indicator sync-idle hidden" id="sheet-backup-indicator" title="Background Google Sheet backup status">
-                        <i class='bx bx-cloud-upload'></i>
-                        <span>Sheet idle</span>
+                    <div id="firebase-pending-badge" title="Firebase background sync — data queued to push when online" style="display:none; align-items:center; gap:4px; background:#fef3c7; color:#92400e; border:1px solid #fcd34d; border-radius:20px; padding:3px 10px; font-size:0.75rem; font-weight:700; cursor:default;">
+                        <i class='bx bx-cloud-upload' style="font-size:0.9rem;"></i>
+                        <span id="firebase-pending-count">0</span> pending
                     </div>
                     <div class="sidebar-user-info" id="sidebar-user-info"></div>
                 </div>
@@ -1044,7 +1091,7 @@
             <div style="display:flex; gap:8px;">
                 <button type="button" id="lan-export-payload-btn" class="btn btn-outline btn-sm w-100"><i class='bx bx-download'></i> Export Firestore Data</button>
                 <button type="button" id="lan-import-payload-btn" class="btn btn-outline btn-sm w-100"><i class='bx bx-upload'></i> Import to LAN folder</button>
-                <input type="file" id="lan-import-file-input" class="hidden" accept=".json">
+                <input type="file" id="lan-import-file-input" class="hidden" accept=".zip,.json">
             </div>
         </div>
     </div>
@@ -1059,12 +1106,13 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <script src="runtime-env-loader.js"></script>
-    <script src="firebase-service.js?v=20260308-02"></script>
+    <script src="firebase-service.js?v=20260601-01"></script>
     <div id="background-sheets-loader" class="hidden" style="position: fixed; bottom: 20px; right: 20px; background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: 10px; border-radius: 50%; width: 40px; height: 40px; z-index: 9999; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js"></script>
-    <script src="app.js?v=20260308-16"></script>
+    <script src="lan-storage-service.js?v=20260601-01"></script>
+    <script src="app.js?v=20260601-01"></script>
+
 </body>
 </html>

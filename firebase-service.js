@@ -66,6 +66,12 @@ async function _deleteLocalDoc(colName, docId) {
 function _syncToCloudInBackground(colName, docId, data, op) {
     (async () => {
         try {
+            // If LAN is connected, queue the op for background push
+            if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+                await window.LanStorageService.enqueueSyncOp(colName, docId, data, op);
+                return;
+            }
+            // Direct Firebase write when not in LAN mode
             const db = firebase.firestore();
             const ref = db.collection(colName).doc(docId);
             if (op === 'delete') {
@@ -80,6 +86,7 @@ function _syncToCloudInBackground(colName, docId, data, op) {
         }
     })();
 }
+
 
 class RtdbShim {
     constructor() {

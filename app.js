@@ -695,138 +695,35 @@ document.addEventListener('DOMContentLoaded', () => {
         .finally(() => { initApp(); });
 });
 
-function initApp() {
+async function initApp() {
     refreshUsersFromEnv();
     applyClientModeUI();
     restoreFirestoreQuotaCooldown();
-    bootstrapSheetSyncStateFromStorage();
-    bindSheetSyncLifecycleEvents();
     updateBackendModeBanner();
     initLanSettingsUI();
-    checkAuth();
     attachEventListeners();
     initSyncIndicator();
+
     const integrityBtn = document.getElementById('fix-integrity-btn');
     const syncSheetBtn = document.getElementById('sync-sheet-btn');
     if (integrityBtn) integrityBtn.style.display = isDevUser() ? '' : 'none';
     if (syncSheetBtn) syncSheetBtn.style.display = isDevUser() ? '' : 'none';
 
-    // Refresh button (replaces manual backup button in UI)
+    // Refresh button
     const backupBtn = document.getElementById('backup-btn');
     if (backupBtn) backupBtn.addEventListener('click', () => refreshAppDataManually());
 
     if (integrityBtn) integrityBtn.addEventListener('click', async () => {
         if (!isDevUser()) return showToast("Only dev can run integrity tools", "error");
-        if (!confirm("This will repair ALL data integrity issues in Google Sheets (corrupted names, missing IDs, wrong formats). Continue?")) return;
-        showLoader();
-        try {
-            showToast("Reading data from Sheets...", "info");
-            const [c1Acc, c2Acc, karResC1, karResC2] = await Promise.all([
-                FirebaseService.getAccounts('company1'),
-                FirebaseService.getAccounts('company2'),
-                FirebaseService.getKarigars('company1'),
-                FirebaseService.getKarigars('company2')
-            ]);
-            
-            const allAccounts = [
-                ...((c1Acc.details || []).map(a => ({ docId: a.accountId, name: a.name, companyId: 'company1' }))),
-                ...((c2Acc.details || []).map(a => ({ docId: a.accountId, name: a.name, companyId: 'company2' })))
-            ];
-            const allKarigars = [
-                ...((karResC1.data || []).map(k => ({ docId: k.id, name: k.name, companyId: 'company1' }))),
-                ...((karResC2.data || []).map(k => ({ docId: k.id, name: k.name, companyId: 'company2' })))
-            ];
-            
-            showToast("Repairing names in Google Sheets...", "info");
-            const repairRes = await sheetsApiRequest({ 
-                action: 'repairFromFirebase', 
-                firebaseData: JSON.stringify({ accounts: allAccounts, karigars: allKarigars })
-            });
-            
-            showToast("Running structural integrity check...", "info");
-            const backfillRes = await sheetsApiRequest({ action: 'backfillIds' });
-
-            const r = repairRes.stats || {};
-            const b = backfillRes.stats || {};
-            showToast(
-                `Repair Complete! Names Fixed: (Acc: ${r.accounts||0}, Kar: ${r.karigars||0}, Ord: ${r.orders||0}) | ` +
-                `IDs Fixed: (Acc: ${b.accounts||0}, Ord: ${b.orders||0})`, 
-                "success"
-            );
-            
-            await fetchAccounts();
-            renderAccountsList();
-            try { await fetchAllCompaniesData(); } catch (e) {}
-        } catch (err) {
-            console.error(err);
-            showToast("Migration error: " + err.message, "error");
-        } finally {
-            hideLoader();
-        }
+        showToast("Integrity tools are disabled in offline mode.", "info");
     });
 
     if (syncSheetBtn) syncSheetBtn.addEventListener('click', async () => {
-        if (!isDevUser()) {
-            showToast("Only dev can run replace tools", "error");
-            return;
-        }
-        const selection = await openReplaceFromSheetModal();
-        if (!selection) return;
-        const selectedLabels = getReplaceSheetSelectionLabels(selection);
-        if (!selectedLabels.length) {
-            showToast("Select at least one data block", "error");
-            return;
-        }
-        const confirmText = `This will replace ONLY selected Firebase data from Google Sheets:\n\n- ${selectedLabels.join('\n- ')}\n\nContinue?`;
-        if (!confirm(confirmText)) return;
-
-        showLoader();
-        try {
-            showToast("Reading full sheet data...", "info");
-            const fullRes = await sheetsApiRequest({ action: 'getAllSheetData' });
-            const sheetData = fullRes?.data || null;
-            if (!fullRes?.success || !sheetData) {
-                throw new Error(fullRes?.message || 'Failed to read sheet data');
-            }
-
-            showToast(`Replacing selected data: ${selectedLabels.join(', ')}...`, "info");
-            const replaceRes = await Promise.race([
-                FirebaseService.replaceFromSheetsSelective(sheetData, {
-                    accounts: selection.accounts,
-                    orders: selection.orders,
-                    karigars: selection.karigars,
-                    karigarTransactions: selection.karigarTransactions,
-                    sizePrices: selection.sizePrices
-                }, { fast: true }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Replace timed out. Please try again.')), 180000))
-            ]);
-            if (replaceRes?.success === false) {
-                throw new Error(replaceRes?.message || 'Firebase replace failed');
-            }
-            await loadInitialData();
-            const syncStats = replaceRes?.stats || {};
-            const statusParts = [];
-            if (selection.accounts) statusParts.push(`Accounts: ${syncStats.accounts || 0}`);
-            if (selection.orders) statusParts.push(`Orders: ${syncStats.orders || 0}`);
-            if (selection.karigars) statusParts.push(`Karigars: ${syncStats.karigars || 0}`);
-            if (selection.karigarTransactions) statusParts.push(`Karigar Tx: ${syncStats.karigarTxs || 0}`);
-            if (selection.sizePrices) statusParts.push(`Prices: ${syncStats.designPrices || 0}`);
-            showToast(`Selected replace complete. ${statusParts.join(' | ')}`, "success");
-        } catch (err) {
-            console.error(err);
-            showToast("Sync Failed: " + err.message, "error");
-        } finally {
-            hideLoader();
-        }
+        showToast("Google Sheets sync is disabled in offline mode.", "info");
     });
 
-    const today = getTodayISODate();
-    setOrderDateDefaults(true);
-    
     const savedCompany = localStorage.getItem('selectedCompany');
-    if (savedCompany) {
-        AppState.currentCompany = savedCompany;
-    }
+    if (savedCompany) AppState.currentCompany = savedCompany;
     if (isSingleCompanyMode()) {
         AppState.currentCompany = 'company1';
         localStorage.setItem('selectedCompany', 'company1');
@@ -838,69 +735,64 @@ function initApp() {
     document.querySelectorAll('.company-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.company === AppState.currentCompany);
     });
-    updateOrderCompanyLabel();
-    
-    // Dashboard filter listeners
-    document.getElementById('dash-filter-type').addEventListener('change', (e) => {
-        const val = e.target.value;
-        const dateRange = document.getElementById('custom-date-range');
-        if (val === 'custom_date') {
-            dateRange.classList.remove('hidden');
-            const fromInput = document.getElementById('dash-filter-from');
-            const toInput = document.getElementById('dash-filter-to');
-            if (!fromInput.value) fromInput.value = today;
-            if (!toInput.value) toInput.value = today;
-        } else {
-            dateRange.classList.add('hidden');
+    if (typeof updateOrderCompanyLabel === 'function') updateOrderCompanyLabel();
+
+    // ── STEP 1: Check if folder is linked ──
+    if (LanStorageService.hasSavedHandle()) {
+        const reconnected = await LanStorageService.autoReconnect();
+        if (!reconnected) {
+            console.log('[INIT] LAN handle exists but not yet permitted. Showing login screen.');
         }
-        renderDashboard();
-    });
-    ['dash-filter-from', 'dash-filter-to'].forEach(id => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.addEventListener('input', renderDashboard);
-        el.addEventListener('change', renderDashboard);
-    });
-
-    // Company Switcher
-    document.querySelectorAll('.company-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const companyId = btn.dataset.company;
-            if (!isCompanyAllowed(companyId)) {
-                showToast("You don't have access to this company", "error");
-                return;
-            }
-            if (companyId === AppState.currentCompany || AppState.isSwitchingCompany) return;
-            const previousCompany = AppState.currentCompany;
-            document.querySelectorAll('.company-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            AppState.currentCompany = companyId;
-            localStorage.setItem('selectedCompany', companyId);
-            switchCompany(previousCompany);
-        });
-    });
-
-    // Heatmap navigation
-    const heatmapPrevBtn = document.getElementById('heatmap-prev');
-    const heatmapNextBtn = document.getElementById('heatmap-next');
-    if (heatmapPrevBtn) {
-        heatmapPrevBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            changeHeatmapMonth(-1);
-        });
-    }
-    if (heatmapNextBtn) {
-        heatmapNextBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            changeHeatmapMonth(1);
-        });
-    }
-
-    // Export CSV
-    if (document.getElementById('export-csv-btn')) {
-        document.getElementById('export-csv-btn').addEventListener('click', exportToCSV);
+        checkAuth();
+    } else {
+        showFolderSetupScreen();
     }
 }
+
+
+function showFolderSetupScreen() {
+    document.getElementById('folder-setup-screen').classList.remove('hidden');
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('app-screen').classList.add('hidden');
+}
+
+function showLoginScreen() {
+    document.getElementById('folder-setup-screen').classList.add('hidden');
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app-screen').classList.add('hidden');
+    // Show folder status in login form
+    const lanStatus = document.getElementById('login-lan-status');
+    const lanStatusText = document.getElementById('login-lan-status-text');
+    if (lanStatus && LanStorageService.hasSavedHandle()) {
+        lanStatus.style.display = 'flex';
+        lanStatus.style.alignItems = 'center';
+        lanStatus.style.gap = '6px';
+        const statusLabel = LanStorageService.isConnected() ? 'Folder linked & connected — offline mode active' : 'Folder saved (will reconnect on login)';
+        if (lanStatusText) lanStatusText.textContent = statusLabel;
+    }
+}
+
+// ── Firebase pending sync badge ──
+window.updateFirebasePendingBadge = function(count, lanStatus) {
+    const badge = document.getElementById('firebase-pending-badge');
+    const countEl = document.getElementById('firebase-pending-count');
+    if (!badge || !countEl) return;
+    if (lanStatus === 'connected' && count > 0) {
+        countEl.textContent = count;
+        badge.style.display = 'flex';
+    } else {
+        badge.style.display = 'none';
+    }
+};
+
+// Auto-flush Firebase sync queue when internet comes back
+window.addEventListener('online', () => {
+    if (LanStorageService.isConnected()) {
+        console.log('[SYNC] Network restored. Flushing pending Firebase queue...');
+        LanStorageService.flushSyncQueue().catch(e => console.warn('[SYNC] Flush failed:', e.message));
+    }
+});
+
 
 let _adminAutoSyncTimer = null;
 let _adminRealtimeRefreshTimer = null;
@@ -2025,12 +1917,12 @@ function checkAuth() {
             username: savedUsername || savedName || savedRole,
             allowedCompanies
         };
-        if (!isAdminUser()) clearSheetsCaches();
 
         if (!isCompanyAllowed(AppState.currentCompany)) {
             AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
             localStorage.setItem('selectedCompany', AppState.currentCompany);
         }
+        document.getElementById('folder-setup-screen').classList.add('hidden');
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.remove('hidden');
         applyRolePermissions();
@@ -2039,8 +1931,13 @@ function checkAuth() {
         loadInitialData();
 
     } else {
-        document.getElementById('login-screen').classList.remove('hidden');
+        // Not logged in — show login or folder-setup
         document.getElementById('app-screen').classList.add('hidden');
+        if (!LanStorageService.hasSavedHandle()) {
+            showFolderSetupScreen();
+        } else {
+            showLoginScreen();
+        }
         updateBackendModeBanner();
         if (_adminAutoSyncTimer) {
             clearInterval(_adminAutoSyncTimer);
@@ -2052,6 +1949,7 @@ function checkAuth() {
         }
     }
 }
+
 
 function applyRolePermissions() {
     const role = AppState.currentUser?.role;
@@ -2093,7 +1991,54 @@ function applyRolePermissions() {
 }
 
 function attachEventListeners() {
-    // Login
+    // ──── Folder Setup Screen ────
+    const folderSetupLinkBtn = document.getElementById('folder-setup-link-btn');
+    const folderSetupContinueBtn = document.getElementById('folder-setup-continue-btn');
+    const loginChangeFolderBtn = document.getElementById('login-change-folder-btn');
+    const folderSetupStatus = document.getElementById('folder-setup-status');
+
+    if (folderSetupLinkBtn) {
+        folderSetupLinkBtn.addEventListener('click', async () => {
+            folderSetupLinkBtn.disabled = true;
+            folderSetupLinkBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin"></i> Linking...';
+            const res = await LanStorageService.connect();
+            folderSetupLinkBtn.disabled = false;
+            folderSetupLinkBtn.innerHTML = '<i class="bx bx-folder-open"></i> Select Shared Folder';
+            if (res.success) {
+                if (folderSetupStatus) {
+                    folderSetupStatus.style.background = '#f0fdf4';
+                    folderSetupStatus.style.borderColor = '#86efac';
+                    folderSetupStatus.style.color = '#166534';
+                    folderSetupStatus.innerHTML = '<i class="bx bx-check-circle"></i> Folder linked successfully!';
+                }
+                if (folderSetupContinueBtn) folderSetupContinueBtn.classList.remove('hidden');
+                showToast('Folder linked! Click "Continue to Login" to proceed.', 'success');
+            } else {
+                showToast('Failed to link folder: ' + (res.error || 'Unknown error'), 'error');
+            }
+        });
+    }
+
+    if (folderSetupContinueBtn) {
+        folderSetupContinueBtn.addEventListener('click', () => showLoginScreen());
+    }
+
+    if (loginChangeFolderBtn) {
+        loginChangeFolderBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            LanStorageService.disconnect();
+            showFolderSetupScreen();
+            if (folderSetupStatus) {
+                folderSetupStatus.style.background = '#f1f5f9';
+                folderSetupStatus.style.borderColor = '#e2e8f0';
+                folderSetupStatus.style.color = '#475569';
+                folderSetupStatus.innerHTML = '<i class="bx bx-info-circle"></i> Select a new folder to link.';
+            }
+            if (folderSetupContinueBtn) folderSetupContinueBtn.classList.add('hidden');
+        });
+    }
+
+    // ──── Login Form ────
     document.getElementById('login-form').addEventListener('submit', (e) => {
         e.preventDefault();
         refreshUsersFromEnv();
@@ -2117,7 +2062,6 @@ function attachEventListeners() {
                 username: foundUser.username,
                 allowedCompanies: foundUser.allowedCompanies || ['company1', 'company2']
             };
-            if (foundUser.role !== 'admin') clearSheetsCaches();
             if (!isCompanyAllowed(AppState.currentCompany)) {
                 AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
                 localStorage.setItem('selectedCompany', AppState.currentCompany);
@@ -2520,28 +2464,33 @@ async function hydrateRecent30DaysFromSheetsToFirebase() {
 }
 
 async function loadInitialData() {
-    showLoader('Connecting to server...');
     try {
-        console.log("🚀 [INITIALIZATION] Starting web app...");
+        console.log("🚀 [INIT] Starting Krimaa app...");
         AppState.karigarCacheByCompany = {};
         FirebaseService.init();
 
-        // ───── LAN-FIRST MODE OVERRIDE ─────
-        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-            setLoaderStatus('Loading LAN local data...');
-            console.log("🚀 [INITIALIZATION] LAN mode active. Fetching locally from LAN folder...");
-            if (_useSheetsFallbackMode) disableSheetsFallbackMode();
-            updateBackendModeBanner();
-
+        // ═══ LAN-FIRST MODE (primary path) ═══
+        if (LanStorageService.isConnected()) {
+            showLoader('Loading local data...');
+            console.log("🚀 [INIT] ✅ LAN connected — loading from local folder (no Firebase read)");
+            
             await Promise.all([
                 fetchAccounts(),
                 fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
             ]);
 
-            console.log("🚀 [INITIALIZATION] Local LAN data ready. Booting UI...");
-            await loadAvailableSheetMonths(true).catch(e => console.warn('Background LAN month fetch:', e));
+            await loadAvailableSheetMonths(true).catch(e => console.warn('[INIT] Month list fetch:', e));
             
-            console.log("🚀 [INITIALIZATION] Finished completely in LAN mode.");
+            // Refresh pending badge
+            const pending = await LanStorageService.getPendingCount();
+            window.updateFirebasePendingBadge(pending, 'connected');
+            
+            // Try to flush any queued ops if online
+            if (navigator.onLine) {
+                LanStorageService.flushSyncQueue().catch(() => {});
+            }
+
+            console.log("🚀 [INIT] LAN data ready. Booting UI.");
             if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
                 navigateTo('daily-order');
             } else {
@@ -2550,75 +2499,43 @@ async function loadInitialData() {
             return;
         }
 
+        // ═══ NO LAN — Firebase fallback path ═══
+        showLoader('Connecting to Firebase...');
+        console.log("🚀 [INIT] No LAN folder connected. Trying Firebase...");
+        
         const serverResponsive = await probeFirebaseWithCountdown(5);
         if (!serverResponsive) {
-            enableSheetsFallbackMode();
-            setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
-        } else {
-            await tryRecoverFirestoreMode();
-            if (_useSheetsFallbackMode) disableSheetsFallbackMode();
-        }
-        updateBackendModeBanner();
-        
-        console.log("🚀 [INITIALIZATION] Checking legacy migration and seeds...");
-        await ensureFirebaseSeeded();
-        
-        if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
-            setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
-            console.log("🚀 [INITIALIZATION] Firestore quota mode active. Loading recent Sheet data...");
-            await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
-            updateBackendModeBanner();
-        } else {
-            setLoaderStatus('Loading Firebase data...');
-            console.log("🚀 [INITIALIZATION] Fetching fresh data instantly from Firestore...");
-            await Promise.all([
-                fetchAccounts(),
-                fetchAllCompaniesData({ refreshArchiveMonths: false })
-            ]);
-        }
-        
-        console.log("🚀 [INITIALIZATION] Local data ready. Booting UI in background...");
-        loadAvailableSheetMonths(true).catch(e => console.warn('Background meta fetch:', e));
-        checkAutoBackup();
-        resumeSheetSyncIfPending();
-        if (!_pendingDataChangesForBackup) {
-            const staleMs = _lastSheetBackupSuccessMs > 0 ? (Date.now() - _lastSheetBackupSuccessMs) : Number.MAX_SAFE_INTEGER;
-            if (staleMs >= SHEET_RECONCILE_MAX_STALE_MS) {
-                _pendingDataChangesForBackup = true;
-                scheduleBackgroundSheetBackup('startup_reconcile');
-            }
+            hideLoader();
+            showToast('⚠️ No local folder and Firebase is offline. Please link your LAN folder.', 'error');
+            showFolderSetupScreen();
+            return;
         }
 
-        console.log("🚀 [INITIALIZATION] Finished completely. Routing to UI.");
+        await tryRecoverFirestoreMode();
+        updateBackendModeBanner();
+        
+        setLoaderStatus('Loading Firebase data...');
+        await Promise.all([
+            fetchAccounts(),
+            fetchAllCompaniesData({ refreshArchiveMonths: false })
+        ]);
+        
+        loadAvailableSheetMonths(true).catch(e => console.warn('[INIT] Month list fetch:', e));
+        
+        console.log("🚀 [INIT] Firebase data ready. Booting UI.");
         if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
             navigateTo('daily-order');
         } else {
             navigateTo('data-sheet');
         }
         runStartupMaintenanceInBackground();
+
     } catch (err) {
-        console.error(err);
-        if (isFirestoreQuotaError(err) || isFirestoreUnavailableError(err)) {
-            try {
-                setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
-                enableSheetsFallbackMode();
-                await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
-                updateBackendModeBanner();
-                if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
-                    navigateTo('daily-order');
-                } else {
-                    navigateTo('data-sheet');
-                }
-                showToast('Firebase server down. Please use the app from tomorrow 1:00 PM. Running in Sheet Mode (Slow).', 'info');
-            } catch (sheetErr) {
-                console.error('Sheet mode bootstrap failed:', sheetErr);
-                showToast("Error loading data: " + (sheetErr?.message || err?.message || 'Unknown error'), "error");
-            }
-        } else {
-            showToast("Error loading data: " + err.message, "error");
-        }
+        console.error('[INIT] Failed:', err);
+        showToast("Error loading data: " + (err?.message || 'Unknown error'), "error");
+    } finally {
+        hideLoader();
     }
-    finally { hideLoader(); }
 }
 
 
@@ -3693,6 +3610,16 @@ async function apiRequest(payload) {
             return cached.value;
         }
     }
+
+    // ── LAN-FIRST OFFLINE READS ──
+    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected() && readActions.has(action)) {
+        const lanRes = await window.LanStorageService.fetchFromLocal(payload);
+        if (lanRes !== undefined) {
+            _apiReadCache.set(cacheKey, { ts: Date.now(), value: lanRes });
+            return lanRes;
+        }
+    }
+
     if (isFirestoreQuotaBlocked()) {
         const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
         if (sheetRead) return sheetRead;
@@ -3934,41 +3861,14 @@ async function apiRequest(payload) {
 }
 
 // Google Sheets API – used only for backup/archive operations
+// ===== GOOGLE SHEETS — DISABLED =====
+// All data is now stored in LAN JSON files. Google Sheets integration has been removed.
 async function sheetsApiRequest(payload) {
-    const MAX_RETRIES = 2;
-    const BASE_TIMEOUT_MS = 45000;
-    let lastErr = null;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        const controller = new AbortController();
-        const timeoutMs = BASE_TIMEOUT_MS + (attempt * 10000);
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-            const res = await fetch(SHEETS_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify(payload),
-                signal: controller.signal
-            });
-            clearTimeout(timeout);
-            if (!res.ok) throw new Error(`Sheets API error (${res.status})`);
-            const text = await res.text();
-            try { return JSON.parse(text); } catch (e) { throw new Error('Invalid JSON from Sheets API'); }
-        } catch (e) {
-            clearTimeout(timeout);
-            lastErr = e;
-            const isTimeout = e && e.name === 'AbortError';
-            if (attempt < MAX_RETRIES && (isTimeout || /network|timeout|fetch/i.test(String(e.message || '')))) {
-                await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-                continue;
-            }
-            if (isTimeout) throw new Error(`Sheets API timeout (${Math.round(timeoutMs/1000)}s)`);
-            throw e;
-        }
-    }
-
-    throw lastErr || new Error('Sheets request failed');
+    console.warn('[SHEETS DISABLED] Action blocked:', payload?.action || 'unknown');
+    return { success: false, data: [], details: [], message: 'Google Sheets is disabled. Data is stored locally in LAN folder.' };
 }
+
+
 
 // ===== FIREBASE MIGRATION (one-time) =====
 async function ensureFirebaseSeeded() {
@@ -7390,7 +7290,10 @@ function initLanSettingsUI() {
     indicator.addEventListener('click', () => {
         if (LanStorageService.isReadOnly()) {
             LanStorageService.requestUnlock().then(success => {
-                if (success) showToast("LAN folder unlocked successfully!", "success");
+                if (success) {
+                    showToast("LAN folder unlocked! Reloading data...", "success");
+                    loadInitialData();
+                }
             });
         } else {
             modal.classList.add('show');
@@ -7449,37 +7352,32 @@ function initLanSettingsUI() {
         fileInput.click();
     });
 
-    fileInput.addEventListener('change', (e) => {
+    fileInput.addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
 
-        const reader = new FileReader();
-        reader.onload = async (evt) => {
-            showLoader("Bootstrapping LAN folder...");
-            try {
-                const payload = JSON.parse(evt.target.result);
+        showLoader('Bootstrapping LAN folder...');
+        try {
+            if (file.name.endsWith('.zip')) {
+                // New ZIP format (exported by "Export Firestore Data" button)
+                await LanStorageService.bootstrapFolderFromZip(file);
+            } else {
+                // Legacy JSON payload
+                const text = await file.text();
+                const payload = JSON.parse(text);
                 await LanStorageService.bootstrapFolderFromBackup(payload);
-                showToast("LAN folder successfully bootstrapped from backup!", "success");
-                loadInitialData();
-            } catch (err) {
-                showToast("Import failed: " + err.message, "error");
-            } finally {
-                hideLoader();
-                fileInput.value = "";
             }
-        };
-        reader.readAsText(file);
+            showToast('LAN folder successfully bootstrapped from backup!', 'success');
+            loadInitialData();
+        } catch (err) {
+            showToast('Import failed: ' + err.message, 'error');
+        } finally {
+            hideLoader();
+            fileInput.value = '';
+        }
     });
 
-    if (LanStorageService.hasSavedHandle()) {
-        LanStorageService.autoReconnect().then(success => {
-            if (success) {
-                console.log("LAN shared folder auto-reconnected successfully.");
-            } else {
-                console.log("LAN shared folder locked. Click indicator to authorize.");
-            }
-        });
-    } else {
-        syncUI("disconnected");
-    }
+    // Auto-reconnect is handled by initApp (awaited before checkAuth).
+    // Just update the UI to reflect current status.
+    syncUI(LanStorageService.getStatus());
 }
