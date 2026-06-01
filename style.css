@@ -1370,16 +1370,24 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 /* ===== LAN READ ONLY BLOCKING ===== */
 body.lan-read-only input, 
 body.lan-read-only select, 
-body.lan-read-only button:not(#lan-settings-btn):not(#close-lan-modal-btn):not(#menu-toggle):not(.company-btn):not(.nav-btn),
+body.lan-read-only button,
 body.lan-read-only textarea {
     pointer-events: none !important;
     opacity: 0.65 !important;
 }
+
+/* Reset allowed buttons and LAN settings modal in read-only mode */
 body.lan-read-only #lan-settings-modal input,
-body.lan-read-only #lan-settings-modal button {
+body.lan-read-only #lan-settings-modal button,
+body.lan-read-only #lan-settings-btn,
+body.lan-read-only #close-lan-modal-btn,
+body.lan-read-only #menu-toggle,
+body.lan-read-only .company-btn,
+body.lan-read-only .nav-btn {
     pointer-events: auto !important;
     opacity: 1 !important;
 }
+
 body.lan-read-only .sheet-editable,
 body.lan-read-only .sheet-cell-input {
     pointer-events: none !important;
