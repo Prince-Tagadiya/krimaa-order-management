@@ -7244,7 +7244,6 @@ function initLanSettingsUI() {
     const settingsBtn = document.getElementById('lan-settings-btn');
     const closeBtn = document.getElementById('close-lan-modal-btn');
     const form = document.getElementById('lan-settings-form');
-    const passwordInput = document.getElementById('lan-encryption-password');
     const selectBtn = document.getElementById('lan-select-folder-btn');
     const disconnectBtn = document.getElementById('lan-disconnect-btn');
     const badge = document.getElementById('lan-modal-status-badge');
@@ -7262,7 +7261,7 @@ function initLanSettingsUI() {
             indicator.style.display = "";
             badge.className = "badge badge-a bg-success text-white";
             badge.textContent = "Connected";
-            desc.textContent = "Linked to secure local folder. High-speed local reading/writing is active.";
+            desc.textContent = "Linked to local folder. High-speed local reading/writing is active.";
             disconnectBtn.classList.remove('hidden');
             selectBtn.classList.add('hidden');
             document.body.classList.remove('lan-read-only');
@@ -7309,16 +7308,10 @@ function initLanSettingsUI() {
     modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('show'); });
 
     selectBtn.addEventListener('click', async () => {
-        const password = passwordInput.value.trim();
-        if (!password) {
-            showToast("Please enter an encryption password", "error");
-            return;
-        }
         showLoader("Configuring local folder...");
-        const res = await LanStorageService.connect(password);
+        const res = await LanStorageService.connect();
         hideLoader();
         if (res.success) {
-            localStorage.setItem("lan_encryption_key_v1", password);
             showToast("Successfully linked and unlocked local folder!", "success");
             loadInitialData();
         } else {
@@ -7329,7 +7322,6 @@ function initLanSettingsUI() {
     disconnectBtn.addEventListener('click', () => {
         if (confirm("Disconnect local folder? Data will revert to reading from Cloud Firestore.")) {
             LanStorageService.disconnect();
-            localStorage.removeItem("lan_encryption_key_v1");
             showToast("LAN folder disconnected.", "info");
             loadInitialData();
         }
@@ -7385,10 +7377,8 @@ function initLanSettingsUI() {
         reader.readAsText(file);
     });
 
-    const savedPassword = localStorage.getItem("lan_encryption_key_v1");
-    if (savedPassword) {
-        passwordInput.value = savedPassword;
-        LanStorageService.autoReconnect(savedPassword).then(success => {
+    if (LanStorageService.hasSavedHandle()) {
+        LanStorageService.autoReconnect().then(success => {
             if (success) {
                 console.log("LAN shared folder auto-reconnected successfully.");
             } else {

@@ -1,18 +1,15 @@
 // ===== LAN-FIRST SECURE STORAGE & SYNC SERVICE =====
-// Uses File System Access API for local LAN shared folder reading/writing,
-// and browser native Web Crypto API (AES-GCM 256-bit) for file-level encryption.
+// Uses File System Access API for local LAN shared folder reading/writing.
+// Stores all database collections as raw, readable JSON files on the shared drive.
 
 const LanStorageService = (() => {
     let _dirHandle = null;
-    let _cryptoKey = null;
-    let _password = "";
     let _status = "disconnected"; // disconnected | connected | read-only
     let _listeners = [];
 
     const DB_NAME = "KrimaaLanStore";
     const STORE_NAME = "handles";
     const HANDLE_KEY = "directory_handle";
-    const PASSWORD_SALT = "krimaa_lan_salt_v1";
 
     // ───── INDEXEDDB HANDLE PERSISTENCE ─────
     function _openDb() {
@@ -62,63 +59,6 @@ const LanStorageService = (() => {
         });
     }
 
-    // ───── NATIVE WEB CRYPTO API (AES-GCM 256-bit) ─────
-    async function _deriveKey(password) {
-        const enc = new TextEncoder();
-        const keyMaterial = await crypto.subtle.importKey(
-            "raw",
-            enc.encode(password),
-            { name: "PBKDF2" },
-            false,
-            ["deriveBits", "deriveKey"]
-        );
-        return crypto.subtle.deriveKey(
-            {
-                name: "PBKDF2",
-                salt: enc.encode(PASSWORD_SALT),
-                iterations: 100000,
-                hash: "SHA-256"
-            },
-            keyMaterial,
-            { name: "AES-GCM", length: 256 },
-            false,
-            ["encrypt", "decrypt"]
-        );
-    }
-
-    async function encrypt(plainText, password) {
-        const key = await _deriveKey(password);
-        const enc = new TextEncoder();
-        const iv = crypto.getRandomValues(new Uint8Array(12));
-        const encrypted = await crypto.subtle.encrypt(
-            { name: "AES-GCM", iv: iv },
-            key,
-            enc.encode(plainText)
-        );
-
-        // Package as: IV (12 bytes) + Encrypted Data
-        const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('');
-        const dataB64 = btoa(String.fromCharCode(...new Uint8Array(encrypted)));
-        return JSON.stringify({ iv: ivHex, data: dataB64 });
-    }
-
-    async function decrypt(cipherJson, password) {
-        const key = await _deriveKey(password);
-        const { iv: ivHex, data: dataB64 } = JSON.parse(cipherJson);
-
-        const iv = new Uint8Array(ivHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-        const encrypted = new Uint8Array(
-            atob(dataB64).split("").map(c => c.charCodeAt(0))
-        );
-
-        const decrypted = await crypto.subtle.decrypt(
-            { name: "AES-GCM", iv: iv },
-            key,
-            encrypted
-        );
-        return new TextDecoder().decode(decrypted);
-    }
-
     // ───── DIRECTORY / FILE MANAGEMENT ─────
     function setStatus(s) {
         _status = s;
@@ -137,14 +77,13 @@ const LanStorageService = (() => {
         return false;
     }
 
-    async function connect(password) {
+    async function connect() {
         try {
-            _password = password;
             _dirHandle = await window.showDirectoryPicker();
             await saveHandle(_dirHandle);
-            localStorage.setItem("lan_password_configured", "true");
+            localStorage.setItem("lan_configured_v1", "true");
             
-            // Derive and verify writing permission
+            // Verify writing permission
             const hasAccess = await verifyPermission(_dirHandle, true);
             if (!hasAccess) {
                 setStatus("read-only");
@@ -162,14 +101,13 @@ const LanStorageService = (() => {
         }
     }
 
-    async function autoReconnect(password) {
+    async function autoReconnect() {
         try {
             _dirHandle = await loadHandle();
             if (!_dirHandle) {
                 setStatus("disconnected");
                 return false;
             }
-            _password = password;
             
             // Check permission silently
             const options = { mode: "readwrite" };
@@ -203,36 +141,35 @@ const LanStorageService = (() => {
 
     function disconnect() {
         _dirHandle = null;
-        _cryptoKey = null;
-        _password = "";
         clearHandle();
-        localStorage.removeItem("lan_password_configured");
+        localStorage.removeItem("lan_configured_v1");
         setStatus("disconnected");
     }
 
     // ───── HIGH LEVEL FILE READS / WRITES ─────
+    // Kept method name as 'EncryptedFile' to preserve routing compatibility with firebase-service.js,
+    // but reads/writes raw unencrypted .json files directly for simplicity!
     async function writeEncryptedFile(filename, data) {
         if (!_dirHandle) throw new Error("No folder selected");
         if (_status === "read-only") throw new Error("LAN folder is currently read-only. Cannot write data.");
         
-        const fileHandle = await _dirHandle.getFileHandle(filename, { create: true });
-        const plainText = JSON.stringify(data);
-        const cipherText = await encrypt(plainText, _password);
+        const jsonFilename = filename.replace(/\.enc$/, '.json');
+        const fileHandle = await _dirHandle.getFileHandle(jsonFilename, { create: true });
+        const plainText = JSON.stringify(data, null, 2);
         
         const writable = await fileHandle.createWritable();
-        await writable.write(cipherText);
+        await writable.write(plainText);
         await writable.close();
     }
 
     async function readEncryptedFile(filename, fallbackData = null) {
         if (!_dirHandle) throw new Error("No folder selected");
         try {
-            const fileHandle = await _dirHandle.getFileHandle(filename);
+            const jsonFilename = filename.replace(/\.enc$/, '.json');
+            const fileHandle = await _dirHandle.getFileHandle(jsonFilename);
             const file = await fileHandle.getFile();
-            const cipherText = await file.text();
-            if (!cipherText.trim()) return fallbackData;
-            
-            const plainText = await decrypt(cipherText, _password);
+            const plainText = await file.text();
+            if (!plainText.trim()) return fallbackData;
             return JSON.parse(plainText);
         } catch (e) {
             if (e.name === "NotFoundError") {
@@ -245,26 +182,38 @@ const LanStorageService = (() => {
     // ───── EXPORT / IMPORT (CONSOLIDATED DATABASE FILE) ─────
     async function generateBackupPayload() {
         const collections = [
-            "accounts", "daily_orders", "karigars", "karigar_transactions",
-            "money_records", "money_backups", "design_prices", "design_price_history", "remarks"
+            "accounts", "daily_orders", "daily_summary", "karigars", "karigar_reset_backups",
+            "karigar_transactions", "money_records", "money_backups", "design_prices", 
+            "design_price_history", "remarks", "system"
         ];
+        
+        // Dynamically add YYYY_MM orders partition tables for 2024 to 2028
+        const years = ["2024", "2025", "2026", "2027", "2028"];
+        const months = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
+        for (const y of years) {
+            for (const m of months) {
+                collections.push(`orders_${y}_${m}`);
+            }
+        }
+
         const payload = {
             exportedAt: new Date().toISOString(),
             data: {}
         };
 
-        const db = FirebaseService.getDb();
+        const db = firebase.firestore();
         for (const colName of collections) {
             try {
                 const snap = await db.collection(colName).get();
-                const docs = [];
-                snap.forEach(doc => {
-                    docs.push({ id: doc.id, ...doc.data() });
-                });
-                payload.data[colName] = docs;
+                if (!snap.empty) {
+                    const docs = [];
+                    snap.forEach(doc => {
+                        docs.push({ id: doc.id, ...doc.data() });
+                    });
+                    payload.data[colName] = docs;
+                }
             } catch (e) {
-                console.warn(`Export failed for ${colName}:`, e);
-                payload.data[colName] = [];
+                console.warn(`Export skipped for ${colName}:`, e.message);
             }
         }
         return payload;
@@ -277,12 +226,8 @@ const LanStorageService = (() => {
         }
 
         const dataMap = backupPayload.data;
-        
-        // Save each collection to the local encrypted files
         for (const [colName, docs] of Object.entries(dataMap)) {
-            const filename = `${colName}.enc`;
-            // Transform array list to object storage format for easy direct shimming if needed,
-            // or store directly as list. Let's store directly as list database dump.
+            const filename = `${colName}.json`;
             await writeEncryptedFile(filename, docs);
         }
 
@@ -307,7 +252,7 @@ const LanStorageService = (() => {
         getStatus: () => _status,
         isConnected: () => _status === "connected",
         isReadOnly: () => _status === "read-only",
-        hasSavedHandle: () => localStorage.getItem("lan_password_configured") === "true"
+        hasSavedHandle: () => localStorage.getItem("lan_configured_v1") === "true"
     };
 })();
 
