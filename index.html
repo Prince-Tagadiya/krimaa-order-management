@@ -61,6 +61,9 @@
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="backup-btn" title="Refresh latest app data">
                     <i class='bx bx-refresh'></i> Refresh Data
                 </button>
+                <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-accent" id="lan-settings-btn" title="Configure LAN storage and sync settings">
+                    <i class='bx bx-hdd'></i> LAN Drive
+                </button>
                 <div id="last-backup-time" class="text-xs text-muted text-center mb-2" style="font-size: 0.65rem;"></div>
                 <a href="#" id="logout-btn" class="nav-btn logout-link" data-target="logout"><i class='bx bx-log-out'></i> Logout</a>
             </div>
@@ -85,6 +88,10 @@
                     <div class="sync-indicator" id="sync-indicator" title="Data sync status">
                         <i class='bx bx-check-circle'></i>
                         <span>Synced</span>
+                    </div>
+                    <div class="sync-indicator sync-idle" id="lan-indicator" title="LAN storage connection status" style="cursor: pointer; background: #e0f2fe; color: #0369a1; border-color: #7dd3fc; font-weight: 600;">
+                        <i class='bx bx-server'></i>
+                        <span>LAN: Off</span>
                     </div>
                     <div class="sync-indicator sync-idle hidden" id="sheet-backup-indicator" title="Background Google Sheet backup status">
                         <i class='bx bx-cloud-upload'></i>
@@ -1004,6 +1011,48 @@
         </div>
     </div>
 
+    <!-- LAN Drive Settings Modal -->
+    <div id="lan-settings-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:95%;max-width:450px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.15);">
+            <div class="flex-between mb-2">
+                <h3 class="font-bold text-lg flex items-center gap-2"><i class='bx bx-hdd text-primary'></i> LAN Drive Settings</h3>
+                <button id="close-lan-modal-btn" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+            <p class="text-xs text-muted mb-2">Configure secure local folder storage. Perfect for offline usage across a local area network (LAN).</p>
+            
+            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:15px;">
+                <div class="flex-between">
+                    <span class="text-xs font-bold uppercase text-muted">LAN Drive Status</span>
+                    <span id="lan-modal-status-badge" class="badge" style="background:#cbd5e1; color:#475569;">Off</span>
+                </div>
+                <p id="lan-modal-status-desc" class="text-xs mt-1 text-muted">Firestore is currently your primary database. LAN offline features are disabled.</p>
+            </div>
+
+            <form id="lan-settings-form">
+                <div class="input-group">
+                    <label>Shared Encryption Password</label>
+                    <input type="password" id="lan-encryption-password" placeholder="Enter secure key (shared across computers)" required style="width:100%; padding:0.75rem; border:1px solid var(--border-color); border-radius:8px;">
+                </div>
+                <div class="flex gap-2 mb-2" style="display:flex; gap:8px;">
+                    <button type="button" id="lan-select-folder-btn" class="btn btn-primary w-100"><i class='bx bx-folder-open'></i> Link LAN Folder</button>
+                    <button type="button" id="lan-disconnect-btn" class="btn btn-outline text-danger hidden"><i class='bx bx-log-out'></i> Disconnect</button>
+                </div>
+            </form>
+
+            <hr style="border:0; border-top:1px solid #e2e8f0; margin:15px 0;">
+
+            <div class="flex-between mb-1">
+                <span class="font-bold text-sm">Synchronize & Backups</span>
+            </div>
+            <p class="text-xs text-muted mb-2">Gathers your full Firestore database into a single file to setup other local computer LAN folders.</p>
+            <div style="display:flex; gap:8px;">
+                <button type="button" id="lan-export-payload-btn" class="btn btn-outline btn-sm w-100"><i class='bx bx-download'></i> Export Firestore Data</button>
+                <button type="button" id="lan-import-payload-btn" class="btn btn-outline btn-sm w-100"><i class='bx bx-upload'></i> Import to LAN folder</button>
+                <input type="file" id="lan-import-file-input" class="hidden" accept=".json">
+            </div>
+        </div>
+    </div>
+
     <!-- Firebase SDK (compat for vanilla JS) -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -1018,6 +1067,7 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
+    <script src="lan-storage-service.js"></script>
     <script src="app.js?v=20260308-16"></script>
 </body>
 </html>

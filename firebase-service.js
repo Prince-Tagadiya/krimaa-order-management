@@ -36,6 +36,53 @@ function replaceServerTimestamp(obj) {
     return obj;
 }
 
+async function _writeLocalDoc(colName, docId, data, isMerge = false) {
+    if (typeof window === 'undefined' || !window.LanStorageService) return;
+    const list = await window.LanStorageService.readEncryptedFile(colName + ".enc", []);
+    const idx = list.findIndex(d => d && String(d.id) === String(docId));
+    const cleanData = replaceServerTimestamp(data);
+    
+    if (idx >= 0) {
+        if (isMerge) {
+            list[idx] = { ...list[idx], ...cleanData, id: docId };
+        } else {
+            list[idx] = { ...cleanData, id: docId };
+        }
+    } else {
+        list.push({ ...cleanData, id: docId });
+    }
+    await window.LanStorageService.writeEncryptedFile(colName + ".enc", list);
+    _syncToCloudInBackground(colName, docId, cleanData, isMerge ? 'merge' : 'set');
+}
+
+async function _deleteLocalDoc(colName, docId) {
+    if (typeof window === 'undefined' || !window.LanStorageService) return;
+    let list = await window.LanStorageService.readEncryptedFile(colName + ".enc", []);
+    list = list.filter(d => d && String(d.id) !== String(docId));
+    await window.LanStorageService.writeEncryptedFile(colName + ".enc", list);
+    _syncToCloudInBackground(colName, docId, null, 'delete');
+}
+
+function _syncToCloudInBackground(colName, docId, data, op) {
+    (async () => {
+        try {
+            const rtdb = firebase.database();
+            const path = `/${colName}/${docId}`;
+            if (op === 'delete') {
+                await rtdb.ref(path).remove();
+            } else if (op === 'merge') {
+                const snapshot = await rtdb.ref(path).once('value');
+                const merged = { ...(snapshot.val() || {}), ...data };
+                await rtdb.ref(path).set(merged);
+            } else {
+                await rtdb.ref(path).set(data);
+            }
+        } catch (e) {
+            console.warn("Background cloud sync paused (offline):", e.message);
+        }
+    })();
+}
+
 class RtdbShim {
     constructor() {
         this.rtdb = firebase.database();
@@ -136,22 +183,34 @@ class RtdbCollectionRef {
     }
 
     async add(data) {
-        const newRef = this.rtdb.ref(this._path).push();
-        const id = newRef.key;
-        const cleanData = replaceServerTimestamp(data);
-        await newRef.set(cleanData);
+        let id;
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            id = 'lan_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            await _writeLocalDoc(this.name, id, data);
+        } else {
+            throw new Error("Cloud database is strictly Read-Only. Please link a LAN folder to add accounts or orders.");
+        }
         invalidateCache();
         return new RtdbDocRef(this.rtdb, `${this._path}/${id}`, id);
     }
 
     async get() {
-        const snapshot = await this.rtdb.ref(this._path).once('value');
+        let valMap = {};
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const list = await window.LanStorageService.readEncryptedFile(this.name + ".enc", []);
+            list.forEach(doc => {
+                if (doc && doc.id) {
+                    valMap[doc.id] = { ...doc };
+                    delete valMap[doc.id].id;
+                }
+            });
+        } else {
+            const snapshot = await this.rtdb.ref(this._path).once('value');
+            valMap = snapshot.val() || {};
+        }
+
         const docs = [];
-        
-        snapshot.forEach(child => {
-            const childId = child.key;
-            let val = child.val();
-            
+        Object.entries(valMap).forEach(([childId, val]) => {
             let matches = true;
             for (const q of this.queries) {
                 const rowVal = val ? val[q.field] : undefined;
@@ -203,34 +262,53 @@ class RtdbDocRef {
     }
 
     async get() {
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const parts = this._path.split('/').filter(Boolean);
+            const colName = parts[0];
+            const list = await window.LanStorageService.readEncryptedFile(colName + ".enc", []);
+            const docData = list.find(d => d && String(d.id) === String(this.id));
+            if (docData) {
+                const clean = { ...docData };
+                delete clean.id;
+                return new RtdbDocSnapshot(this.id, clean, true, this);
+            }
+            return new RtdbDocSnapshot(this.id, null, false, this);
+        }
         const snapshot = await this.rtdb.ref(this._path).once('value');
         return new RtdbDocSnapshot(this.id, snapshot.val(), snapshot.exists(), this);
     }
 
     async set(data, options) {
-        const cleanData = replaceServerTimestamp(data);
-        if (options && options.merge) {
-            const current = await this.get();
-            const merged = { ...(current.data() || {}), ...cleanData };
-            await this.rtdb.ref(this._path).set(merged);
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const parts = this._path.split('/').filter(Boolean);
+            const colName = parts[0];
+            const isMerge = !!(options && options.merge);
+            await _writeLocalDoc(colName, this.id, data, isMerge);
         } else {
-            await this.rtdb.ref(this._path).set(cleanData);
+            throw new Error("Cloud database is strictly Read-Only. Please link a LAN folder to edit data.");
         }
         invalidateCache();
     }
 
     async update(data) {
-        const cleanData = replaceServerTimestamp(data);
-        const updates = {};
-        Object.keys(cleanData).forEach(k => {
-            updates[k] = cleanData[k];
-        });
-        await this.rtdb.ref(this._path).update(updates);
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const parts = this._path.split('/').filter(Boolean);
+            const colName = parts[0];
+            await _writeLocalDoc(colName, this.id, data, true);
+        } else {
+            throw new Error("Cloud database is strictly Read-Only. Please link a LAN folder to edit data.");
+        }
         invalidateCache();
     }
 
     async delete() {
-        await this.rtdb.ref(this._path).remove();
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            const parts = this._path.split('/').filter(Boolean);
+            const colName = parts[0];
+            await _deleteLocalDoc(colName, this.id);
+        } else {
+            throw new Error("Cloud database is strictly Read-Only. Please link a LAN folder to delete data.");
+        }
         invalidateCache();
     }
 }

@@ -702,6 +702,7 @@ function initApp() {
     bootstrapSheetSyncStateFromStorage();
     bindSheetSyncLifecycleEvents();
     updateBackendModeBanner();
+    initLanSettingsUI();
     checkAuth();
     attachEventListeners();
     initSyncIndicator();
@@ -1190,7 +1191,17 @@ async function checkFirestoreResponsive(timeoutMs = 5000) {
     try {
         const probePromise = (async () => {
             const db = FirebaseService.getDb();
-            await db.collection('system').doc('backupMeta').get();
+            try {
+                // Probe 'accounts' which is guaranteed to be accessible under security rules
+                await db.collection('accounts').limit(1).get();
+            } catch (e) {
+                const msg = String(e.message || e).toLowerCase();
+                const code = String(e.code || '').toLowerCase();
+                const isPermissionError = msg.includes('permission') || msg.includes('denied') || code.includes('permission-denied') || code.includes('permission');
+                if (!isPermissionError) {
+                    throw e; // Rethrow actual network/down errors
+                }
+            }
             return true;
         })();
         const timeoutPromise = new Promise((_, reject) => {
@@ -7225,3 +7236,166 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
         hideLoader();
     }
 });
+
+// ===== LAN DRIVE UI & CONTROLLERS =====
+function initLanSettingsUI() {
+    const indicator = document.getElementById('lan-indicator');
+    const modal = document.getElementById('lan-settings-modal');
+    const settingsBtn = document.getElementById('lan-settings-btn');
+    const closeBtn = document.getElementById('close-lan-modal-btn');
+    const form = document.getElementById('lan-settings-form');
+    const passwordInput = document.getElementById('lan-encryption-password');
+    const selectBtn = document.getElementById('lan-select-folder-btn');
+    const disconnectBtn = document.getElementById('lan-disconnect-btn');
+    const badge = document.getElementById('lan-modal-status-badge');
+    const desc = document.getElementById('lan-modal-status-desc');
+    const exportBtn = document.getElementById('lan-export-payload-btn');
+    const importBtn = document.getElementById('lan-import-payload-btn');
+    const fileInput = document.getElementById('lan-import-file-input');
+
+    if (!indicator || !modal) return;
+
+    function syncUI(status) {
+        if (status === "connected") {
+            indicator.className = "sync-indicator sync-saved";
+            indicator.querySelector('span').textContent = "LAN: Connected";
+            indicator.style.display = "";
+            badge.className = "badge badge-a bg-success text-white";
+            badge.textContent = "Connected";
+            desc.textContent = "Linked to secure local folder. High-speed local reading/writing is active.";
+            disconnectBtn.classList.remove('hidden');
+            selectBtn.classList.add('hidden');
+            document.body.classList.remove('lan-read-only');
+        } else if (status === "read-only") {
+            indicator.className = "sync-indicator sync-error";
+            indicator.querySelector('span').textContent = "LAN: Read-Only";
+            indicator.style.display = "";
+            badge.className = "badge badge-b bg-danger text-white";
+            badge.textContent = "Read-Only";
+            desc.textContent = "Folder path configured but locked/disconnected. Link folder to unlock.";
+            disconnectBtn.classList.remove('hidden');
+            selectBtn.classList.remove('hidden');
+            document.body.classList.add('lan-read-only');
+        } else {
+            indicator.className = "sync-indicator sync-idle";
+            indicator.querySelector('span').textContent = "LAN: Off";
+            badge.className = "badge";
+            badge.style.background = "#cbd5e1";
+            badge.style.color = "#475569";
+            badge.textContent = "Off";
+            desc.textContent = "Firestore is currently your primary database in Read-Only mode. Edits require connecting a LAN folder.";
+            disconnectBtn.classList.add('hidden');
+            selectBtn.classList.remove('hidden');
+            document.body.classList.add('lan-read-only');
+        }
+    }
+
+    LanStorageService.onStatusChange((status) => {
+        syncUI(status);
+    });
+
+    settingsBtn.addEventListener('click', () => modal.classList.add('show'));
+    indicator.addEventListener('click', () => {
+        if (LanStorageService.isReadOnly()) {
+            LanStorageService.requestUnlock().then(success => {
+                if (success) showToast("LAN folder unlocked successfully!", "success");
+            });
+        } else {
+            modal.classList.add('show');
+        }
+    });
+
+    closeBtn.addEventListener('click', () => modal.classList.remove('show'));
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('show'); });
+
+    selectBtn.addEventListener('click', async () => {
+        const password = passwordInput.value.trim();
+        if (!password) {
+            showToast("Please enter an encryption password", "error");
+            return;
+        }
+        showLoader("Configuring local folder...");
+        const res = await LanStorageService.connect(password);
+        hideLoader();
+        if (res.success) {
+            localStorage.setItem("lan_encryption_key_v1", password);
+            showToast("Successfully linked and unlocked local folder!", "success");
+            loadInitialData();
+        } else {
+            showToast("Failed to link folder: " + res.error, "error");
+        }
+    });
+
+    disconnectBtn.addEventListener('click', () => {
+        if (confirm("Disconnect local folder? Data will revert to reading from Cloud Firestore.")) {
+            LanStorageService.disconnect();
+            localStorage.removeItem("lan_encryption_key_v1");
+            showToast("LAN folder disconnected.", "info");
+            loadInitialData();
+        }
+    });
+
+    exportBtn.addEventListener('click', async () => {
+        showLoader("Generating payload...");
+        try {
+            const payload = await LanStorageService.generateBackupPayload();
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(payload));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", `krimaa_lan_backup_${getTodayISODate()}.json`);
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+            showToast("Backup exported successfully!", "success");
+        } catch (e) {
+            console.error(e);
+            showToast("Export failed: " + e.message, "error");
+        } finally {
+            hideLoader();
+        }
+    });
+
+    importBtn.addEventListener('click', () => {
+        if (!LanStorageService.isConnected()) {
+            showToast("Link your local folder first before importing backups!", "error");
+            return;
+        }
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+            showLoader("Bootstrapping LAN folder...");
+            try {
+                const payload = JSON.parse(evt.target.result);
+                await LanStorageService.bootstrapFolderFromBackup(payload);
+                showToast("LAN folder successfully bootstrapped from backup!", "success");
+                loadInitialData();
+            } catch (err) {
+                showToast("Import failed: " + err.message, "error");
+            } finally {
+                hideLoader();
+                fileInput.value = "";
+            }
+        };
+        reader.readAsText(file);
+    });
+
+    const savedPassword = localStorage.getItem("lan_encryption_key_v1");
+    if (savedPassword) {
+        passwordInput.value = savedPassword;
+        LanStorageService.autoReconnect(savedPassword).then(success => {
+            if (success) {
+                console.log("LAN shared folder auto-reconnected successfully.");
+            } else {
+                console.log("LAN shared folder locked. Click indicator to authorize.");
+            }
+        });
+    } else {
+        syncUI("disconnected");
+    }
+}
