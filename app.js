@@ -4667,8 +4667,10 @@ async function renderDataSheet() {
         if (!lookup[d]) lookup[d] = {};
         const key = r.accountId || r.accountName;
         if (!lookup[d][key]) lookup[d][key] = { meesho: 0, total: 0 };
-        lookup[d][key].meesho += parseInt(r.meesho) || 0;
-        lookup[d][key].total += parseInt(r.total) || 0;
+        const meeshoVal = parseInt(r.meesho) || 0;
+        const totalVal = typeof r.total !== 'undefined' ? (parseInt(r.total) || 0) : meeshoVal;
+        lookup[d][key].meesho += meeshoVal;
+        lookup[d][key].total += totalVal;
     });
     
     // Load remarks (from backend first time, then cached)
