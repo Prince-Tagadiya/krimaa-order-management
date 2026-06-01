@@ -1,7 +1,7 @@
 // ===== KRIMAA SERVICE WORKER — OFFLINE-FIRST =====
 // Cache all app shell + CDN assets. Serve from cache first, network as fallback.
 // Increment CACHE_VER whenever you deploy new code.
-const CACHE_VER = 'krimaa-v8';
+const CACHE_VER = 'krimaa-v9';
 
 const SHELL_FILES = [
     '/',
@@ -11,7 +11,6 @@ const SHELL_FILES = [
     '/firebase-service.js',
     '/lan-storage-service.js',
     '/runtime-env-loader.js',
-    '/env.js',
 ];
 
 // External CDN files that must also be cached for full offline use
@@ -86,7 +85,7 @@ self.addEventListener('fetch', (event) => {
     }
 
     event.respondWith(
-        caches.match(event.request).then((cached) => {
+        caches.match(event.request, { ignoreSearch: true }).then((cached) => {
             if (cached) {
                 return cached; // Serve from cache immediately
             }
@@ -103,7 +102,7 @@ self.addEventListener('fetch', (event) => {
             }).catch(() => {
                 // Offline and not in cache — return the app shell for navigation requests
                 if (event.request.mode === 'navigate') {
-                    return caches.match('/index.html');
+                    return caches.match('/index.html', { ignoreSearch: true });
                 }
                 return new Response('', { status: 503, statusText: 'Offline' });
             });
