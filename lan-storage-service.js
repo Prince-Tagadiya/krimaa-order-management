@@ -410,6 +410,9 @@ const LanStorageService = (() => {
         } catch (e) {
             console.error('[LAN] fetchFromLocal failed:', e);
         }
+        return undefined;
+    }
+
     async function getFolderHash() {
         if (!_dirHandle || _status !== 'connected') return '';
         try {
