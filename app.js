@@ -1782,6 +1782,27 @@ function startAdminAutoSync() {
 }
 
 async function refreshAppDataManually() {
+    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+        showLoader('Refreshing LAN data...');
+        try {
+            await Promise.all([
+                fetchAccounts(),
+                fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
+            ]);
+            await loadAvailableSheetMonths(true);
+            if (AppState.currentSection === 'data-sheet') renderDataSheet();
+            else if (AppState.currentSection === 'dashboard') renderDashboard();
+            else if (AppState.currentSection === 'daily-order') renderOrderEntryTable();
+            showToast('LAN data refreshed successfully!', 'success');
+        } catch (e) {
+            console.error(e);
+            showToast('Failed to refresh LAN data: ' + e.message, 'error');
+        } finally {
+            hideLoader();
+        }
+        return;
+    }
+
     showLoader('Checking server status...');
     try {
         const serverResponsive = await probeFirebaseWithCountdown(5);
@@ -2414,6 +2435,10 @@ async function autoFixMismatchedAccountNames() {
 
 function runStartupMaintenanceInBackground() {
     if (_startupMaintenanceRunning) return;
+    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+        console.log("🚀 [MAINTENANCE] Skipped cloud maintenance in LAN mode.");
+        return;
+    }
     _startupMaintenanceRunning = true;
     setTimeout(async () => {
         try {
@@ -2500,6 +2525,31 @@ async function loadInitialData() {
         console.log("🚀 [INITIALIZATION] Starting web app...");
         AppState.karigarCacheByCompany = {};
         FirebaseService.init();
+
+        // ───── LAN-FIRST MODE OVERRIDE ─────
+        if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+            setLoaderStatus('Loading LAN local data...');
+            console.log("🚀 [INITIALIZATION] LAN mode active. Fetching locally from LAN folder...");
+            if (_useSheetsFallbackMode) disableSheetsFallbackMode();
+            updateBackendModeBanner();
+
+            await Promise.all([
+                fetchAccounts(),
+                fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
+            ]);
+
+            console.log("🚀 [INITIALIZATION] Local LAN data ready. Booting UI...");
+            await loadAvailableSheetMonths(true).catch(e => console.warn('Background LAN month fetch:', e));
+            
+            console.log("🚀 [INITIALIZATION] Finished completely in LAN mode.");
+            if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
+                navigateTo('daily-order');
+            } else {
+                navigateTo('data-sheet');
+            }
+            return;
+        }
+
         const serverResponsive = await probeFirebaseWithCountdown(5);
         if (!serverResponsive) {
             enableSheetsFallbackMode();
@@ -2570,6 +2620,7 @@ async function loadInitialData() {
     }
     finally { hideLoader(); }
 }
+
 
 async function fetchAccounts() {
     try {
@@ -4417,6 +4468,21 @@ function populateSheetMonthFilter() {
 
     // Add archive months from AppState
     (AppState.availableSheetMonths || []).forEach(m => months.add(m));
+
+    // In LAN-first mode, pre-populate all historical months since Jan 2024 so they are selectable
+    const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
+    if (isLan) {
+        const startYear = 2024;
+        const curDate = new Date();
+        const endYear = curDate.getFullYear();
+        for (let y = startYear; y <= endYear; y++) {
+            const maxM = (y === curDate.getFullYear()) ? curDate.getMonth() + 1 : 12;
+            for (let m = 1; m <= maxM; m++) {
+                const mStr = String(m).padStart(2, '0');
+                months.add(`${y}-${mStr}`);
+            }
+        }
+    }
     
     const sortedMonths = [...months].sort().reverse();
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -4438,17 +4504,27 @@ function populateSheetMonthFilter() {
 async function loadHistoricalData(companyId, month) {
     try {
         showLoader();
-        showToast(`Fetching ${month} data from Firestore…`, 'info');
+        const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
+        if (isLan) {
+            showToast(`Loading ${month} data from LAN…`, 'info');
+        } else {
+            showToast(`Fetching ${month} data from Firestore…`, 'info');
+        }
         const res = await apiRequest({ action: 'getDashboardData', companyId, month });
         const list = Array.isArray(res?.data) ? res.data : [];
         if (companyId === 'company1') AppState.company1Data = list;
         else AppState.company2Data = list;
         await loadAvailableSheetMonths(true);
         await renderDataSheet();
-        showToast(`Loaded ${list.length} records from Firestore.`, 'success');
+        if (isLan) {
+            showToast(`Loaded ${list.length} records from LAN.`, 'success');
+        } else {
+            showToast(`Loaded ${list.length} records from Firestore.`, 'success');
+        }
     } catch (e) {
         console.error('Load historical failed:', e);
-        showToast('Failed to load from Firestore', 'error');
+        const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
+        showToast(isLan ? 'Failed to load from LAN' : 'Failed to load from Firestore', 'error');
     } finally {
         hideLoader();
     }
@@ -4545,19 +4621,36 @@ async function renderDataSheet() {
         wrapper.classList.add('hidden');
         emptyMsg.classList.remove('hidden');
         
-        // If a specific month is selected and no data locally, offer one-click Firestore reload.
+        // If a specific month is selected and no data locally, offer one-click Firestore/LAN reload.
         if (monthFilter && monthFilter !== 'all' && monthFilter !== currentMonth) {
             const compId = companyFilter === 'all' ? 'company1' : companyFilter; // Default to comp1 if all
-            emptyMsg.innerHTML = `
-                <div class="p-8 text-center">
-                    <i class='bx bx-history text-4xl text-muted mb-4'></i>
-                    <p class="mb-4">No local data found for ${escapeHtml(monthFilter)}.</p>
-                    <button class="btn btn-primary" onclick="loadHistoricalData('${compId}', '${monthFilter}')">
-                        <i class='bx bx-cloud-download'></i> Reload from Firestore
-                    </button>
-                    <p class="text-xs text-muted mt-2">Data source: Firestore (live).</p>
-                </div>
-            `;
+            const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
+            
+            if (isLan) {
+                // Instantly trigger load in the background so the user never has to click!
+                setTimeout(() => {
+                    loadHistoricalData(compId, monthFilter);
+                }, 50);
+
+                emptyMsg.innerHTML = `
+                    <div class="p-8 text-center">
+                        <i class='bx bx-loader-alt bx-spin text-4xl text-primary mb-4'></i>
+                        <p class="mb-4">Loading data for ${escapeHtml(monthFilter)} from LAN folder…</p>
+                        <p class="text-xs text-muted">Reading plaintext files from your shared network drive.</p>
+                    </div>
+                `;
+            } else {
+                emptyMsg.innerHTML = `
+                    <div class="p-8 text-center">
+                        <i class='bx bx-history text-4xl text-muted mb-4'></i>
+                        <p class="mb-4">No local data found for ${escapeHtml(monthFilter)}.</p>
+                        <button class="btn btn-primary" onclick="loadHistoricalData('${compId}', '${monthFilter}')">
+                            <i class='bx bx-cloud-download'></i> Reload from Firestore
+                        </button>
+                        <p class="text-xs text-muted mt-2">Data source: Firestore (live).</p>
+                    </div>
+                `;
+            }
         } else if (accounts.length === 0) {
             emptyMsg.innerHTML = `
                 <div class="p-8 text-center text-muted">
