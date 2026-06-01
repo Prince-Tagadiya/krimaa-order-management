@@ -1,7 +1,7 @@
 // ===== KRIMAA SERVICE WORKER — OFFLINE-FIRST =====
 // Cache all app shell + CDN assets. Serve from cache first, network as fallback.
 // Increment CACHE_VER whenever you deploy new code.
-const CACHE_VER = 'krimaa-v10';
+const CACHE_VER = 'krimaa-v11';
 
 const SHELL_FILES = [
     '/',

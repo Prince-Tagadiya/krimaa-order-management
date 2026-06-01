@@ -1808,15 +1808,7 @@ async function switchCompany(previousCompany = '') {
         // Instant swap from in-memory company cache (no flicker).
         applyCurrentCompanySnapshotFromMemory();
         if (AppState.currentSection === 'dashboard') renderDashboard();
-        else if (AppState.currentSection === 'daily-order') {
-            setOrderDateDefaults();
-            renderOrderEntryTable();
-            checkExistingOrdersForDate();
-        }
         else if (AppState.currentSection === 'add-account') renderAccountsList();
-        else if (AppState.currentSection === 'money-management') renderMoneyManagement();
-        else if (AppState.currentSection === 'money-backup') renderMoneyBackupPage();
-        else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
         else if (AppState.currentSection === 'data-sheet') {
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
@@ -1842,18 +1834,8 @@ async function switchCompany(previousCompany = '') {
         });
 
         if (AppState.currentSection === 'dashboard') renderDashboard();
-        else if (AppState.currentSection === 'daily-order') {
-            setOrderDateDefaults();
-            renderOrderEntryTable();
-            checkExistingOrdersForDate();
-        }
         else if (AppState.currentSection === 'add-account') renderAccountsList();
-        else if (AppState.currentSection === 'money-management') renderMoneyManagement();
-        else if (AppState.currentSection === 'money-backup') renderMoneyBackupPage();
-        else if (AppState.currentSection === 'karigar') await renderKarigarPage(true);
-        else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
         else if (AppState.currentSection === 'data-sheet') { 
-            // Also switch data sheet filter and force re-render
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
             populateSheetMonthFilter(); 
@@ -1997,16 +1979,20 @@ function applyRolePermissions() {
     userInfo.innerHTML = `<span>${AppState.currentUser.displayName}</span>`;
     
     if (role === 'order' || role === 'order_c2') {
-        // Order role: allow Daily Order + Data Sheet only
-        document.getElementById('nav-dashboard').style.display = 'none';
-        document.getElementById('nav-data-sheet').style.display = '';
-        document.getElementById('nav-manage-accounts').style.display = 'none';
-        document.getElementById('nav-money-management').style.display = 'none';
+        // Order role: allow Data Sheet only
+        const navDash = document.getElementById('nav-dashboard');
+        const navSheet = document.getElementById('nav-data-sheet');
+        const navAccounts = document.getElementById('nav-manage-accounts');
+        if (navDash) navDash.style.display = 'none';
+        if (navSheet) navSheet.style.display = '';
+        if (navAccounts) navAccounts.style.display = 'none';
     } else {
-        document.getElementById('nav-dashboard').style.display = '';
-        document.getElementById('nav-data-sheet').style.display = '';
-        document.getElementById('nav-manage-accounts').style.display = '';
-        document.getElementById('nav-money-management').style.display = '';
+        const navDash = document.getElementById('nav-dashboard');
+        const navSheet = document.getElementById('nav-data-sheet');
+        const navAccounts = document.getElementById('nav-manage-accounts');
+        if (navDash) navDash.style.display = '';
+        if (navSheet) navSheet.style.display = '';
+        if (navAccounts) navAccounts.style.display = '';
     }
 
     const allowedSet = new Set(getAllowedCompanies());
@@ -2089,7 +2075,7 @@ function attachEventListeners() {
     }
 
     // ──── Login Form ────
-    document.getElementById('login-form').addEventListener('submit', (e) => {
+    document.getElementById('login-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
         refreshUsersFromEnv();
         if (!USERS.length) {
@@ -2169,14 +2155,14 @@ function attachEventListeners() {
         });
     });
 
-    document.getElementById('menu-toggle').addEventListener('click', toggleMobileSidebar);
+    document.getElementById('menu-toggle')?.addEventListener('click', toggleMobileSidebar);
     document.getElementById('sidebar-overlay')?.addEventListener('click', closeMobileSidebar);
     window.addEventListener('resize', () => {
         if (window.innerWidth > 768) closeMobileSidebar();
     });
 
     // Add Account
-    document.getElementById('add-account-form').addEventListener('submit', async (e) => {
+    document.getElementById('add-account-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const accountName = document.getElementById('new-account-name').value.trim();
         const mobile = document.getElementById('new-account-mobile')?.value.trim();
@@ -2202,7 +2188,7 @@ function attachEventListeners() {
     });
 
     // Submit Orders
-    document.getElementById('submit-orders-btn').addEventListener('click', async () => {
+    document.getElementById('submit-orders-btn')?.addEventListener('click', async () => {
         const date = document.getElementById('order-date').value;
         if(!date) return showToast("Please select a date", "error");
         const orders = [];
@@ -2237,18 +2223,18 @@ function attachEventListeners() {
         finally { btn.disabled = false; btn.textContent = "Submit All Orders"; hideLoader(); }
     });
 
-    document.getElementById('order-date').addEventListener('change', () => { checkExistingOrdersForDate(); updateOrderDateLabel(); });
-    document.getElementById('already-submitted-alert').addEventListener('click', () => { document.getElementById('order-details-modal').classList.add('show'); });
+    document.getElementById('order-date')?.addEventListener('change', () => { checkExistingOrdersForDate(); updateOrderDateLabel(); });
+    document.getElementById('already-submitted-alert')?.addEventListener('click', () => { document.getElementById('order-details-modal').classList.add('show'); });
 
     // Modal closes
-    document.getElementById('close-modal-btn').addEventListener('click', () => document.getElementById('order-details-modal').classList.remove('show'));
-    document.getElementById('order-details-modal').addEventListener('click', (e) => { if(e.target.id === 'order-details-modal') e.target.classList.remove('show'); });
+    document.getElementById('close-modal-btn')?.addEventListener('click', () => document.getElementById('order-details-modal').classList.remove('show'));
+    document.getElementById('order-details-modal')?.addEventListener('click', (e) => { if(e.target.id === 'order-details-modal') e.target.classList.remove('show'); });
     
 
-    document.getElementById('close-edit-modal-btn').addEventListener('click', () => document.getElementById('edit-account-modal').classList.remove('show'));
-    document.getElementById('edit-account-modal').addEventListener('click', (e) => { if(e.target.id === 'edit-account-modal') e.target.classList.remove('show'); });
+    document.getElementById('close-edit-modal-btn')?.addEventListener('click', () => document.getElementById('edit-account-modal').classList.remove('show'));
+    document.getElementById('edit-account-modal')?.addEventListener('click', (e) => { if(e.target.id === 'edit-account-modal') e.target.classList.remove('show'); });
     document.getElementById('edit-account-recharge')?.addEventListener('change', updateEditRechargeMeta);
-    document.getElementById('edit-account-form').addEventListener('submit', async (e) => {
+    document.getElementById('edit-account-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         await saveEditAccount();
     });
@@ -2257,9 +2243,9 @@ function attachEventListeners() {
     if (closeDeleteModalBtn) {
         closeDeleteModalBtn.addEventListener('click', () => document.getElementById('delete-account-modal').classList.remove('show'));
     }
-    document.getElementById('delete-account-modal').addEventListener('click', (e) => { if(e.target.id === 'delete-account-modal') e.target.classList.remove('show'); });
-    document.getElementById('cancel-delete-btn').addEventListener('click', () => document.getElementById('delete-account-modal').classList.remove('show'));
-    document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+    document.getElementById('delete-account-modal')?.addEventListener('click', (e) => { if(e.target.id === 'delete-account-modal') e.target.classList.remove('show'); });
+    document.getElementById('cancel-delete-btn')?.addEventListener('click', () => document.getElementById('delete-account-modal').classList.remove('show'));
+    document.getElementById('confirm-delete-btn')?.addEventListener('click', async () => {
         const accountId = document.getElementById('delete-account-id').value;
         const accountName = document.getElementById('delete-account-name').value;
         showLoader();
@@ -2602,7 +2588,7 @@ async function loadInitialData() {
 
             console.log("🚀 [INIT] LAN data ready. Booting UI.");
             if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
-                navigateTo('daily-order');
+                navigateTo('data-sheet');
             } else {
                 navigateTo('data-sheet');
             }
@@ -2634,7 +2620,7 @@ async function loadInitialData() {
         
         console.log("🚀 [INIT] Firebase data ready. Booting UI.");
         if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
-            navigateTo('daily-order');
+            navigateTo('data-sheet');
         } else {
             navigateTo('data-sheet');
         }
