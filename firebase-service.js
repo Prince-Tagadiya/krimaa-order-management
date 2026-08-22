@@ -1239,6 +1239,8 @@ const FirebaseService = (() => {
                 companyName,
                 masterCompany: safeCompanyId,
                 quantity,
+                meesho: quantity,
+                total: quantity,
                 date: dStr,
                 createdAt: firebase.firestore.FieldValue.serverTimestamp()
             }, { merge: true }));
@@ -1371,6 +1373,8 @@ const FirebaseService = (() => {
             companyName,
             masterCompany: safeCompanyId,
             quantity: numVal,
+            meesho: numVal,
+            total: numVal,
             date: dStr,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true }));

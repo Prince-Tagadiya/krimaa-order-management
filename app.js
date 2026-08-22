@@ -700,6 +700,23 @@ async function initApp() {
     applyClientModeUI();
     restoreFirestoreQuotaCooldown();
     updateBackendModeBanner();
+
+    // ── PROFILE DETECTION: restore profile from saved session before LAN check ──
+    // This ensures the right per-user LAN folder handle is loaded on page reload.
+    (function restoreProfileFromSession() {
+        const savedUsername = localStorage.getItem('userUsername');
+        if (savedUsername) {
+            LanStorageService.setActiveProfile(savedUsername);
+        } else {
+            // Hash-based profile: if visiting /#dhyan without an active session,
+            // pre-warm the Dhyan profile so the correct folder handle is checked.
+            const hash = window.location.hash.replace('#', '').toLowerCase();
+            if (hash === 'dhyan') {
+                LanStorageService.setActiveProfile('Dhyan_Order');
+            }
+        }
+    })();
+
     initLanSettingsUI();
     attachEventListeners();
     initSyncIndicator();
@@ -737,7 +754,7 @@ async function initApp() {
     });
     if (typeof updateOrderCompanyLabel === 'function') updateOrderCompanyLabel();
 
-    // ── STEP 1: Check if folder is linked ──
+    // ── STEP 1: Check if folder is linked (uses profile-specific handle key) ──
     if (LanStorageService.hasSavedHandle()) {
         const reconnected = await LanStorageService.autoReconnect();
         if (!reconnected) {
@@ -749,6 +766,50 @@ async function initApp() {
     }
 
     startLanFolderWatcher();
+    updateProfileSwitchBtn();
+    updateFolderSetupScreenForProfile();
+
+    // ── Pull on tab focus: when admin comes back to the tab, refresh from Firebase ──
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && LanStorageService.isConnected() && AppState.currentUser) {
+            const now = Date.now();
+            if ((now - _lastVisibilityPullMs) > 60 * 1000) { // max once per 60s
+                _lastVisibilityPullMs = now;
+                LanStorageService.pullLatestFromFirebase().then(r => {
+                    if (r && r.pulled > 0) {
+                        console.log(`[PULL SYNC] Visibility pull: ${r.pulled} records.`);
+                        window.clearApiReadCache && window.clearApiReadCache();
+                        const sec = AppState.currentSection;
+                        if (sec === 'dashboard') renderDashboard();
+                        else if (sec === 'data-sheet' && !(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) renderDataSheet();
+                    }
+                }).catch(() => {});
+            }
+        }
+    });
+
+    // ── Pull on LAN first-connect: so folder connecting immediately syncs Firebase data ──
+    LanStorageService.onStatusChange((status) => {
+        if (status === 'connected' && AppState.currentUser) {
+            setTimeout(() => {
+                LanStorageService.pullLatestFromFirebase({ force: true }).catch(() => {});
+            }, 1500);
+        }
+    });
+
+    // ── Pull on sync flush: when this profile pushes to Firebase, immediately pull back ──
+    // This ensures cross-profile data (e.g. Dhyan→Firebase→Admin) appears within seconds.
+    window.addEventListener('lan:sync-flushed', () => {
+        if (LanStorageService.isConnected() && AppState.currentUser) {
+            setTimeout(() => {
+                LanStorageService.pullLatestFromFirebase({ force: true }).then(r => {
+                    if (r && r.pulled > 0) {
+                        window.clearApiReadCache && window.clearApiReadCache();
+                    }
+                }).catch(() => {});
+            }, 2000); // 2s delay — let Firebase propagate
+        }
+    });
 }
 
 let _currentFolderHash = '';
@@ -792,7 +853,78 @@ function showFolderSetupScreen() {
     document.getElementById('folder-setup-screen').classList.remove('hidden');
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('app-screen').classList.add('hidden');
+    updateFolderSetupScreenForProfile();
 }
+
+// ===== PROFILE HELPERS =====
+
+function _isDhyanHash() {
+    return window.location.hash.replace('#', '').toLowerCase() === 'dhyan';
+}
+
+/** Updates the folder setup screen title/text to reflect the active profile */
+function updateFolderSetupScreenForProfile() {
+    const isDhyan = _isDhyanHash();
+    const titleEl = document.querySelector('#folder-setup-screen h2');
+    const descEl = document.querySelector('#folder-setup-screen p');
+    if (titleEl) {
+        titleEl.textContent = isDhyan ? '📂 Link Dhyan Data Folder' : '📂 Link Your Data Folder';
+    }
+    if (descEl) {
+        descEl.textContent = isDhyan
+            ? 'Select the local folder where Dhyan\'s order data is stored. This folder is separate from the Krimaa master folder.'
+            : 'Krimaa works fully offline. First, link the shared local folder where your data is stored.';
+    }
+    // Show profile badge on folder setup screen
+    let badge = document.getElementById('folder-setup-profile-badge');
+    if (!badge) {
+        badge = document.createElement('div');
+        badge.id = 'folder-setup-profile-badge';
+        badge.style.cssText = 'margin-bottom:12px;text-align:center;font-size:0.78rem;font-weight:700;';
+        const statusEl = document.getElementById('folder-setup-status');
+        if (statusEl && statusEl.parentNode) {
+            statusEl.parentNode.insertBefore(badge, statusEl);
+        }
+    }
+    badge.innerHTML = isDhyan
+        ? '<span style="background:#f0f9ff;border:1px solid #bae6fd;color:#0369a1;padding:4px 12px;border-radius:20px;"><i class=\'bx bxs-business\'></i> Dhyan Profile</span>'
+        : '<span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:4px 12px;border-radius:20px;"><i class=\'bx bxs-building\'></i> Krimaa / Shree Sai Profile</span>';
+}
+
+/** Shows/hides the "Switch Profile" button in the sidebar (admin only) */
+function updateProfileSwitchBtn() {
+    const btn = document.getElementById('profile-switch-btn');
+    if (!btn) return;
+    const role = AppState.currentUser?.role;
+    const isAdminOrDev = role === 'admin' || role === 'dev';
+    btn.style.display = isAdminOrDev ? '' : 'none';
+    const isDhyan = _isDhyanHash();
+    btn.innerHTML = isDhyan
+        ? '<i class=\'bx bx-transfer\'></i> Switch to Krimaa Profile'
+        : '<i class=\'bx bx-transfer\'></i> Switch to Dhyan Profile';
+}
+
+/** Switches the active profile: clears session, sets hash, reloads */
+function switchToProfile(profileName) {
+    const targetHash = profileName === 'dhyan' ? 'dhyan' : '';
+    const label = profileName === 'dhyan' ? 'Dhyan' : 'Krimaa / Shree Sai';
+    if (!confirm(`Switch to ${label} profile?\n\nYou will be logged out and taken to the ${label} login.`)) return;
+    // Clear current session
+    localStorage.removeItem('isLogged');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('userName');
+    localStorage.removeItem('userUsername');
+    localStorage.removeItem('userAllowedCompanies');
+    AppState.currentUser = null;
+    // Disconnect current LAN folder (don't clear the handle — just deactivate)
+    LanStorageService.setActiveProfile(null);
+    // Set the new profile hash
+    window.location.hash = targetHash;
+    // Reload the page to cleanly initialize the new profile
+    window.location.reload();
+}
+
+
 
 function showLoginScreen() {
     document.getElementById('folder-setup-screen').classList.add('hidden');
@@ -807,6 +939,21 @@ function showLoginScreen() {
         lanStatus.style.gap = '6px';
         const statusLabel = LanStorageService.isConnected() ? 'Folder linked & connected — offline mode active' : 'Folder saved (will reconnect on login)';
         if (lanStatusText) lanStatusText.textContent = statusLabel;
+    }
+    // Update profile indicator on login screen
+    const profileIndicator = document.getElementById('login-profile-indicator');
+    const profileBadgeText = document.getElementById('login-profile-badge-text');
+    const loginTitle = document.querySelector('#login-screen h2');
+    const loginSubtitle = document.querySelector('#login-screen p');
+    const isDhyan = _isDhyanHash();
+    if (profileIndicator) profileIndicator.style.display = isDhyan ? 'block' : 'none';
+    if (isDhyan) {
+        if (profileBadgeText) profileBadgeText.textContent = 'Dhyan Profile';
+        if (loginTitle) loginTitle.textContent = 'Dhyan Login';
+        if (loginSubtitle) loginSubtitle.textContent = 'Sign in with your Dhyan credentials';
+    } else {
+        if (loginTitle) loginTitle.textContent = 'Krimaa Admin';
+        if (loginSubtitle) loginSubtitle.textContent = 'Sign in to manage daily orders';
     }
 }
 
@@ -1711,10 +1858,47 @@ function startAdminAutoSync() {
     }, 15000);
 }
 
+// ===== FIREBASE → LAN PULL SYNC (background, cross-profile) =====
+// When admin's LAN is connected, periodically pull latest Firebase data into admin's folder.
+// This ensures Dhyan's orders (written to Firebase from their profile) appear in Admin's LAN folder.
+let _lanPullTimer = null;
+let _lastVisibilityPullMs = 0;
+
+function startLanFirebasePullSync() {
+    if (_lanPullTimer) clearInterval(_lanPullTimer);
+
+    _lanPullTimer = setInterval(async () => {
+        try {
+            if (!LanStorageService.isConnected()) return;
+            if (document.hidden) return;
+            if (isFirestoreQuotaBlocked && isFirestoreQuotaBlocked()) return;
+            // Don't pull while user is actively editing the data sheet
+            if (typeof isDataSheetEditActive === 'function' && isDataSheetEditActive()) return;
+
+            const result = await LanStorageService.pullLatestFromFirebase();
+            if (result && result.pulled > 0) {
+                console.log(`[PULL SYNC] Pulled ${result.pulled} records from Firebase → LAN folder.`);
+                // Silently refresh the current view if it shows data
+                const sec = AppState.currentSection;
+                if (sec === 'dashboard') renderDashboard();
+                else if (sec === 'data-sheet' && !(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) renderDataSheet();
+                else if (sec === 'daily-order' && !(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) renderOrderEntryTable();
+            }
+        } catch (e) {
+            console.warn('[PULL SYNC] Background pull skipped:', e.message);
+        }
+    }, 90 * 1000); // Every 90 seconds
+}
+
 async function refreshAppDataManually() {
     if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-        showLoader('Refreshing LAN data...');
+        showLoader('Syncing from Firebase & refreshing LAN data...');
         try {
+            // ── Pull latest Firebase data into LAN folder first (cross-profile sync) ──
+            const pullResult = await LanStorageService.pullLatestFromFirebase({ force: true });
+            if (pullResult && pullResult.pulled > 0) {
+                console.log(`[REFRESH] Pulled ${pullResult.pulled} records from Firebase before LAN read.`);
+            }
             await Promise.all([
                 fetchAccounts(),
                 fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
@@ -1723,7 +1907,7 @@ async function refreshAppDataManually() {
             if (AppState.currentSection === 'data-sheet') renderDataSheet();
             else if (AppState.currentSection === 'dashboard') renderDashboard();
             else if (AppState.currentSection === 'daily-order') renderOrderEntryTable();
-            showToast('LAN data refreshed successfully!', 'success');
+            showToast('LAN data refreshed with latest Firebase data!', 'success');
         } catch (e) {
             console.error(e);
             showToast('Failed to refresh LAN data: ' + e.message, 'error');
@@ -1948,7 +2132,20 @@ function checkAuth() {
         applyRolePermissions();
         updateBackendModeBanner();
         startAdminAutoSync();
+        // ── Start background Firebase→LAN pull sync (keeps admin folder up-to-date with Dhyan's orders) ──
+        startLanFirebasePullSync();
         loadInitialData();
+        // Do an immediate first pull so admin sees cross-profile data right away after login
+        if (LanStorageService.isConnected()) {
+            setTimeout(() => {
+                LanStorageService.pullLatestFromFirebase({ force: true }).then(r => {
+                    if (r && r.pulled > 0) {
+                        console.log(`[PULL SYNC] Initial pull: ${r.pulled} records merged.`);
+                        if (typeof clearApiReadCache === 'function') clearApiReadCache();
+                    }
+                }).catch(e => console.warn('[PULL SYNC] Initial pull failed:', e.message));
+            }, 3000); // 3s delay — let loadInitialData complete first
+        }
 
     } else {
         // Not logged in — show login or folder-setup
@@ -1966,6 +2163,10 @@ function checkAuth() {
         if (_adminRealtimeRefreshTimer) {
             clearInterval(_adminRealtimeRefreshTimer);
             _adminRealtimeRefreshTimer = null;
+        }
+        if (_lanPullTimer) {
+            clearInterval(_lanPullTimer);
+            _lanPullTimer = null;
         }
     }
 }
@@ -2012,6 +2213,9 @@ function applyRolePermissions() {
             sheetCompanyFilter.value = allowed[0] || 'company1';
         }
     }
+
+    // Show/hide profile switch button based on role
+    updateProfileSwitchBtn();
 }
 
 function attachEventListeners() {
@@ -2087,6 +2291,9 @@ function attachEventListeners() {
         
         const foundUser = USERS.find(u => u.username === user && u.password === pass);
         if (foundUser) {
+            // ── Activate per-profile LAN folder before session is set ──
+            LanStorageService.setActiveProfile(foundUser.username);
+
             localStorage.setItem('isLogged', 'true');
             localStorage.setItem('userRole', foundUser.role);
             localStorage.setItem('userName', foundUser.displayName);
@@ -2102,13 +2309,29 @@ function attachEventListeners() {
                 AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
                 localStorage.setItem('selectedCompany', AppState.currentCompany);
             }
+
+            // ── Dhyan_Order auto-redirect: lock to company2 + set #dhyan hash ──
+            if (foundUser.role === 'order_c2') {
+                AppState.currentCompany = 'company2';
+                localStorage.setItem('selectedCompany', 'company2');
+                if (window.location.hash.replace('#', '').toLowerCase() !== 'dhyan') {
+                    window.location.hash = 'dhyan';
+                }
+            }
+
             checkAuth();
             showToast(`Welcome, ${foundUser.displayName}!`, "success");
+            updateProfileSwitchBtn();
         } else {
             showToast("Invalid Credentials", "error");
         }
     });
 
+    // ── Profile Switch Button (Admin only) ──
+    document.getElementById('profile-switch-btn')?.addEventListener('click', () => {
+        const isDhyan = _isDhyanHash();
+        switchToProfile(isDhyan ? 'krimaa' : 'dhyan');
+    });
 
     // Navigation
     document.querySelectorAll('.company-btn').forEach(btn => {
@@ -2137,6 +2360,9 @@ function attachEventListeners() {
                 localStorage.removeItem('userUsername');
                 localStorage.removeItem('userAllowedCompanies');
                 AppState.currentUser = null;
+                LanStorageService.setActiveProfile(null);
+                // Clear #dhyan hash on logout so next user starts fresh
+                if (window.location.hash) window.location.hash = '';
                 checkAuth();
                 return;
             }
@@ -7400,7 +7626,23 @@ function initLanSettingsUI() {
         syncUI(status);
     });
 
-    settingsBtn.addEventListener('click', () => modal.classList.add('show'));
+    function updateLanModalProfileLabel() {
+        const labelEl = document.getElementById('lan-modal-profile-label');
+        const labelTextEl = document.getElementById('lan-modal-profile-label-text');
+        const profile = LanStorageService.getActiveProfile();
+        const selectBtnEl = document.getElementById('lan-select-folder-btn');
+        if (!labelEl) return;
+        if (profile && !['Krimaa', 'dev', null].includes(profile)) {
+            labelEl.style.display = 'block';
+            if (labelTextEl) labelTextEl.textContent = `Profile: ${profile} (separate folder)`;
+            if (selectBtnEl) selectBtnEl.innerHTML = `<i class='bx bx-folder-open'></i> Link ${profile}'s Folder`;
+        } else {
+            labelEl.style.display = 'none';
+            if (selectBtnEl) selectBtnEl.innerHTML = `<i class='bx bx-folder-open'></i> Link LAN Folder`;
+        }
+    }
+
+    settingsBtn.addEventListener('click', () => { modal.classList.add('show'); updateLanModalProfileLabel(); });
     indicator.addEventListener('click', () => {
         if (LanStorageService.isReadOnly()) {
             LanStorageService.requestUnlock().then(success => {

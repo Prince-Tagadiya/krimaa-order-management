@@ -11,7 +11,39 @@ const LanStorageService = (() => {
 
     const DB_NAME = "KrimaaLanStore";
     const STORE_NAME = "handles";
-    const HANDLE_KEY = "directory_handle";
+    const HANDLE_KEY = "directory_handle"; // legacy default key (Krimaa admin — backward compat)
+
+    // ───── PER-PROFILE HANDLE KEY SUPPORT ─────
+    // Each user login profile can have its own separate LAN folder.
+    // Krimaa / admin uses the original legacy key for full backward compatibility.
+    // Other users (Dhyan_Order, Krimaa_Users, etc.) get their own key.
+    let _activeProfile = null; // username string, null = use default
+
+    // Profiles that share the legacy default key (no isolation needed)
+    const LEGACY_PROFILE_USERS = ['Krimaa', 'dev'];
+
+    function _getHandleKey() {
+        if (!_activeProfile || LEGACY_PROFILE_USERS.includes(_activeProfile)) {
+            return HANDLE_KEY; // backward compat — Krimaa admin key unchanged
+        }
+        return `${HANDLE_KEY}_${_activeProfile}`;
+    }
+
+    function _getLanConfiguredKey() {
+        if (!_activeProfile || LEGACY_PROFILE_USERS.includes(_activeProfile)) {
+            return 'lan_configured_v1'; // legacy key unchanged
+        }
+        return `lan_configured_${_activeProfile}`;
+    }
+
+    function setActiveProfile(username) {
+        _activeProfile = username || null;
+        console.log('[LAN] Active profile set to:', _activeProfile, '→ handle key:', _getHandleKey());
+    }
+
+    function getActiveProfile() {
+        return _activeProfile;
+    }
 
     // ───── INDEXEDDB HANDLE PERSISTENCE ─────
     function _openIdb() {
@@ -33,7 +65,7 @@ const LanStorageService = (() => {
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME, "readwrite");
             const store = tx.objectStore(STORE_NAME);
-            const request = store.put(handle, HANDLE_KEY);
+            const request = store.put(handle, _getHandleKey());
             request.onsuccess = () => resolve(true);
             request.onerror = () => reject(request.error);
         });
@@ -44,7 +76,7 @@ const LanStorageService = (() => {
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME, "readonly");
             const store = tx.objectStore(STORE_NAME);
-            const request = store.get(HANDLE_KEY);
+            const request = store.get(_getHandleKey());
             request.onsuccess = () => resolve(request.result || null);
             request.onerror = () => reject(request.error);
         });
@@ -55,7 +87,7 @@ const LanStorageService = (() => {
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME, "readwrite");
             const store = tx.objectStore(STORE_NAME);
-            const request = store.delete(HANDLE_KEY);
+            const request = store.delete(_getHandleKey());
             request.onsuccess = () => resolve(true);
             request.onerror = () => reject(request.error);
         });
@@ -85,7 +117,7 @@ const LanStorageService = (() => {
         try {
             _dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
             await saveHandle(_dirHandle);
-            localStorage.setItem("lan_configured_v1", "true");
+            localStorage.setItem(_getLanConfiguredKey(), "true");
 
             const hasAccess = await verifyPermission(_dirHandle, true);
             if (!hasAccess) {
@@ -147,7 +179,7 @@ const LanStorageService = (() => {
     function disconnect() {
         _dirHandle = null;
         clearHandle();
-        localStorage.removeItem("lan_configured_v1");
+        localStorage.removeItem(_getLanConfiguredKey());
         _pendingCount = 0;
         setStatus("disconnected");
     }
@@ -267,6 +299,7 @@ const LanStorageService = (() => {
         if (!queue.length) return;
 
         const remaining = [];
+        let successCount = 0;
         for (const entry of queue) {
             try {
                 const db = firebase.firestore();
@@ -278,6 +311,7 @@ const LanStorageService = (() => {
                 } else {
                     await ref.set(entry.data);
                 }
+                successCount++;
             } catch (e) {
                 console.warn('[LAN] Sync flush failed for', entry.colName, entry.docId, '— will retry:', e.message);
                 remaining.push(entry);
@@ -289,9 +323,164 @@ const LanStorageService = (() => {
         if (remaining.length === 0) {
             console.log('[LAN] All queued operations flushed to Firebase!');
         }
+        // Notify app that data was pushed to Firebase — so admin's LAN folder can pull it
+        if (successCount > 0 && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('lan:sync-flushed', { detail: { count: successCount } }));
+        }
     }
 
-    // ───── ONE-TIME EXPORT FROM FIRESTORE → ZIP ─────
+    // ───── FIREBASE → LAN PULL SYNC ─────
+    // Fetches the latest data from Firebase and merges it into the local LAN folder.
+    // This keeps the admin's LAN folder in sync with changes made by other profiles (e.g. Dhyan).
+    // - Never wipes local data. Uses upsert / merge logic only.
+    // - Runs silently in background — no UI blocking.
+    // - Only touches recent months (current + previous) for orders, for performance.
+    let _pullInProgress = false;
+    let _lastPullMs = 0;
+    const PULL_COOLDOWN_MS = 30 * 1000; // minimum 30s between pulls
+
+    async function pullLatestFromFirebase(options = {}) {
+        if (!_dirHandle || _status !== 'connected') return { pulled: 0, skipped: 'not_connected' };
+        if (_pullInProgress) return { pulled: 0, skipped: 'already_running' };
+        const now = Date.now();
+        if (!options.force && (now - _lastPullMs) < PULL_COOLDOWN_MS) {
+            return { pulled: 0, skipped: 'cooldown' };
+        }
+        _pullInProgress = true;
+        _lastPullMs = now;
+        let totalPulled = 0;
+        const errors = [];
+
+        try {
+            const db = firebase.firestore();
+            const companiesIds = ['company1', 'company2'];
+
+            // ─── 1. Accounts (both companies) ───
+            for (const cid of companiesIds) {
+                try {
+                    const snap = await db.collection('accounts').where('companyId', '==', cid).get();
+                    if (!snap.empty) {
+                        const existing = await readFile('accounts', []);
+                        const existingMap = new Map(existing.map(a => [String(a.id), a]));
+                        snap.forEach(doc => {
+                            const d = { ...doc.data(), id: doc.id };
+                            existingMap.set(doc.id, d); // always upsert (Firebase is truth for accounts)
+                        });
+                        await writeFile('accounts', Array.from(existingMap.values()));
+                        totalPulled += snap.size;
+                    }
+                } catch (e) {
+                    errors.push('accounts:' + cid + ':' + e.message);
+                }
+            }
+
+            // ─── 2. Orders — current + previous month ───
+            const nowDate = new Date();
+            const monthsToSync = [];
+            for (let offset = 0; offset <= 2; offset++) {
+                const d = new Date(nowDate.getFullYear(), nowDate.getMonth() - offset, 1);
+                const y = d.getFullYear();
+                const m = String(d.getMonth() + 1).padStart(2, '0');
+                monthsToSync.push({ y, m, filename: `orders_${y}_${m}` });
+            }
+
+            for (const { y, m, filename } of monthsToSync) {
+                try {
+                    const snap = await db.collection(filename).get();
+                    if (!snap.empty) {
+                        const existing = await readFile(filename, []);
+                        // Build dedup map from existing
+                        const dedupMap = new Map();
+                        existing.forEach(o => {
+                            const key = `${o.date}__${o.companyId || o.masterCompany || 'company1'}__${String(o.accountName || o.accountId || '').toLowerCase().trim()}`;
+                            dedupMap.set(key, o);
+                        });
+                        // Merge Firebase records (Firebase wins for matching keys)
+                        snap.forEach(doc => {
+                            const o = { ...doc.data(), id: doc.id };
+                            if (!o.date) return;
+                            const comp = o.companyId || o.masterCompany || 'company1';
+                            const accKey = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                            if (!accKey) return;
+                            const key = `${o.date}__${comp}__${accKey}`;
+                            const existingVal = dedupMap.get(key);
+                            // Firebase record wins if local doesn't exist or meesho value differs
+                            if (!existingVal || String(existingVal.meesho) !== String(o.meesho)) {
+                                dedupMap.set(key, o);
+                            }
+                        });
+                        await writeFile(filename, Array.from(dedupMap.values()));
+                        totalPulled += snap.size;
+                    }
+                } catch (e) {
+                    errors.push(filename + ':' + e.message);
+                }
+            }
+
+            // ─── 3. daily_orders ───
+            try {
+                const snap = await db.collection('daily_orders').get();
+                if (!snap.empty) {
+                    const existing = await readFile('daily_orders', []);
+                    const dedupMap = new Map();
+                    existing.forEach(o => {
+                        const key = `${o.date}__${o.companyId || o.masterCompany || 'company1'}__${String(o.accountName || o.accountId || '').toLowerCase().trim()}`;
+                        dedupMap.set(key, o);
+                    });
+                    snap.forEach(doc => {
+                        const o = { ...doc.data(), id: doc.id };
+                        if (!o.date) return;
+                        const comp = o.companyId || o.masterCompany || 'company1';
+                        const accKey = String(o.accountName || o.accountId || '').toLowerCase().trim();
+                        if (!accKey) return;
+                        const key = `${o.date}__${comp}__${accKey}`;
+                        dedupMap.set(key, o); // Firebase always wins for daily_orders
+                    });
+                    await writeFile('daily_orders', Array.from(dedupMap.values()));
+                    totalPulled += snap.size;
+                }
+            } catch (e) {
+                errors.push('daily_orders:' + e.message);
+            }
+
+            // ─── 4. Remarks ───
+            try {
+                const snap = await db.collection('remarks').get();
+                if (!snap.empty) {
+                    const existing = await readFile('remarks', []);
+                    const dedupMap = new Map(existing.map(r => [String(r.id || r.date), r]));
+                    snap.forEach(doc => {
+                        const r = { ...doc.data(), id: doc.id };
+                        dedupMap.set(doc.id, r);
+                    });
+                    await writeFile('remarks', Array.from(dedupMap.values()));
+                    totalPulled += snap.size;
+                }
+            } catch (e) {
+                errors.push('remarks:' + e.message);
+            }
+
+            if (errors.length > 0) {
+                console.warn('[LAN PULL] Completed with some errors:', errors);
+            } else {
+                console.log(`[LAN PULL] Pulled ${totalPulled} records from Firebase into LAN folder.`);
+            }
+
+            // Notify UI that local data changed
+            if (typeof window !== 'undefined' && typeof window.clearApiReadCache === 'function') {
+                window.clearApiReadCache();
+            }
+
+            return { pulled: totalPulled, errors };
+        } catch (e) {
+            console.error('[LAN PULL] Fatal error:', e);
+            return { pulled: 0, errors: [e.message] };
+        } finally {
+            _pullInProgress = false;
+        }
+    }
+
+
     async function generateBackupPayload() {
         const collections = [
             "accounts", "daily_orders", "daily_summary", "karigars", "karigar_reset_backups",
@@ -654,7 +843,12 @@ const LanStorageService = (() => {
         getStatus: () => _status,
         isConnected: () => _status === "connected",
         isReadOnly: () => _status === "read-only",
-        hasSavedHandle: () => localStorage.getItem("lan_configured_v1") === "true",
+        hasSavedHandle: () => localStorage.getItem(_getLanConfiguredKey()) === "true",
+        // Per-profile support
+        setActiveProfile,
+        getActiveProfile,
+        // Cross-profile Firebase→LAN pull sync
+        pullLatestFromFirebase,
     };
 })();
 

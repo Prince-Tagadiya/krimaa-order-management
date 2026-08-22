@@ -74,6 +74,12 @@
                 <h2>Krimaa Admin</h2>
                 <p>Sign in to manage daily orders</p>
             </div>
+            <!-- Profile indicator: shown dynamically by JS based on #dhyan hash -->
+            <div id="login-profile-indicator" style="display:none; text-align:center; margin-bottom:10px;">
+                <span id="login-profile-badge" style="display:inline-flex;align-items:center;gap:6px;background:#f0f9ff;border:1px solid #bae6fd;color:#0369a1;padding:5px 14px;border-radius:20px;font-size:0.8rem;font-weight:700;">
+                    <i class='bx bxs-business'></i> <span id="login-profile-badge-text">Dhyan Profile</span>
+                </span>
+            </div>
             <div id="login-lan-status" style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:0.8rem;color:#166534;display:none;">
                 <i class='bx bx-check-circle'></i> <span id="login-lan-status-text">Folder linked</span>
             </div>
@@ -116,6 +122,9 @@
                 </button>
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-accent" id="lan-settings-btn" title="Configure LAN storage and sync settings">
                     <i class='bx bx-hdd'></i> LAN Drive
+                </button>
+                <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="profile-switch-btn" title="Switch between Krimaa and Dhyan profile" style="display:none; color:#7c3aed; border-color:#c4b5fd; background:#faf5ff;">
+                    <i class='bx bx-transfer'></i> Switch to Dhyan Profile
                 </button>
                 <button type="button" class="btn btn-primary btn-sm w-100 mb-1 hidden" id="pwa-install-btn" style="background: #059669; border-color: #059669;" title="Install Krimaa App on this device">
                     <i class='bx bx-plus-circle'></i> Install App
@@ -861,6 +870,12 @@
                 <button id="close-lan-modal-btn" class="btn-icon"><i class='bx bx-x'></i></button>
             </div>
             <p class="text-xs text-muted mb-2">Configure secure local folder storage. Perfect for offline usage across a local area network (LAN).</p>
+            <!-- Profile context label: updated by JS -->
+            <div id="lan-modal-profile-label" style="margin-bottom:10px;display:none;">
+                <span style="display:inline-flex;align-items:center;gap:5px;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:12px;background:#faf5ff;border:1px solid #c4b5fd;color:#7c3aed;">
+                    <i class='bx bx-transfer'></i> <span id="lan-modal-profile-label-text">Profile: Dhyan</span>
+                </span>
+            </div>
             
             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:15px;">
                 <div class="flex-between">
