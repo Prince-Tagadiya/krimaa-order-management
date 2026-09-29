@@ -257,76 +257,28 @@ const LanStorageService = (() => {
     }
 
     async function enqueueSyncOp(colName, docId, data, op) {
-        if (!_dirHandle || _status !== 'connected') return;
-        try {
-            const queue = await _loadQueue();
-            // Deduplicate: if same docId + colName + op exists, update it
-            const existingIdx = queue.findIndex(q => q.colName === colName && q.docId === docId && q.op === op);
-            const entry = { colName, docId, data, op, queuedAt: new Date().toISOString() };
-            if (existingIdx >= 0) {
-                queue[existingIdx] = entry;
-            } else {
-                queue.push(entry);
-            }
-            await _saveQueue(queue);
-            _pendingCount = queue.length;
-            _notifyPendingBadge();
-        } catch (e) {
-            console.warn('[LAN] Failed to enqueue sync op:', e.message);
-        }
+        // Firebase disabled for offline LAN mode
+        return;
     }
 
     async function getPendingCount() {
-        if (!_dirHandle) return 0;
-        const queue = await _loadQueue();
-        return queue.length;
+        return 0;
     }
 
     async function _refreshPendingCount() {
-        _pendingCount = await getPendingCount();
+        _pendingCount = 0;
         _notifyPendingBadge();
     }
 
     function _notifyPendingBadge() {
         if (typeof window !== 'undefined' && typeof window.updateFirebasePendingBadge === 'function') {
-            window.updateFirebasePendingBadge(_pendingCount, _status);
+            window.updateFirebasePendingBadge(0, _status);
         }
     }
 
     async function flushSyncQueue() {
-        if (!_dirHandle || _status !== 'connected') return;
-        const queue = await _loadQueue();
-        if (!queue.length) return;
-
-        const remaining = [];
-        let successCount = 0;
-        for (const entry of queue) {
-            try {
-                const db = firebase.firestore();
-                const ref = db.collection(entry.colName).doc(entry.docId);
-                if (entry.op === 'delete') {
-                    await ref.delete();
-                } else if (entry.op === 'merge') {
-                    await ref.set(entry.data, { merge: true });
-                } else {
-                    await ref.set(entry.data);
-                }
-                successCount++;
-            } catch (e) {
-                console.warn('[LAN] Sync flush failed for', entry.colName, entry.docId, '— will retry:', e.message);
-                remaining.push(entry);
-            }
-        }
-        await _saveQueue(remaining);
-        _pendingCount = remaining.length;
-        _notifyPendingBadge();
-        if (remaining.length === 0) {
-            console.log('[LAN] All queued operations flushed to Firebase!');
-        }
-        // Notify app that data was pushed to Firebase — so admin's LAN folder can pull it
-        if (successCount > 0 && typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('lan:sync-flushed', { detail: { count: successCount } }));
-        }
+        // Firebase disabled for offline LAN mode
+        return;
     }
 
     // ───── FIREBASE → LAN PULL SYNC ─────
@@ -340,144 +292,9 @@ const LanStorageService = (() => {
     const PULL_COOLDOWN_MS = 30 * 1000; // minimum 30s between pulls
 
     async function pullLatestFromFirebase(options = {}) {
-        if (!_dirHandle || _status !== 'connected') return { pulled: 0, skipped: 'not_connected' };
-        if (_pullInProgress) return { pulled: 0, skipped: 'already_running' };
-        const now = Date.now();
-        if (!options.force && (now - _lastPullMs) < PULL_COOLDOWN_MS) {
-            return { pulled: 0, skipped: 'cooldown' };
-        }
-        _pullInProgress = true;
-        _lastPullMs = now;
-        let totalPulled = 0;
-        const errors = [];
-
-        try {
-            const db = firebase.firestore();
-            const companiesIds = ['company1', 'company2'];
-
-            // ─── 1. Accounts (both companies) ───
-            for (const cid of companiesIds) {
-                try {
-                    const snap = await db.collection('accounts').where('companyId', '==', cid).get();
-                    if (!snap.empty) {
-                        const existing = await readFile('accounts', []);
-                        const existingMap = new Map(existing.map(a => [String(a.id), a]));
-                        snap.forEach(doc => {
-                            const d = { ...doc.data(), id: doc.id };
-                            existingMap.set(doc.id, d); // always upsert (Firebase is truth for accounts)
-                        });
-                        await writeFile('accounts', Array.from(existingMap.values()));
-                        totalPulled += snap.size;
-                    }
-                } catch (e) {
-                    errors.push('accounts:' + cid + ':' + e.message);
-                }
-            }
-
-            // ─── 2. Orders — current + previous month ───
-            const nowDate = new Date();
-            const monthsToSync = [];
-            for (let offset = 0; offset <= 2; offset++) {
-                const d = new Date(nowDate.getFullYear(), nowDate.getMonth() - offset, 1);
-                const y = d.getFullYear();
-                const m = String(d.getMonth() + 1).padStart(2, '0');
-                monthsToSync.push({ y, m, filename: `orders_${y}_${m}` });
-            }
-
-            for (const { y, m, filename } of monthsToSync) {
-                try {
-                    const snap = await db.collection(filename).get();
-                    if (!snap.empty) {
-                        const existing = await readFile(filename, []);
-                        // Build dedup map from existing
-                        const dedupMap = new Map();
-                        existing.forEach(o => {
-                            const key = `${o.date}__${o.companyId || o.masterCompany || 'company1'}__${String(o.accountName || o.accountId || '').toLowerCase().trim()}`;
-                            dedupMap.set(key, o);
-                        });
-                        // Merge Firebase records (Firebase wins for matching keys)
-                        snap.forEach(doc => {
-                            const o = { ...doc.data(), id: doc.id };
-                            if (!o.date) return;
-                            const comp = o.companyId || o.masterCompany || 'company1';
-                            const accKey = String(o.accountName || o.accountId || '').toLowerCase().trim();
-                            if (!accKey) return;
-                            const key = `${o.date}__${comp}__${accKey}`;
-                            const existingVal = dedupMap.get(key);
-                            // Firebase record wins if local doesn't exist or meesho value differs
-                            if (!existingVal || String(existingVal.meesho) !== String(o.meesho)) {
-                                dedupMap.set(key, o);
-                            }
-                        });
-                        await writeFile(filename, Array.from(dedupMap.values()));
-                        totalPulled += snap.size;
-                    }
-                } catch (e) {
-                    errors.push(filename + ':' + e.message);
-                }
-            }
-
-            // ─── 3. daily_orders ───
-            try {
-                const snap = await db.collection('daily_orders').get();
-                if (!snap.empty) {
-                    const existing = await readFile('daily_orders', []);
-                    const dedupMap = new Map();
-                    existing.forEach(o => {
-                        const key = `${o.date}__${o.companyId || o.masterCompany || 'company1'}__${String(o.accountName || o.accountId || '').toLowerCase().trim()}`;
-                        dedupMap.set(key, o);
-                    });
-                    snap.forEach(doc => {
-                        const o = { ...doc.data(), id: doc.id };
-                        if (!o.date) return;
-                        const comp = o.companyId || o.masterCompany || 'company1';
-                        const accKey = String(o.accountName || o.accountId || '').toLowerCase().trim();
-                        if (!accKey) return;
-                        const key = `${o.date}__${comp}__${accKey}`;
-                        dedupMap.set(key, o); // Firebase always wins for daily_orders
-                    });
-                    await writeFile('daily_orders', Array.from(dedupMap.values()));
-                    totalPulled += snap.size;
-                }
-            } catch (e) {
-                errors.push('daily_orders:' + e.message);
-            }
-
-            // ─── 4. Remarks ───
-            try {
-                const snap = await db.collection('remarks').get();
-                if (!snap.empty) {
-                    const existing = await readFile('remarks', []);
-                    const dedupMap = new Map(existing.map(r => [String(r.id || r.date), r]));
-                    snap.forEach(doc => {
-                        const r = { ...doc.data(), id: doc.id };
-                        dedupMap.set(doc.id, r);
-                    });
-                    await writeFile('remarks', Array.from(dedupMap.values()));
-                    totalPulled += snap.size;
-                }
-            } catch (e) {
-                errors.push('remarks:' + e.message);
-            }
-
-            if (errors.length > 0) {
-                console.warn('[LAN PULL] Completed with some errors:', errors);
-            } else {
-                console.log(`[LAN PULL] Pulled ${totalPulled} records from Firebase into LAN folder.`);
-            }
-
-            // Notify UI that local data changed
-            if (typeof window !== 'undefined' && typeof window.clearApiReadCache === 'function') {
-                window.clearApiReadCache();
-            }
-
-            return { pulled: totalPulled, errors };
-        } catch (e) {
-            console.error('[LAN PULL] Fatal error:', e);
-            return { pulled: 0, errors: [e.message] };
-        } finally {
-            _pullInProgress = false;
-        }
+        // In LAN offline/local mode, the LAN drive is the authoritative database for the client.
+        // Prevent remote unmigrated Firestore from polluting the clean LAN drive.
+        return { pulled: 0, skipped: 'lan_is_authoritative' };
     }
 
 
@@ -496,18 +313,28 @@ const LanStorageService = (() => {
         }
 
         const zip = new JSZip();
-        const db = firebase.firestore();
-
-        for (const colName of collections) {
-            try {
-                const snap = await db.collection(colName).get();
-                if (!snap.empty) {
-                    const docs = [];
-                    snap.forEach(doc => docs.push({ id: doc.id, ...doc.data() }));
-                    zip.file(`${colName}.json`, JSON.stringify(docs, null, 2));
+        if (typeof firebase !== 'undefined' && firebase.firestore) {
+            const db = firebase.firestore();
+            for (const colName of collections) {
+                try {
+                    const snap = await db.collection(colName).get();
+                    if (!snap.empty) {
+                        const docs = [];
+                        snap.forEach(doc => docs.push({ id: doc.id, ...doc.data() }));
+                        zip.file(`${colName}.json`, JSON.stringify(docs, null, 2));
+                    }
+                } catch (e) {
+                    console.warn(`Export skipped for ${colName}:`, e.message);
                 }
-            } catch (e) {
-                console.warn(`Export skipped for ${colName}:`, e.message);
+            }
+        } else {
+            for (const colName of collections) {
+                try {
+                    const data = await readFile(colName, null);
+                    if (data !== null) {
+                        zip.file(`${colName}.json`, JSON.stringify(data, null, 2));
+                    }
+                } catch (e) {}
             }
         }
 
@@ -609,28 +436,31 @@ const LanStorageService = (() => {
                 }
                 
 
-                // Realistic Decoding: Group duplicate records and pick the minimum positive, non-zero order count to discard glitch 40s
+                // Realistic Decoding: Group duplicate records, parse meesho and flipkart, compute total
                 const dedupMap = new Map();
                 all.forEach(o => {
-                    o.meesho = parseInt(o.meesho, 10) || parseInt(o.quantity, 10) || parseInt(o.total, 10) || 0;
+                    const m = parseInt(o.meesho, 10) || 0;
+                    const f = parseInt(o.flipkart, 10) || 0;
+                    const t = typeof o.total !== 'undefined' ? (parseInt(o.total, 10) || 0) : (m + f);
+                    o.meesho = m;
+                    o.flipkart = f;
+                    o.total = t;
+                    o.quantity = t;
                     const d = o.date;
                     const comp = o.companyId || o.masterCompany || 'company1';
-                    const accName = String(o.accountName || o.accountId || '').toLowerCase().trim();
-                    if (!d || !accName) return;
-                    if ((parseInt(o.meesho, 10) === 40 || parseInt(o.quantity, 10) === 40) && String(o.accountName || o.accountId || '').startsWith('acc_')) return;
+                    const accKey = String(o.accountId || o.accountName || '').toLowerCase().trim();
+                    if (!d || !accKey) return;
+                    if ((t === 40 || m === 40) && accKey.startsWith('acc_') && !o.accountName) return;
                     
-                    const key = `${d}__${comp}__${accName}`;
-                    const val = o.meesho;
-
-                    
+                    const key = `${d}__${comp}__${accKey}`;
                     const existing = dedupMap.get(key);
                     if (existing) {
-                        const existingVal = parseInt(existing.meesho, 10) || 0;
-                        // Select the minimum realistic non-zero value
-                        if (existingVal === 0) {
+                        if ((existing.total || 0) === 0 && t > 0) {
                             dedupMap.set(key, o);
-                        } else if (val > 0 && val < existingVal) {
-                            dedupMap.set(key, o);
+                        } else if (t > 0 && existing.total > 0 && (o.flipkart > 0 && (existing.flipkart || 0) === 0)) {
+                            existing.flipkart = o.flipkart;
+                            existing.total = (existing.meesho || 0) + existing.flipkart;
+                            existing.quantity = existing.total;
                         }
                     } else {
                         dedupMap.set(key, o);
@@ -722,8 +552,8 @@ const LanStorageService = (() => {
                 const date = payload.date;
                 const accountId = payload.accountId;
                 const accountName = payload.accountName || accountId;
-                const val = payload.value;
-                if (parseInt(val, 10) === 40 && String(accountId).startsWith('acc_')) return { success: true };
+                const field = payload.field || 'meesho';
+                const val = parseInt(payload.value, 10) || 0;
                 
                 const y = date.split('-')[0];
                 const m = date.split('-')[1];
@@ -732,26 +562,60 @@ const LanStorageService = (() => {
                 const existing = await readFile(filename, []);
                 let updated = false;
                 existing.forEach(o => {
-                    if (o.date === date && (o.accountId === accountId || o.accountName === accountId) && (o.companyId || o.masterCompany) === companyId) {
-                        o.meesho = val;
+                    if (o.date === date && (o.accountId === accountId || o.accountName === accountId || o.accountName === accountName) && (o.companyId || o.masterCompany) === companyId) {
+                        o[field] = val;
+                        o.meesho = parseInt(o.meesho, 10) || 0;
+                        o.flipkart = parseInt(o.flipkart, 10) || 0;
+                        o.total = o.meesho + o.flipkart;
+                        o.quantity = o.total;
                         updated = true;
                     }
                 });
                 if (!updated) {
-                    existing.push({ date, accountId, accountName, meesho: val, companyId });
+                    const newOrder = {
+                        orderId: `${date}_${accountId}`,
+                        id: `${date}_${accountId}`,
+                        date,
+                        accountId,
+                        accountName,
+                        meesho: field === 'meesho' ? val : 0,
+                        flipkart: field === 'flipkart' ? val : 0,
+                        companyId,
+                        masterCompany: companyId
+                    };
+                    newOrder.total = newOrder.meesho + newOrder.flipkart;
+                    newOrder.quantity = newOrder.total;
+                    existing.push(newOrder);
                 }
                 await writeFile(filename, existing);
 
                 const daily = await readFile('daily_orders', []);
                 let dUpdated = false;
                 daily.forEach(o => {
-                    if (o.date === date && (o.accountId === accountId || o.accountName === accountId) && (o.companyId || o.masterCompany) === companyId) {
-                        o.meesho = val;
+                    if (o.date === date && (o.accountId === accountId || o.accountName === accountId || o.accountName === accountName) && (o.companyId || o.masterCompany) === companyId) {
+                        o[field] = val;
+                        o.meesho = parseInt(o.meesho, 10) || 0;
+                        o.flipkart = parseInt(o.flipkart, 10) || 0;
+                        o.total = o.meesho + o.flipkart;
+                        o.quantity = o.total;
                         dUpdated = true;
                     }
                 });
                 if (!dUpdated) {
-                    daily.push({ date, accountId, accountName, meesho: val, companyId });
+                    const newOrder = {
+                        orderId: `${date}_${accountId}`,
+                        id: `${date}_${accountId}`,
+                        date,
+                        accountId,
+                        accountName,
+                        meesho: field === 'meesho' ? val : 0,
+                        flipkart: field === 'flipkart' ? val : 0,
+                        companyId,
+                        masterCompany: companyId
+                    };
+                    newOrder.total = newOrder.meesho + newOrder.flipkart;
+                    newOrder.quantity = newOrder.total;
+                    daily.push(newOrder);
                 }
                 await writeFile('daily_orders', daily);
                 return { success: true };
@@ -760,23 +624,33 @@ const LanStorageService = (() => {
                 const accounts = await readFile('accounts', []);
                 accounts.push({
                     id: payload.accountName,
+                    accountId: payload.accountName,
                     name: payload.accountName,
+                    nameLower: String(payload.accountName).toLowerCase(),
                     companyId: companyId,
+                    position: accounts.filter(a => a.companyId === companyId).length,
                     mobile: payload.mobile || '',
                     gstin: payload.gstin || '',
-                    rechargeDate: payload.rechargeDate || ''
+                    rechargeDate: payload.rechargeDate || '',
+                    hasMeesho: payload.hasMeesho !== false,
+                    hasFlipkart: !!payload.hasFlipkart
                 });
                 await writeFile('accounts', accounts);
                 return { success: true };
             }
             if (action === 'editAccount') {
                 const accounts = await readFile('accounts', []);
-                const acc = accounts.find(a => (a.name === payload.accountId || a.id === payload.accountId) && a.companyId === companyId);
+                const acc = accounts.find(a => (a.name === payload.accountId || a.id === payload.accountId || a.accountId === payload.accountId) && a.companyId === companyId);
                 if (acc) {
-                    acc.name = payload.newName;
-                    acc.mobile = payload.mobile || '';
-                    acc.gstin = payload.gstin || '';
-                    acc.rechargeDate = payload.rechargeDate || '';
+                    if (payload.newName) {
+                        acc.name = payload.newName;
+                        acc.nameLower = String(payload.newName).toLowerCase();
+                    }
+                    if (payload.mobile !== undefined) acc.mobile = payload.mobile || '';
+                    if (payload.gstin !== undefined) acc.gstin = payload.gstin || '';
+                    if (payload.rechargeDate !== undefined) acc.rechargeDate = payload.rechargeDate || '';
+                    if (payload.hasMeesho !== undefined) acc.hasMeesho = !!payload.hasMeesho;
+                    if (payload.hasFlipkart !== undefined) acc.hasFlipkart = !!payload.hasFlipkart;
                     await writeFile('accounts', accounts);
                 }
                 return { success: true };

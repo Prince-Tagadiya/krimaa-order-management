@@ -1148,13 +1148,17 @@ function mergeOrderRowsUnique(primaryRows, secondaryRows) {
         const accountName = String(row?.accountName || '').trim();
         if (!date || (!accountId && !accountName)) return;
         const key = `${date}__${accountId || accountName.toLowerCase()}`;
+        const meeshoVal = parseInt(row?.meesho, 10) || 0;
+        const flipkartVal = parseInt(row?.flipkart, 10) || 0;
+        const totalVal = typeof row?.total !== 'undefined' ? (parseInt(row?.total, 10) || 0) : (meeshoVal + flipkartVal);
         if (!merged.has(key)) {
             merged.set(key, {
                 date,
                 accountId: accountId || accountName,
                 accountName: accountName || accountId,
-                meesho: parseInt(row?.meesho, 10) || 0,
-                total: parseInt(row?.total, 10) || (parseInt(row?.meesho, 10) || 0),
+                meesho: meeshoVal,
+                flipkart: flipkartVal,
+                total: totalVal,
                 companyId: String(row?.companyId || '').trim()
             });
         }
@@ -1459,21 +1463,28 @@ function buildPendingOrderOverrideKey(companyId, date, accountId, accountName) {
     return `${safeCompanyId}|${safeDate}|${safeAccountId || safeName}`;
 }
 
-function setPendingOrderOverride(date, accountId, accountName, meesho, companyId) {
+function setPendingOrderOverride(date, accountId, accountName, value, companyId, field = 'meesho') {
     const safeCompanyId = String(companyId || '').trim();
     const safeDate = normalizeToISODate(date);
     if (!safeCompanyId || !safeDate) return;
     const safeAccountId = String(accountId || '').trim();
     const safeName = String(accountName || '').trim();
-    const qty = parseInt(meesho) || 0;
+    const qty = parseInt(value) || 0;
     const key = buildPendingOrderOverrideKey(safeCompanyId, safeDate, safeAccountId, safeName);
+    const existing = _pendingOrderOverrides.get(key) || {};
+    const safeField = field === 'flipkart' ? 'flipkart' : 'meesho';
+    const meeshoVal = safeField === 'meesho' ? qty : (parseInt(existing.meesho) || 0);
+    const flipkartVal = safeField === 'flipkart' ? qty : (parseInt(existing.flipkart) || 0);
+    const totalVal = meeshoVal + flipkartVal;
     _pendingOrderOverrides.set(key, {
         companyId: safeCompanyId,
         date: safeDate,
         accountId: safeAccountId,
         accountName: safeName,
-        meesho: qty,
-        total: qty,
+        meesho: meeshoVal,
+        flipkart: flipkartVal,
+        total: totalVal,
+        quantity: totalVal,
         updatedAtMs: Date.now()
     });
 }
@@ -1498,8 +1509,9 @@ function applyPendingOrderOverrides(list, companyId) {
         });
 
         if (idx >= 0) {
-            const serverQty = parseInt(target[idx]?.meesho) || 0;
-            if (serverQty === ov.meesho) {
+            const serverM = parseInt(target[idx]?.meesho) || 0;
+            const serverF = parseInt(target[idx]?.flipkart) || 0;
+            if (serverM === ov.meesho && serverF === ov.flipkart) {
                 _pendingOrderOverrides.delete(key);
                 return;
             }
@@ -2387,13 +2399,36 @@ function attachEventListeners() {
         if (window.innerWidth > 768) closeMobileSidebar();
     });
 
+    // Channel toggle button helpers
+    function wireChannelToggle(btnId, chkId) {
+        const btn = document.getElementById(btnId);
+        const chk = document.getElementById(chkId);
+        if (!btn || !chk) return;
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            chk.checked = !chk.checked;
+            btn.classList.toggle('active', chk.checked);
+        });
+    }
+    wireChannelToggle('new-account-m-btn', 'new-account-meesho');
+    wireChannelToggle('new-account-f-btn', 'new-account-flipkart');
+    wireChannelToggle('edit-account-m-btn', 'edit-account-meesho');
+    wireChannelToggle('edit-account-f-btn', 'edit-account-flipkart');
+
     // Add Account
     document.getElementById('add-account-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const accountName = document.getElementById('new-account-name').value.trim();
         const mobile = document.getElementById('new-account-mobile')?.value.trim();
         const rechargeDate = document.getElementById('new-account-recharge')?.value;
+        const hasMeesho = document.getElementById('new-account-meesho')?.checked !== false;
+        const hasFlipkart = document.getElementById('new-account-flipkart')?.checked === true;
         if (!accountName) return;
+        if (!hasMeesho && !hasFlipkart) {
+            showToast("Please enable at least one channel (Meesho or Flipkart)!", "error");
+            return;
+        }
         const btn = document.getElementById('add-account-btn');
         btn.disabled = true;
         document.getElementById('new-account-name').value = '';
@@ -2406,8 +2441,14 @@ function attachEventListeners() {
         if (container.querySelector('p')) container.innerHTML = '';
         container.insertAdjacentHTML('afterbegin', tempHtml);
         try {
-            const res = await apiRequest({ action: 'addAccount', accountName, mobile, gstin: '', rechargeDate, companyId: AppState.currentCompany });
-            if (res.success) { showToast("Account saved!", "success"); await fetchAccounts(); await fetchAllCompaniesData(); renderAccountsList(); }
+            const res = await apiRequest({ action: 'addAccount', accountName, mobile, gstin: '', rechargeDate, companyId: AppState.currentCompany, hasMeesho, hasFlipkart });
+            if (res.success) {
+                showToast("Account saved!", "success");
+                await fetchAccounts();
+                await fetchAllCompaniesData();
+                renderAccountsList();
+                if (AppState.currentSection === 'data-sheet') renderDataSheet();
+            }
             else { showToast(res.message, "error"); document.getElementById(tempId).remove(); }
         } catch (err) { showToast("Network Error!", "error"); document.getElementById(tempId).remove(); }
         finally { btn.disabled = false; }
@@ -2931,23 +2972,30 @@ function upsertOrderRowInList(list, nextRow) {
         return !rid && safeNameKey && String(r.accountName || '').trim().toLowerCase() === safeNameKey;
     });
 
+    const existing = idx >= 0 ? target[idx] : null;
+    const meeshoVal = nextRow?.meesho !== undefined ? (parseInt(nextRow.meesho) || 0) : (parseInt(existing?.meesho) || 0);
+    const flipkartVal = nextRow?.flipkart !== undefined ? (parseInt(nextRow.flipkart) || 0) : (parseInt(existing?.flipkart) || 0);
+    const totalVal = nextRow?.total !== undefined ? (parseInt(nextRow.total) || (meeshoVal + flipkartVal)) : (meeshoVal + flipkartVal);
+
     const normalized = {
+        ...(existing || {}),
         ...nextRow,
         date: safeDate,
         accountId: safeId,
-        meesho: parseInt(nextRow?.meesho) || 0,
-        total: parseInt(nextRow?.total) || (parseInt(nextRow?.meesho) || 0)
+        meesho: meeshoVal,
+        flipkart: flipkartVal,
+        total: totalVal
     };
 
     if (idx >= 0) {
-        target[idx] = { ...target[idx], ...normalized };
+        target[idx] = normalized;
     } else {
         target.push(normalized);
     }
     return target;
 }
 
-function applyOptimisticOrderUpdate(date, accountId, accountName, meesho, companyId) {
+function applyOptimisticOrderUpdate(date, accountId, accountName, value, companyId, field = 'meesho') {
     const safeCompanyId = String(companyId || AppState.currentCompany || '').trim() || 'company1';
     const safeDate = normalizeToISODate(date);
     if (!safeDate) return;
@@ -2956,14 +3004,24 @@ function applyOptimisticOrderUpdate(date, accountId, accountName, meesho, compan
     const detailsList = safeCompanyId === 'company1' ? AppState.company1Details : AppState.company2Details;
     const resolvedNameFromDetails = (detailsList || []).find(d => String(d.accountId || '').trim() === safeAccountId)?.name || '';
     const resolvedName = String(accountName || resolvedNameFromDetails || safeAccountId).trim();
-    const safeQty = parseInt(meesho) || 0;
-    setPendingOrderOverride(safeDate, safeAccountId, resolvedName, safeQty, safeCompanyId);
+    const safeQty = parseInt(value) || 0;
+    const safeField = field === 'flipkart' ? 'flipkart' : 'meesho';
+    setPendingOrderOverride(safeDate, safeAccountId, resolvedName, safeQty, safeCompanyId, safeField);
+
+    const currentList = safeCompanyId === 'company1' ? AppState.company1Data : AppState.company2Data;
+    const existing = (currentList || []).find(r => normalizeToISODate(r.date) === safeDate && (String(r.accountId || '').trim() === safeAccountId || String(r.accountName || '').trim().toLowerCase() === resolvedName.toLowerCase()));
+
+    const meeshoVal = safeField === 'meesho' ? safeQty : (parseInt(existing?.meesho) || 0);
+    const flipkartVal = safeField === 'flipkart' ? safeQty : (parseInt(existing?.flipkart) || 0);
+    const totalVal = meeshoVal + flipkartVal;
+
     const row = {
         date: safeDate,
         accountId: safeAccountId,
         accountName: resolvedName,
-        meesho: safeQty,
-        total: safeQty,
+        meesho: meeshoVal,
+        flipkart: flipkartVal,
+        total: totalVal,
         companyId: safeCompanyId
     };
 
@@ -2979,7 +3037,7 @@ function applyOptimisticOrderUpdate(date, accountId, accountName, meesho, compan
 
 function applyOptimisticOrdersBatch(date, orders, companyId) {
     (orders || []).forEach(o => {
-        applyOptimisticOrderUpdate(date, o.accountId, o.accountName, o.meesho, companyId);
+        applyOptimisticOrderUpdate(date, o.accountId, o.accountName, o.meesho, companyId, 'meesho');
     });
 }
 
@@ -3085,6 +3143,8 @@ function renderAccountsList() {
         const id = details.accountId;
         const acc = details.name; 
         const rechargeTxt = getRechargeText(details.rechargeDate);
+        const hasM = details.hasMeesho !== false;
+        const hasF = details.hasFlipkart !== false;
         const extraHtml = `
             <div class="account-meta">
                 <span><i class='bx bx-phone'></i> Mobile: ${details.mobile || 'Not added'}</span>
@@ -3092,17 +3152,21 @@ function renderAccountsList() {
             </div>`;
 
         return `
-        <div class="account-item" data-account-id="${id}" data-account-name="${acc.replace(/"/g, '&quot;')}">
+        <div class="account-item" data-account-id="${id}" data-account-name="${acc.replace(/"/g, '&quot;')}" onclick="if(!event.target.closest('.delete-btn') && !event.target.closest('.drag-handle')) openEditAccount('${id}', '${acc.replace(/'/g, "\\'")}')" style="cursor: pointer;">
             <div style="display: flex; align-items: center; gap: 10px;">
                 ${isAdmin ? `<i class='bx bx-menu drag-handle' style="cursor: grab; color: #a0aec0;"></i>` : ''}
                 <div class="account-position-badge">${idx + 1}</div>
                 <div>
-                    <span class="account-name font-bold">${acc}</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="account-name font-bold">${acc}</span>
+                        <span class="channel-pill channel-m ${hasM ? 'active' : ''}" title="Meesho channel">M</span>
+                        <span class="channel-pill channel-f ${hasF ? 'active' : ''}" title="Flipkart channel">F</span>
+                    </div>
                     ${extraHtml}
                 </div>
             </div>
             ${isAdmin ? `<div class="account-actions">
-                <button class="btn btn-outline btn-sm edit-btn" onclick="openEditAccount('${id}', '${acc.replace(/'/g, "\\'")}')" title="Edit details"><i class='bx bx-edit-alt'></i></button>
+                <button class="btn btn-outline btn-sm edit-btn" onclick="openEditAccount('${id}', '${acc.replace(/'/g, "\\'")}')" title="Edit details & channels"><i class='bx bx-edit-alt'></i></button>
                 <button class="btn btn-outline btn-sm delete-btn" onclick="openDeleteAccount('${id}', '${acc.replace(/'/g, "\\'")}')" title="Delete"><i class='bx bx-trash'></i></button>
             </div>` : ''}
         </div>
@@ -3117,6 +3181,19 @@ function openEditAccount(id, name) {
     document.getElementById('edit-account-name').value = name;
     document.getElementById('edit-account-mobile').value = details.mobile || '';
     document.getElementById('edit-account-recharge').value = details.rechargeDate || '';
+    updateEditRechargeMeta();
+
+    const hasM = details.hasMeesho !== false;
+    const hasF = details.hasFlipkart !== false;
+    const mChk = document.getElementById('edit-account-meesho');
+    const fChk = document.getElementById('edit-account-flipkart');
+    const mBtn = document.getElementById('edit-account-m-btn');
+    const fBtn = document.getElementById('edit-account-f-btn');
+    if (mChk) mChk.checked = hasM;
+    if (fChk) fChk.checked = hasF;
+    if (mBtn) mBtn.classList.toggle('active', hasM);
+    if (fBtn) fBtn.classList.toggle('active', hasF);
+
     document.getElementById('edit-account-modal').classList.add('show');
 }
 
@@ -3126,18 +3203,24 @@ async function saveEditAccount() {
     const newName = document.getElementById('edit-account-name').value.trim();
     const mobile = document.getElementById('edit-account-mobile').value.trim();
     const recharge = document.getElementById('edit-account-recharge').value;
+    const hasMeesho = document.getElementById('edit-account-meesho')?.checked !== false;
+    const hasFlipkart = document.getElementById('edit-account-flipkart')?.checked === true;
     const compId = AppState.currentCompany;
     
     if (!newName) return showToast("Name cannot be empty!", "error");
+    if (!hasMeesho && !hasFlipkart) {
+        return showToast("Please enable at least one channel (Meesho or Flipkart)!", "error");
+    }
     
     showToast("Updating account...", "info");
-    const res = await FirebaseService.editAccount(id, newName, compId, mobile, '', recharge);
+    const res = await apiRequest({ action: 'editAccount', accountId: id, newName, companyId: compId, mobile, rechargeDate: recharge, hasMeesho, hasFlipkart });
     if (res.success) {
         showToast("Account updated!", "success");
         document.getElementById('edit-account-modal').classList.remove('show');
         await fetchAccounts();
         if (AppState.currentSection === 'daily-order' || AppState.currentSection === 'order-entry') renderOrderEntryTable();
         if (AppState.currentSection === 'add-account' || AppState.currentSection === 'accounts') renderAccountsList();
+        if (AppState.currentSection === 'data-sheet') renderDataSheet();
         await fetchDashboardData();
         try { await fetchAllCompaniesData(); } catch (e) { console.warn('Non-blocking: failed to refresh all-company data after edit', e); }
     } else {
@@ -3286,18 +3369,21 @@ function checkExistingOrdersForDate() {
         });
         calculateGrandTotals();
 
-        let gm = 0, gt = 0;
+        let gm = 0, gf = 0, gt = 0;
         const modalBody = document.getElementById('modal-details-tbody');
         modalBody.innerHTML = existingOrders.map(o => {
-            const m = parseInt(o.meesho)||0, t = parseInt(o.total)||0;
-            gm += m; gt += t;
-            return `<tr><td>${o.accountName}</td><td style="text-align:right;">${m}</td><td style="text-align:right;font-weight:600;">${t}</td></tr>`;
+            const m = parseInt(o.meesho) || 0;
+            const f = parseInt(o.flipkart) || 0;
+            const t = typeof o.total !== 'undefined' ? (parseInt(o.total) || 0) : (m + f);
+            gm += m; gf += f; gt += t;
+            return `<tr><td>${escapeHtml(o.accountName || '')}</td><td style="text-align:right;">${m}</td><td style="text-align:right;">${f}</td><td style="text-align:right;font-weight:600;">${t}</td></tr>`;
         }).join('');
         document.getElementById('submitted-grand-total').textContent = gt;
         const [yyyy, mm, dd] = dateInput.split('-');
-        document.getElementById('modal-date').textContent = `${dd}/${mm}/${yyyy}`;
-        document.getElementById('modal-grand-meesho').textContent = gm;
-        document.getElementById('modal-grand-total').textContent = gt;
+        if (document.getElementById('modal-date')) document.getElementById('modal-date').textContent = `${dd}/${mm}/${yyyy}`;
+        if (document.getElementById('modal-grand-meesho')) document.getElementById('modal-grand-meesho').textContent = gm;
+        if (document.getElementById('modal-grand-flipkart')) document.getElementById('modal-grand-flipkart').textContent = gf;
+        if (document.getElementById('modal-grand-total')) document.getElementById('modal-grand-total').textContent = gt;
     } else {
         alert.classList.add('hidden'); formContainer.classList.remove('hidden');
         document.querySelectorAll('.order-row input').forEach(inp => inp.value = '');
@@ -3332,9 +3418,16 @@ function filterDataByDate(data) {
 }
 
 function sumTotals(data) {
-    let meesho = 0, total = 0;
-    data.forEach(row => { meesho += parseInt(row.meesho)||0; total += parseInt(row.total)||0; });
-    return { meesho, total };
+    let meesho = 0, flipkart = 0, total = 0;
+    data.forEach(row => {
+        const m = parseInt(row.meesho) || 0;
+        const f = parseInt(row.flipkart) || 0;
+        const t = typeof row.total !== 'undefined' ? (parseInt(row.total) || 0) : (m + f);
+        meesho += m;
+        flipkart += f;
+        total += t;
+    });
+    return { meesho, flipkart, total };
 }
 
 // ===== MAIN DASHBOARD RENDER =====
@@ -3368,12 +3461,17 @@ function renderDashboard() {
     const c2Totals = sumTotals(c2Filtered);
     
     // KPI Cards
-    document.getElementById('dash-c1-meesho').textContent = c1Totals.meesho;
-    document.getElementById('dash-c1-total').textContent = c1Totals.total;
-    document.getElementById('dash-c2-meesho').textContent = c2Totals.meesho;
-    document.getElementById('dash-c2-total').textContent = c2Totals.total;
-    document.getElementById('dash-combined-meesho').textContent = c1Totals.meesho + c2Totals.meesho;
-    document.getElementById('dash-combined-total').textContent = c1Totals.total + c2Totals.total;
+    if (document.getElementById('dash-c1-meesho')) document.getElementById('dash-c1-meesho').textContent = c1Totals.meesho;
+    if (document.getElementById('dash-c1-flipkart')) document.getElementById('dash-c1-flipkart').textContent = c1Totals.flipkart;
+    if (document.getElementById('dash-c1-total')) document.getElementById('dash-c1-total').textContent = c1Totals.total;
+
+    if (document.getElementById('dash-c2-meesho')) document.getElementById('dash-c2-meesho').textContent = c2Totals.meesho;
+    if (document.getElementById('dash-c2-flipkart')) document.getElementById('dash-c2-flipkart').textContent = c2Totals.flipkart;
+    if (document.getElementById('dash-c2-total')) document.getElementById('dash-c2-total').textContent = c2Totals.total;
+
+    if (document.getElementById('dash-combined-meesho')) document.getElementById('dash-combined-meesho').textContent = c1Totals.meesho + c2Totals.meesho;
+    if (document.getElementById('dash-combined-flipkart')) document.getElementById('dash-combined-flipkart').textContent = c1Totals.flipkart + c2Totals.flipkart;
+    if (document.getElementById('dash-combined-total')) document.getElementById('dash-combined-total').textContent = c1Totals.total + c2Totals.total;
 
     // Account-wise Totals with dividers
     renderAccountTotals(c1Filtered, c2Filtered);
@@ -3401,20 +3499,25 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
         // Use accountId as the key for reliable aggregation
         accountDetails.forEach(ad => {
             const id = ad.accountId;
-            totals[id] = { name: ad.name, meesho: 0, total: 0 };
+            totals[id] = { name: ad.name, meesho: 0, flipkart: 0, total: 0 };
         });
         
         filtered.forEach(row => {
             const id = row.accountId;
+            const m = parseInt(row.meesho) || 0;
+            const f = parseInt(row.flipkart) || 0;
+            const t = typeof row.total !== 'undefined' ? (parseInt(row.total) || 0) : (m + f);
             if (id && totals[id]) {
-                totals[id].meesho += parseInt(row.meesho) || 0;
-                totals[id].total += parseInt(row.total) || 0;
+                totals[id].meesho += m;
+                totals[id].flipkart += f;
+                totals[id].total += t;
             } else if (row.accountName) {
                 // Fallback for legacy name-based records
                 const idFromName = Object.keys(totals).find(k => totals[k].name === row.accountName);
                 if (idFromName) {
-                    totals[idFromName].meesho += parseInt(row.meesho) || 0;
-                    totals[idFromName].total += parseInt(row.total) || 0;
+                    totals[idFromName].meesho += m;
+                    totals[idFromName].flipkart += f;
+                    totals[idFromName].total += t;
                 }
             }
         });
@@ -3432,7 +3535,7 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
         html += `<tr class="table-divider-row"><td colspan="5">Company A Accounts</td></tr>`;
         c1Keys.forEach(id => {
             const d = c1AccTotals[id];
-            html += `<tr><td class="font-medium">${d.name}</td><td class="text-center"><span class="dot dot-a"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
+            html += `<tr><td class="font-medium">${escapeHtml(d.name)}</td><td class="text-center"><span class="dot dot-a"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right text-muted">${d.flipkart}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
         });
     }
 
@@ -3442,7 +3545,7 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
         html += `<tr class="table-divider-row"><td colspan="5">Company B Accounts</td></tr>`;
         c2Keys.forEach(id => {
             const d = c2AccTotals[id];
-            html += `<tr><td class="font-medium">${d.name}</td><td class="text-center"><span class="dot dot-b"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
+            html += `<tr><td class="font-medium">${escapeHtml(d.name)}</td><td class="text-center"><span class="dot dot-b"></span></td><td class="text-right text-muted">${d.meesho}</td><td class="text-right text-muted">${d.flipkart}</td><td class="text-right font-bold text-main">${d.total}</td></tr>`;
         });
     }
 
@@ -3826,11 +3929,21 @@ window.showHeatmapDetails = function(dateStr) {
     const [y, m, d] = dateStr.split('-');
     const weekday = new Date(y, parseInt(m)-1, d).toLocaleDateString('en-US', { weekday: 'long' });
     
-    let c1M = 0, c1T = 0;
-    AppState.company1Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => { c1M += parseInt(r.meesho)||0; c1T += parseInt(r.total)||0; });
+    let c1M = 0, c1F = 0, c1T = 0;
+    AppState.company1Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => {
+        const mQty = parseInt(r.meesho) || 0;
+        const fQty = parseInt(r.flipkart) || 0;
+        const tQty = typeof r.total !== 'undefined' ? (parseInt(r.total) || 0) : (mQty + fQty);
+        c1M += mQty; c1F += fQty; c1T += tQty;
+    });
     
-    let c2M = 0, c2T = 0;
-    AppState.company2Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => { c2M += parseInt(r.meesho)||0; c2T += parseInt(r.total)||0; });
+    let c2M = 0, c2F = 0, c2T = 0;
+    AppState.company2Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => {
+        const mQty = parseInt(r.meesho) || 0;
+        const fQty = parseInt(r.flipkart) || 0;
+        const tQty = typeof r.total !== 'undefined' ? (parseInt(r.total) || 0) : (mQty + fQty);
+        c2M += mQty; c2F += fQty; c2T += tQty;
+    });
     const dayTotal = c1T + c2T;
     const company1Name = getCompanyDisplayName('company1');
     const company2Name = getCompanyDisplayName('company2');
@@ -3850,7 +3963,8 @@ window.showHeatmapDetails = function(dateStr) {
                     <span class="date-company-total">${c1T}</span>
                 </div>
                 <div class="date-company-chips">
-                    <span>Meesho: <strong>${c1M}</strong></span>
+                    <span>M: <strong>${c1M}</strong></span>
+                    <span>F: <strong>${c1F}</strong></span>
                 </div>
             </div>
             <div class="date-company-card date-company-b">
@@ -3859,7 +3973,8 @@ window.showHeatmapDetails = function(dateStr) {
                     <span class="date-company-total">${c2T}</span>
                 </div>
                 <div class="date-company-chips">
-                    <span>Meesho: <strong>${c2M}</strong></span>
+                    <span>M: <strong>${c2M}</strong></span>
+                    <span>F: <strong>${c2F}</strong></span>
                 </div>
             </div>
         </div>
@@ -3933,12 +4048,20 @@ async function apiRequest(payload) {
         }
     }
 
-    // ── LAN-FIRST OFFLINE READS ──
-    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected() && readActions.has(action)) {
-        const lanRes = await window.LanStorageService.fetchFromLocal(payload);
-        if (lanRes !== undefined) {
-            _apiReadCache.set(cacheKey, { ts: Date.now(), value: lanRes });
-            return lanRes;
+    // ── LAN OFFLINE READS & WRITES ──
+    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+        if (readActions.has(action)) {
+            const lanRes = await window.LanStorageService.fetchFromLocal(payload);
+            if (lanRes !== undefined) {
+                _apiReadCache.set(cacheKey, { ts: Date.now(), value: lanRes });
+                return lanRes;
+            }
+        } else {
+            const lanRes = await window.LanStorageService.writeToLocal(payload);
+            if (lanRes !== undefined) {
+                _apiReadCache.clear();
+                return lanRes;
+            }
         }
     }
 
@@ -4017,7 +4140,7 @@ async function apiRequest(payload) {
                 }
                 break;
             case 'addAccount':
-                result = await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+                result = await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate, payload.hasMeesho, payload.hasFlipkart);
                 if (result && result.success !== false) {
                     try {
                         await sheetsApiRequest({ action: 'addAccount', accountName: payload.accountName, companyId, mobile: payload.mobile, gstin: payload.gstin, rechargeDate: payload.rechargeDate });
@@ -4025,7 +4148,7 @@ async function apiRequest(payload) {
                 }
                 break;
             case 'editAccount':
-                result = await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate);
+                result = await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate, payload.hasMeesho, payload.hasFlipkart);
                 if (result && result.success !== false) {
                     try {
                         await sheetsApiRequest({ action: 'editAccount', accountId: payload.accountId, newName: payload.newName, companyId, mobile: payload.mobile, gstin: payload.gstin, rechargeDate: payload.rechargeDate });
@@ -4793,14 +4916,42 @@ async function renderDataSheet() {
     let rawData = [];
     
     if (companyFilter === 'company1') {
-        accounts = getOrderedCompanyAccounts('company1').map(ad => ({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
+        accounts = getOrderedCompanyAccounts('company1').map(ad => ({
+            id: ad.accountId,
+            name: ad.name,
+            company: 'company1',
+            label: getCompanyDisplayName('company1'),
+            hasM: ad.hasMeesho !== false,
+            hasF: ad.hasFlipkart !== false
+        }));
         rawData = [...AppState.company1Data];
     } else if (companyFilter === 'company2') {
-        accounts = getOrderedCompanyAccounts('company2').map(ad => ({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
+        accounts = getOrderedCompanyAccounts('company2').map(ad => ({
+            id: ad.accountId,
+            name: ad.name,
+            company: 'company2',
+            label: getCompanyDisplayName('company2'),
+            hasM: ad.hasMeesho !== false,
+            hasF: ad.hasFlipkart !== false
+        }));
         rawData = [...AppState.company2Data];
     } else {
-        getOrderedCompanyAccounts('company1').forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company1', label: getCompanyDisplayName('company1') }));
-        getOrderedCompanyAccounts('company2').forEach(ad => accounts.push({ id: ad.accountId, name: ad.name, company: 'company2', label: getCompanyDisplayName('company2') }));
+        getOrderedCompanyAccounts('company1').forEach(ad => accounts.push({
+            id: ad.accountId,
+            name: ad.name,
+            company: 'company1',
+            label: getCompanyDisplayName('company1'),
+            hasM: ad.hasMeesho !== false,
+            hasF: ad.hasFlipkart !== false
+        }));
+        getOrderedCompanyAccounts('company2').forEach(ad => accounts.push({
+            id: ad.accountId,
+            name: ad.name,
+            company: 'company2',
+            label: getCompanyDisplayName('company2'),
+            hasM: ad.hasMeesho !== false,
+            hasF: ad.hasFlipkart !== false
+        }));
         rawData = [...AppState.company1Data, ...AppState.company2Data];
     }
     
@@ -4896,12 +5047,12 @@ async function renderDataSheet() {
         }
     });
 
-    // Build lookup: { date -> { accountId -> { meesho, total } } }
+    // Build lookup: { date -> { accountId -> { meesho, flipkart, total } } }
     const lookup = {};
+    const seenOrderKeys = new Set();
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (!d) return;
-        if (!lookup[d]) lookup[d] = {};
         
         let key = r.accountId;
         const nameLower = r.accountName ? r.accountName.toLowerCase().trim() : '';
@@ -4910,12 +5061,22 @@ async function renderDataSheet() {
         } else if (!key) {
             key = r.accountName;
         }
+        if (!key) return;
 
-        if (!lookup[d][key]) lookup[d][key] = { meesho: 0, total: 0 };
-        const meeshoVal = parseInt(r.meesho) || 0;
-        const totalVal = typeof r.total !== 'undefined' ? (parseInt(r.total) || 0) : meeshoVal;
-        lookup[d][key].meesho += meeshoVal;
-        lookup[d][key].total += totalVal;
+        if (!lookup[d]) lookup[d] = {};
+
+        const mVal = typeof r.meesho !== 'undefined' ? (parseInt(r.meesho, 10) || 0) : (parseInt(r.quantity, 10) || 0);
+        const fVal = parseInt(r.flipkart, 10) || 0;
+        const tVal = typeof r.total !== 'undefined' ? (parseInt(r.total, 10) || 0) : (mVal + fVal);
+
+        const dedupKey = `${d}__${r.companyId || 'c'}__${key}`;
+        if (!lookup[d][key]) {
+            lookup[d][key] = { meesho: mVal, flipkart: fVal, total: tVal };
+            seenOrderKeys.add(dedupKey);
+        } else if (typeof r.meesho !== 'undefined' || typeof r.flipkart !== 'undefined') {
+            // Overwrite with the explicit M/F record if previous was legacy
+            lookup[d][key] = { meesho: mVal, flipkart: fVal, total: tVal };
+        }
     });
     
     // Load remarks (from backend first time, then cached)
@@ -4925,42 +5086,76 @@ async function renderDataSheet() {
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     
     // === HEADER ===
-    let headerRow1 = '<tr><th class="sheet-date-col">Date</th>';
-    accounts.forEach((acc, idx) => {
+    let headerRow1 = '<tr><th class="sheet-date-col" rowspan="2">Date</th>';
+    let headerRow2 = '<tr class="sheet-subheader-row">';
+    let totalAccountCols = 0;
+
+    accounts.forEach((acc) => {
+        if (!acc.hasM && !acc.hasF) acc.hasM = true;
+        const cols = (acc.hasM ? 1 : 0) + (acc.hasF ? 1 : 0);
+        totalAccountCols += cols;
         const compTag = companyFilter === 'all' ? `<span class="sheet-company-tag">${acc.label}</span>` : '';
-        headerRow1 += `<th class="sheet-acct-group sheet-acct-border" title="${String(acc.name).replace(/"/g, '&quot;')}"><span class="sheet-header-name">${acc.name}</span>${compTag}</th>`;
+        headerRow1 += `<th class="sheet-acct-group sheet-acct-border" colspan="${cols}" title="${escapeHtml(acc.name)}"><span class="sheet-header-name">${acc.name}</span>${compTag}</th>`;
+        if (acc.hasM) {
+            headerRow2 += `<th class="sheet-sub-header sheet-sub-m ${!acc.hasF ? 'sheet-acct-border' : ''}" title="${escapeHtml(acc.name)} (Meesho)">M</th>`;
+        }
+        if (acc.hasF) {
+            headerRow2 += `<th class="sheet-sub-header sheet-sub-f sheet-acct-border" title="${escapeHtml(acc.name)} (Flipkart)">F</th>`;
+        }
     });
-    headerRow1 += '<th class="sheet-acct-group sheet-total-col">Total</th>';
-    headerRow1 += '<th class="sheet-acct-group sheet-remarks-col">Remarks</th>';
+
+    headerRow1 += '<th class="sheet-acct-group sheet-total-group" colspan="3">Total</th>';
+    headerRow2 += '<th class="sheet-sub-header sheet-sub-m" title="Meesho Total">M</th>';
+    headerRow2 += '<th class="sheet-sub-header sheet-sub-f" title="Flipkart Total">F</th>';
+    headerRow2 += '<th class="sheet-sub-header sheet-sub-total" title="Combined Total">Total</th>';
+
+    headerRow1 += '<th class="sheet-acct-group sheet-remarks-col" rowspan="2">Remarks</th>';
     headerRow1 += '</tr>';
+    headerRow2 += '</tr>';
     
-    let headerRow2 = ''; // Removed second header row for headers
     thead.innerHTML = headerRow1 + headerRow2;
     
     // === BODY ===
     let bodyHtml = '';
-    const grandTotals = { meesho: new Array(accounts.length).fill(0), total: 0 };
+    const grandTotals = {
+        accounts: accounts.map(() => ({ meesho: 0, flipkart: 0 })),
+        meesho: 0,
+        flipkart: 0,
+        both: 0
+    };
     const monthTotals = {};
     dates.forEach(date => {
         const monthKey = date.substring(0, 7);
-        if (!monthTotals[monthKey]) monthTotals[monthKey] = { total: 0, accountTotals: new Array(accounts.length).fill(0) };
+        if (!monthTotals[monthKey]) {
+            monthTotals[monthKey] = {
+                meesho: 0,
+                flipkart: 0,
+                both: 0,
+                accountTotals: accounts.map(() => ({ meesho: 0, flipkart: 0 }))
+            };
+        }
         accounts.forEach((acc, idx) => {
-            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
-            const qty = parseInt(cell.meesho, 10) || 0;
-            monthTotals[monthKey].accountTotals[idx] += qty;
-            monthTotals[monthKey].total += parseInt(cell.total, 10) || 0;
+            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, flipkart: 0, total: 0 };
+            const mQty = parseInt(cell.meesho, 10) || 0;
+            const fQty = parseInt(cell.flipkart, 10) || 0;
+            monthTotals[monthKey].accountTotals[idx].meesho += mQty;
+            monthTotals[monthKey].accountTotals[idx].flipkart += fQty;
+            monthTotals[monthKey].meesho += mQty;
+            monthTotals[monthKey].flipkart += fQty;
+            monthTotals[monthKey].both += (mQty + fQty);
         });
     });
+
     let activeMonth = '';
-    const fullColspan = accounts.length + 3;
+    const fullColspan = 1 + totalAccountCols + 3 + 1; // Date + accounts cols + 3 totals + remarks
     
     dates.forEach(date => {
         const [y, m, d] = date.split('-');
         const monthKey = `${y}-${m}`;
         if (monthKey !== activeMonth) {
             activeMonth = monthKey;
-            const monthSummary = monthTotals[monthKey] || { total: 0 };
-            bodyHtml += `<tr class="sheet-month-row" data-month="${monthKey}"><td colspan="${fullColspan}"><span>${getMonthLabelFromKey(monthKey)}</span><strong>Total Orders: <b class="sheet-month-total">${monthSummary.total}</b></strong></td></tr>`;
+            const monthSummary = monthTotals[monthKey] || { meesho: 0, flipkart: 0, both: 0 };
+            bodyHtml += `<tr class="sheet-month-row" data-month="${monthKey}"><td colspan="${fullColspan}"><span>${getMonthLabelFromKey(monthKey)}</span><strong>Total Orders: <b class="sheet-month-total">${monthSummary.both}</b> <span class="sheet-month-sub">(M: <b class="sheet-month-m">${monthSummary.meesho}</b> | F: <b class="sheet-month-f">${monthSummary.flipkart}</b>)</span></strong></td></tr>`;
         }
         const dateObj = new Date(parseInt(y), parseInt(m)-1, parseInt(d));
         const dayName = dayNames[dateObj.getDay()];
@@ -4971,22 +5166,35 @@ async function renderDataSheet() {
         bodyHtml += `<tr data-month="${monthKey}">`;
         bodyHtml += `<td class="sheet-date-cell">${formattedDate} <span class="${dayChipClass}">${dayName}</span></td>`;
         
-        let rowTotal = 0;
+        let rowM = 0;
+        let rowF = 0;
         accounts.forEach((acc, idx) => {
-            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, total: 0 };
+            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, flipkart: 0, total: 0 };
             const meeshoVal = parseInt(cell.meesho, 10) || 0;
-            const cellTotal = parseInt(cell.total, 10) || 0;
-            rowTotal += cellTotal;
-            grandTotals.meesho[idx] += meeshoVal;
+            const flipkartVal = parseInt(cell.flipkart, 10) || 0;
+            rowM += meeshoVal;
+            rowF += flipkartVal;
+            grandTotals.accounts[idx].meesho += meeshoVal;
+            grandTotals.accounts[idx].flipkart += flipkartVal;
             
-            bodyHtml += `<td class="sheet-editable sheet-acct-border"><input type="number" class="sheet-cell-input" value="${meeshoVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="0"></td>`;
+            if (acc.hasM) {
+                bodyHtml += `<td class="sheet-editable sheet-m-col ${!acc.hasF ? 'sheet-acct-border' : ''}"><input type="number" class="sheet-cell-input" value="${meeshoVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="0"></td>`;
+            }
+            if (acc.hasF) {
+                bodyHtml += `<td class="sheet-editable sheet-f-col sheet-acct-border"><input type="number" class="sheet-cell-input" value="${flipkartVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="flipkart" min="0" placeholder="0"></td>`;
+            }
         });
-        grandTotals.total += rowTotal;
+        const rowBoth = rowM + rowF;
+        grandTotals.meesho += rowM;
+        grandTotals.flipkart += rowF;
+        grandTotals.both += rowBoth;
         
-        bodyHtml += `<td class="sheet-total-cell">${rowTotal}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-m-total">${rowM}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-f-total">${rowF}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-both-total">${rowBoth}</td>`;
         
         const remarkVal = savedRemarks[date] || '';
-        bodyHtml += `<td class="sheet-editable"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
+        bodyHtml += `<td class="sheet-editable sheet-remarks-col"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
         bodyHtml += '</tr>';
     });
     
@@ -4994,10 +5202,17 @@ async function renderDataSheet() {
     if (!isOrderUser()) {
         bodyHtml += '<tr class="sheet-grand-row">';
         bodyHtml += '<td class="sheet-date-cell">TOTAL</td>';
-        accounts.forEach((_, idx) => {
-            bodyHtml += `<td class="sheet-acct-border">${grandTotals.meesho[idx]}</td>`;
+        accounts.forEach((acc, idx) => {
+            if (acc.hasM) {
+                bodyHtml += `<td class="sheet-sub-m ${!acc.hasF ? 'sheet-acct-border' : ''} sheet-grand-acct-m" data-account-id="${escapeHtml(acc.id)}">${grandTotals.accounts[idx].meesho}</td>`;
+            }
+            if (acc.hasF) {
+                bodyHtml += `<td class="sheet-sub-f sheet-acct-border sheet-grand-acct-f" data-account-id="${escapeHtml(acc.id)}">${grandTotals.accounts[idx].flipkart}</td>`;
+            }
         });
-        bodyHtml += `<td class="sheet-total-cell">${grandTotals.total}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-m-total sheet-grand-m">${grandTotals.meesho}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-f-total sheet-grand-f">${grandTotals.flipkart}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-both-total sheet-grand-both">${grandTotals.both}</td>`;
         bodyHtml += '<td></td>';
         bodyHtml += '</tr>';
     }
@@ -5024,13 +5239,13 @@ async function renderDataSheet() {
     });
     
     // === EVENT: Save order cell edits (buffered to Firebase) ===
-    tbody.querySelectorAll('input[data-field="meesho"]').forEach(inp => {
+    tbody.querySelectorAll('input[data-field="meesho"], input[data-field="flipkart"]').forEach(inp => {
         inp.addEventListener('change', () => {
             const { date, accountId, company, field } = inp.dataset;
             const value = parseInt(inp.value) || 0;
             
             // Update local state + local cache immediately (prevents temporary row disappear during refresh)
-            applyOptimisticOrderUpdate(date, accountId, inp.dataset.accountName, value, company);
+            applyOptimisticOrderUpdate(date, accountId, inp.dataset.accountName, value, company, field);
             
             // Recalculate totals in UI immediately
             recalcSheetRowTotal(inp);
@@ -5042,45 +5257,179 @@ async function renderDataSheet() {
             scheduleQuickWriteFlush(1200);
         });
     });
+
+    // === KEYBOARD NAVIGATION: Tab jumps to next company in same channel (M->M, F->F) ===
+    tbody.querySelectorAll('input.sheet-cell-input').forEach(inp => {
+        inp.addEventListener('focus', () => {
+            try { inp.select(); } catch(e) {}
+        });
+    });
+
+    tbody.onkeydown = (e) => {
+        const inp = e.target;
+        if (!inp || !inp.classList.contains('sheet-cell-input')) return;
+        const field = inp.dataset.field; // 'meesho' or 'flipkart'
+        if (field !== 'meesho' && field !== 'flipkart') return;
+
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const tr = inp.closest('tr');
+            if (!tr) return;
+
+            const rowSameInputs = Array.from(tr.querySelectorAll(`input[data-field="${field}"]`));
+            const currIdx = rowSameInputs.indexOf(inp);
+
+            if (!e.shiftKey) {
+                // Tab forward: next company's input in the same channel
+                if (currIdx !== -1 && currIdx < rowSameInputs.length - 1) {
+                    const nextInp = rowSameInputs[currIdx + 1];
+                    nextInp.focus();
+                    nextInp.select();
+                } else {
+                    // Last company in row -> wrap to first company of next day row
+                    let nextTr = tr.nextElementSibling;
+                    while (nextTr && (nextTr.classList.contains('sheet-month-row') || nextTr.classList.contains('sheet-grand-row'))) {
+                        nextTr = nextTr.nextElementSibling;
+                    }
+                    if (nextTr) {
+                        const target = nextTr.querySelector(`input[data-field="${field}"]`);
+                        if (target) {
+                            target.focus();
+                            target.select();
+                        }
+                    }
+                }
+            } else {
+                // Shift+Tab backward: previous company's input in the same channel
+                if (currIdx > 0) {
+                    const prevInp = rowSameInputs[currIdx - 1];
+                    prevInp.focus();
+                    prevInp.select();
+                } else {
+                    // First company in row -> wrap to last company of previous day row
+                    let prevTr = tr.previousElementSibling;
+                    while (prevTr && (prevTr.classList.contains('sheet-month-row') || prevTr.classList.contains('sheet-grand-row'))) {
+                        prevTr = prevTr.previousElementSibling;
+                    }
+                    if (prevTr) {
+                        const prevSameInputs = Array.from(prevTr.querySelectorAll(`input[data-field="${field}"]`));
+                        if (prevSameInputs.length) {
+                            const target = prevSameInputs[prevSameInputs.length - 1];
+                            target.focus();
+                            target.select();
+                        }
+                    }
+                }
+            }
+        } else if (e.key === 'Enter' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const tr = inp.closest('tr');
+            if (!tr) return;
+            const accId = inp.dataset.accountId;
+            let nextTr = tr.nextElementSibling;
+            while (nextTr && (nextTr.classList.contains('sheet-month-row') || nextTr.classList.contains('sheet-grand-row'))) {
+                nextTr = nextTr.nextElementSibling;
+            }
+            if (nextTr) {
+                const target = nextTr.querySelector(`input[data-account-id="${accId}"][data-field="${field}"]`);
+                if (target) {
+                    target.focus();
+                    target.select();
+                }
+            }
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const tr = inp.closest('tr');
+            if (!tr) return;
+            const accId = inp.dataset.accountId;
+            let prevTr = tr.previousElementSibling;
+            while (prevTr && (prevTr.classList.contains('sheet-month-row') || prevTr.classList.contains('sheet-grand-row'))) {
+                prevTr = prevTr.previousElementSibling;
+            }
+            if (prevTr) {
+                const target = prevTr.querySelector(`input[data-account-id="${accId}"][data-field="${field}"]`);
+                if (target) {
+                    target.focus();
+                    target.select();
+                }
+            }
+        }
+    };
 }
 
 // Recalculate a row's total cell when a value changes
 function recalcSheetRowTotal(inputEl) {
     const tr = inputEl.closest('tr');
     if (!tr) return;
-    const inputs = tr.querySelectorAll('input[data-field="meesho"]');
-    let total = 0;
-    inputs.forEach(inp => total += parseInt(inp.value) || 0);
-    const totalCell = tr.querySelector('.sheet-total-cell');
-    if (totalCell) totalCell.textContent = total;
+    let rowM = 0;
+    let rowF = 0;
+    tr.querySelectorAll('input[data-field="meesho"]').forEach(inp => rowM += parseInt(inp.value) || 0);
+    tr.querySelectorAll('input[data-field="flipkart"]').forEach(inp => rowF += parseInt(inp.value) || 0);
+    const rowBoth = rowM + rowF;
     
-    // Also recalculate grand total row
+    const mCell = tr.querySelector('.sheet-m-total');
+    const fCell = tr.querySelector('.sheet-f-total');
+    const bothCell = tr.querySelector('.sheet-both-total');
+    if (mCell) mCell.textContent = rowM;
+    if (fCell) fCell.textContent = rowF;
+    if (bothCell) bothCell.textContent = rowBoth;
+    
+    // Also recalculate grand total row & month total row
     const tbody = document.getElementById('sheet-tbody');
     if (!tbody) return;
     const monthKey = tr.dataset.month;
     if (monthKey) {
         const monthRow = tbody.querySelector(`.sheet-month-row[data-month="${monthKey}"]`);
-        const monthTotalEl = monthRow?.querySelector('.sheet-month-total');
-        if (monthTotalEl) {
-            let monthTotal = 0;
+        if (monthRow) {
+            let mM = 0, mF = 0;
             tbody.querySelectorAll(`tr[data-month="${monthKey}"]:not(.sheet-month-row)`).forEach(row => {
-                const tc = row.querySelector('.sheet-total-cell');
-                if (tc) monthTotal += parseInt(tc.textContent) || 0;
+                const mc = row.querySelector('.sheet-m-total');
+                const fc = row.querySelector('.sheet-f-total');
+                if (mc) mM += parseInt(mc.textContent) || 0;
+                if (fc) mF += parseInt(fc.textContent) || 0;
             });
-            monthTotalEl.textContent = monthTotal;
+            const mTotalEl = monthRow.querySelector('.sheet-month-total');
+            const mMEl = monthRow.querySelector('.sheet-month-m');
+            const mFEl = monthRow.querySelector('.sheet-month-f');
+            if (mTotalEl) mTotalEl.textContent = mM + mF;
+            if (mMEl) mMEl.textContent = mM;
+            if (mFEl) mFEl.textContent = mF;
         }
     }
 
     const grandRow = tbody.querySelector('.sheet-grand-row');
     if (!grandRow) return;
     const allRows = tbody.querySelectorAll('tr:not(.sheet-grand-row):not(.sheet-month-row)');
-    let grandTotal = 0;
+    let grandM = 0;
+    let grandF = 0;
     allRows.forEach(row => {
-        const tc = row.querySelector('.sheet-total-cell');
-        if (tc) grandTotal += parseInt(tc.textContent) || 0;
+        const mc = row.querySelector('.sheet-m-total');
+        const fc = row.querySelector('.sheet-f-total');
+        if (mc) grandM += parseInt(mc.textContent) || 0;
+        if (fc) grandF += parseInt(fc.textContent) || 0;
     });
-    const grandTotalCell = grandRow.querySelector('.sheet-total-cell');
-    if (grandTotalCell) grandTotalCell.textContent = grandTotal;
+    
+    const gmCell = grandRow.querySelector('.sheet-grand-m');
+    const gfCell = grandRow.querySelector('.sheet-grand-f');
+    const gBothCell = grandRow.querySelector('.sheet-grand-both');
+    if (gmCell) gmCell.textContent = grandM;
+    if (gfCell) gfCell.textContent = grandF;
+    if (gBothCell) gBothCell.textContent = grandM + grandF;
+    
+    // Update individual account grand total column cell
+    const changedAccId = inputEl.dataset.accountId;
+    const changedField = inputEl.dataset.field;
+    if (changedAccId && changedField) {
+        let colSum = 0;
+        allRows.forEach(row => {
+            const inp = row.querySelector(`input[data-account-id="${changedAccId}"][data-field="${changedField}"]`);
+            if (inp) colSum += parseInt(inp.value) || 0;
+        });
+        const grandCell = changedField === 'meesho' 
+            ? grandRow.querySelector(`.sheet-grand-acct-m[data-account-id="${changedAccId}"]`)
+            : grandRow.querySelector(`.sheet-grand-acct-f[data-account-id="${changedAccId}"]`);
+        if (grandCell) grandCell.textContent = colSum;
+    }
 }
 
 function exportSheetCSV() {
@@ -5088,42 +5437,39 @@ function exportSheetCSV() {
     if (!table) return;
     
     const rows = [];
-    const headerCells = table.querySelectorAll('thead tr');
-    const accounts = [];
-    headerCells[0]?.querySelectorAll('th.sheet-acct-group').forEach(th => {
-        const txt = th.textContent.trim();
-        if (txt !== 'Total' && txt !== 'Remarks') accounts.push(txt);
-    });
+    const theadRows = table.querySelectorAll('thead tr');
+    if (theadRows.length >= 2) {
+        const topRow = Array.from(theadRows[0].cells).map(c => `"${c.textContent.trim().replace(/"/g, '""')}"`);
+        const subRow = Array.from(theadRows[1].cells).map(c => `"${c.textContent.trim().replace(/"/g, '""')}"`);
+        rows.push(topRow.join(','));
+        rows.push(subRow.join(','));
+    }
     
-    const headerRow = ['Date'];
-    accounts.forEach(name => {
-        headerRow.push(`${name} - Meesho`);
-    });
-    headerRow.push('Total', 'Remarks');
-    rows.push(headerRow);
-    
-    table.querySelectorAll('tbody tr:not(.sheet-grand-row):not(.sheet-month-row)').forEach(tr => {
-        const cells = tr.querySelectorAll('td');
-        const row = [];
-        cells.forEach(td => {
-            const input = td.querySelector('input');
-            row.push(input ? input.value : td.textContent.trim());
+    table.querySelectorAll('tbody tr').forEach(tr => {
+        if (tr.classList.contains('sheet-month-row')) {
+            const txt = tr.textContent.trim().replace(/\s+/g, ' ');
+            rows.push(`"${txt.replace(/"/g, '""')}"`);
+            return;
+        }
+        const rowData = [];
+        tr.querySelectorAll('td').forEach(td => {
+            const inp = td.querySelector('input');
+            const val = inp ? inp.value : td.textContent.trim();
+            rowData.push(`"${String(val).replace(/"/g, '""')}"`);
         });
-        rows.push(row);
+        rows.push(rowData.join(','));
     });
     
-    if (rows.length <= 1) { showToast('No data to export', 'error'); return; }
+    if (rows.length <= 2) { showToast('No data to export', 'error'); return; }
     
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `krimaa_data_sheet_${getTodayISODate()}.csv`;
+    const csvContent = "data:text/csv;charset=utf-8," + rows.join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `krimaa_orders_${getTodayISODate()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
     showToast('Sheet exported!', 'success');
 }
 

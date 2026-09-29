@@ -347,6 +347,45 @@ class RtdbDocSnapshot {
 }
 
 const FirebaseService = (() => {
+    if (typeof firebase === 'undefined') {
+        console.log('[FIREBASE] Firebase and Firestore are disabled / commented out. Pure offline LAN mode active.');
+        return {
+            init: () => {},
+            getDb: () => null,
+            bufferWrite: (key, fn) => { if (typeof fn === 'function') fn(); },
+            flushWrites: async () => {},
+            getPendingCount: () => 0,
+            getSyncStatus: () => 'offline',
+            onSyncStatusChange: () => {},
+            getAccounts: async () => ({ success: true, data: [] }),
+            getOrders: async () => ({ success: true, data: [] }),
+            updateOrder: async () => ({ success: true }),
+            saveRemark: async () => ({ success: true }),
+            getRemarks: async () => ({ success: true, data: [] }),
+            addAccount: async () => ({ success: true }),
+            editAccount: async () => ({ success: true }),
+            deleteAccount: async () => ({ success: true }),
+            updateAccountOrder: async () => ({ success: true }),
+            submitOrders: async () => ({ success: true }),
+            isEmpty: async () => false,
+            setBackupMeta: async () => {},
+            getBackupMeta: async () => null,
+            getAllDataForBackup: async () => ({}),
+            backupAndArchiveMonthlyData: async () => ({ success: true }),
+            clearOldOrders: async () => ({ success: true }),
+            seedFromSheets: async () => ({ success: true }),
+            migrateLegacyOrdersToDailyOrders: async () => ({ success: true }),
+            migrateDatabaseToIds: async () => ({ success: true }),
+            getKarigars: async () => ({ success: true, data: [] }),
+            getKarigarTransactions: async () => ({ success: true, data: [] }),
+            getDesignPrices: async () => ({ success: true, data: [] }),
+            fixHistoricalDataIntegrity: async () => ({ success: true }),
+            syncFromSheets: async () => ({ success: true }),
+            replaceFromSheets: async () => ({ success: true }),
+            replaceFromSheetsSelective: async () => ({ success: true }),
+        };
+    }
+
     let db = null;
     let _initialized = false;
 
@@ -737,7 +776,7 @@ const FirebaseService = (() => {
         return { success: true, data: docs.map(d => d.name), details: docs };
     }
 
-    async function addAccount(name, companyId, mobile, gstin, rechargeDate) {
+    async function addAccount(name, companyId, mobile, gstin, rechargeDate, hasMeesho = true, hasFlipkart = false) {
         init();
         name = (name || '').trim();
         if (!name) return { success: false, message: 'Account name cannot be empty' };
@@ -759,13 +798,15 @@ const FirebaseService = (() => {
             mobile: mobile || '',
             gstin: gstin || '',
             rechargeDate: rechargeDate || '',
+            hasMeesho: hasMeesho !== false,
+            hasFlipkart: !!hasFlipkart,
             money: 0, expense: 0,
             addedDate: firebase.firestore.FieldValue.serverTimestamp()
         });
         return { success: true, message: 'Account added successfully', id: accId };
     }
 
-    async function editAccount(accountId, newName, companyId, mobile, gstin, rechargeDate) {
+    async function editAccount(accountId, newName, companyId, mobile, gstin, rechargeDate, hasMeesho, hasFlipkart) {
         init();
         newName = (newName || '').trim();
         if (!newName) return { success: false, message: 'Account name cannot be empty' };
@@ -781,13 +822,16 @@ const FirebaseService = (() => {
         }
 
         // 2. Update account doc
-        await db.collection('accounts').doc(accountId).update({ 
+        const updateData = { 
             name: newName, 
             nameLower: newName.toLowerCase(),
             mobile: mobile || '',
             gstin: gstin || '',
             rechargeDate: rechargeDate || ''
-        });
+        };
+        if (hasMeesho !== undefined) updateData.hasMeesho = !!hasMeesho;
+        if (hasFlipkart !== undefined) updateData.hasFlipkart = !!hasFlipkart;
+        await db.collection('accounts').doc(accountId).update(updateData);
 
         // Update local maps immediately if they exist
         if (accountIdNameMap[accountId]) {
@@ -1326,23 +1370,34 @@ const FirebaseService = (() => {
             const existingDoc = snap.exists ? (snap.data() || {}) : {};
             const existingOrders = Array.isArray(existingDoc.orders) ? existingDoc.orders.slice() : [];
             const idx = existingOrders.findIndex(it => String(it?.accountId || '').trim() === accId);
+            const safeField = (field === 'flipkart' ? 'flipkart' : 'meesho');
             if (idx >= 0) {
+                const prevM = parseInt(existingOrders[idx]?.meesho, 10) || 0;
+                const prevF = parseInt(existingOrders[idx]?.flipkart, 10) || 0;
+                const newM = safeField === 'meesho' ? numVal : prevM;
+                const newF = safeField === 'flipkart' ? numVal : prevF;
                 existingOrders[idx] = {
                     ...existingOrders[idx],
                     accountId: accId,
                     accountName: String(existingOrders[idx]?.accountName || accountName || accId).trim(),
-                    meesho: numVal,
-                    total: numVal,
+                    meesho: newM,
+                    flipkart: newF,
+                    total: newM + newF,
+                    quantity: newM + newF,
                     orderIndex: Number.isFinite(parseInt(existingOrders[idx]?.orderIndex, 10))
                         ? parseInt(existingOrders[idx].orderIndex, 10)
                         : idx
                 };
             } else {
+                const newM = safeField === 'meesho' ? numVal : 0;
+                const newF = safeField === 'flipkart' ? numVal : 0;
                 existingOrders.push({
                     accountId: accId,
                     accountName,
-                    meesho: numVal,
-                    total: numVal,
+                    meesho: newM,
+                    flipkart: newF,
+                    total: newM + newF,
+                    quantity: newM + newF,
                     orderIndex: existingOrders.length
                 });
             }
@@ -1354,7 +1409,8 @@ const FirebaseService = (() => {
                     accountId: String(row.accountId || '').trim(),
                     accountName: String(row.accountName || accountMeta.byId[row.accountId] || row.accountId || '').trim(),
                     meesho: parseInt(row.meesho, 10) || 0,
-                    total: parseInt(row.total, 10) || (parseInt(row.meesho, 10) || 0),
+                    flipkart: parseInt(row.flipkart, 10) || 0,
+                    total: parseInt(row.total, 10) || ((parseInt(row.meesho, 10) || 0) + (parseInt(row.flipkart, 10) || 0)),
                     orderIndex: Number.isFinite(parseInt(row.orderIndex, 10))
                         ? parseInt(row.orderIndex, 10)
                         : orderIdx
@@ -1366,15 +1422,14 @@ const FirebaseService = (() => {
         });
         
         const ops = [];
+        const safeField = (field === 'flipkart' ? 'flipkart' : 'meesho');
         ops.push(b => b.set(orderRef, {
             orderId: docId,
             accountId: accId,
             companyId: safeCompanyId,
             companyName,
             masterCompany: safeCompanyId,
-            quantity: numVal,
-            meesho: numVal,
-            total: numVal,
+            [safeField]: numVal,
             date: dStr,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true }));

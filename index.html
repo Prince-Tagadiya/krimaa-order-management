@@ -7,7 +7,7 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260929-07">
     <link rel="manifest" href="manifest.json">
     <script>
         // Register Service Worker for full offline support
@@ -15,14 +15,7 @@
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('/sw.js').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
-                    reg.addEventListener('updatefound', () => {
-                        const worker = reg.installing;
-                        worker.addEventListener('statechange', () => {
-                            if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-                                console.log('[SW] New version available — will activate on next reload.');
-                            }
-                        });
-                    });
+                    reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
             });
         }
@@ -111,12 +104,12 @@
             <ul class="nav-links mt-2">
                 <li id="nav-data-sheet"><a href="#" class="nav-btn active" data-target="data-sheet"><i class='bx bx-spreadsheet'></i> Data Sheet</a></li>
                 <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
-                <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li>
+                <!-- <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li> -->
             </ul>
             <div class="sidebar-footer">
-                <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-primary bg-white" id="global-export-btn" title="Export complete PDF report">
+                <!-- <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-primary bg-white" id="global-export-btn" title="Export complete PDF report">
                     <i class='bx bxs-file-pdf'></i> Export Report
-                </button>
+                </button> -->
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="backup-btn" title="Refresh latest app data">
                     <i class='bx bx-refresh'></i> Refresh Data
                 </button>
@@ -227,19 +220,22 @@
                                     <!-- Company A -->
                                     <div class="kpi-box box-a">
                                         <div class="kpi-box-header"><span class="dot dot-a"></span> Company A</div>
-                                        <div class="kpi-box-row"><span>Meesho</span><span class="val-pill" id="dash-c1-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Meesho (M)</span><span class="val-pill" id="dash-c1-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Flipkart (F)</span><span class="val-pill" id="dash-c1-flipkart">0</span></div>
                                         <div class="kpi-box-row total-row"><span>Total</span><span class="val-total text-a" id="dash-c1-total">0</span></div>
                                     </div>
                                     <!-- Company B -->
                                     <div class="kpi-box box-b">
                                         <div class="kpi-box-header"><span class="dot dot-b"></span> Company B</div>
-                                        <div class="kpi-box-row"><span>Meesho</span><span class="val-pill" id="dash-c2-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Meesho (M)</span><span class="val-pill" id="dash-c2-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Flipkart (F)</span><span class="val-pill" id="dash-c2-flipkart">0</span></div>
                                         <div class="kpi-box-row total-row"><span>Total</span><span class="val-total text-b" id="dash-c2-total">0</span></div>
                                     </div>
                                     <!-- Combined -->
                                     <div class="kpi-box box-combined">
                                         <div class="kpi-box-header"><i class='bx bx-bar-chart text-muted'></i> Combined Total</div>
-                                        <div class="kpi-box-row"><span>Meesho</span><span class="val-text" id="dash-combined-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Meesho (M)</span><span class="val-text" id="dash-combined-meesho">0</span></div>
+                                        <div class="kpi-box-row"><span>Flipkart (F)</span><span class="val-text" id="dash-combined-flipkart">0</span></div>
                                         <div class="kpi-box-row total-row border-top"><span>Grand Total</span><span class="val-total text-primary" id="dash-combined-total">0</span></div>
                                     </div>
                                 </div>
@@ -264,7 +260,7 @@
                                 </div>
                                 <div class="table-responsive">
                                     <table class="table account-table">
-                                        <thead><tr><th style="width: 33%">Account Name</th><th class="text-center">Company</th><th class="text-right">Meesho</th><th class="text-right text-main font-bold">Total</th></tr></thead>
+                                        <thead><tr><th style="width: 30%">Account Name</th><th class="text-center">Company</th><th class="text-right">Meesho (M)</th><th class="text-right">Flipkart (F)</th><th class="text-right text-main font-bold">Total</th></tr></thead>
                                         <tbody id="dash-account-totals"></tbody>
                                     </table>
                                 </div>
@@ -349,6 +345,19 @@
                                 <input type="text" id="new-account-name" placeholder="e.g. Prince Tagadiya" required>
                             </div>
                             <div class="input-group">
+                                <label>Channels / Columns</label>
+                                <div class="channel-toggle-group">
+                                    <label class="channel-toggle-btn active" id="new-account-m-btn">
+                                        <input type="checkbox" id="new-account-meesho" checked style="display:none;">
+                                        <i class='bx bx-check'></i> Meesho (M)
+                                    </label>
+                                    <label class="channel-toggle-btn active" id="new-account-f-btn">
+                                        <input type="checkbox" id="new-account-flipkart" checked style="display:none;">
+                                        <i class='bx bx-check'></i> Flipkart (F)
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="input-group">
                                 <label>Mobile Number</label>
                                 <input type="text" id="new-account-mobile" placeholder="e.g. 9876543210">
                             </div>
@@ -430,12 +439,13 @@
             </div>
             <div style="overflow-y:auto;">
                 <table class="table" style="width:100%;">
-                    <thead><tr><th class="text-left">Account</th><th class="text-right">Meesho</th><th class="text-right">Total</th></tr></thead>
+                    <thead><tr><th class="text-left">Account</th><th class="text-center">Meesho (M)</th><th class="text-center">Flipkart (F)</th><th class="text-right">Total</th></tr></thead>
                     <tbody id="modal-details-tbody"></tbody>
                     <tfoot>
                         <tr style="background:#f8fafc;">
                             <td class="font-bold text-sm">Grand Total</td>
-                            <td id="modal-grand-meesho" class="text-right font-bold text-sm">0</td>
+                            <td id="modal-grand-meesho" class="text-center font-bold text-sm">0</td>
+                            <td id="modal-grand-flipkart" class="text-center font-bold text-sm">0</td>
                             <td id="modal-grand-total" class="text-right font-bold text-primary text-md">0</td>
                         </tr>
                     </tfoot>
@@ -462,6 +472,19 @@
                     <input type="text" id="edit-account-name" class="w-100" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px;" required>
                     <input type="hidden" id="edit-account-id">
                     <input type="hidden" id="edit-account-old-name">
+                </div>
+                <div class="input-group">
+                    <label>Channels / Columns</label>
+                    <div class="channel-toggle-group">
+                        <label class="channel-toggle-btn" id="edit-account-m-btn">
+                            <input type="checkbox" id="edit-account-meesho" style="display:none;">
+                            <i class='bx bx-check'></i> Meesho (M)
+                        </label>
+                        <label class="channel-toggle-btn" id="edit-account-f-btn">
+                            <input type="checkbox" id="edit-account-flipkart" style="display:none;">
+                            <i class='bx bx-check'></i> Flipkart (F)
+                        </label>
+                    </div>
                 </div>
                 <div class="input-group">
                     <label>Mobile Number</label>
@@ -906,23 +929,24 @@
         </div>
     </div>
 
-    <!-- Firebase SDK (compat for vanilla JS) -->
+    <!-- Firebase SDK (compat for vanilla JS) - Disabled for offline LAN mode
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+    -->
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <script src="runtime-env-loader.js"></script>
-    <script src="firebase-service.js?v=20260601-01"></script>
+    <script src="firebase-service.js?v=20260929-07"></script>
     <div id="background-sheets-loader" class="hidden" style="position: fixed; bottom: 20px; right: 20px; background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: 10px; border-radius: 50%; width: 40px; height: 40px; z-index: 9999; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20260601-01"></script>
-    <script src="app.js?v=20260602-01"></script>
+    <script src="lan-storage-service.js?v=20260929-07"></script>
+    <script src="app.js?v=20260929-07"></script>
 
 </body>
 </html>

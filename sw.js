@@ -1,7 +1,7 @@
 // ===== KRIMAA SERVICE WORKER — OFFLINE-FIRST =====
 // Cache all app shell + CDN assets. Serve from cache first, network as fallback.
 // Increment CACHE_VER whenever you deploy new code.
-const CACHE_VER = 'krimaa-v11';
+const CACHE_VER = 'krimaa-v15';
 
 const SHELL_FILES = [
     '/',
@@ -34,9 +34,7 @@ const ALL_CACHE_FILES = [...SHELL_FILES, ...CDN_FILES];
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_VER).then(async (cache) => {
-            // Cache shell files (must succeed)
             await cache.addAll(SHELL_FILES);
-            // Cache CDN files (best-effort — don't fail if CDN is down)
             for (const url of CDN_FILES) {
                 try {
                     await cache.add(new Request(url, { mode: 'cors' }));
@@ -66,46 +64,55 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-// ──── FETCH: Cache-first strategy ────
+// ──── FETCH: Network-first for local files, cache-first for CDN ────
 self.addEventListener('fetch', (event) => {
     const url = event.request.url;
 
-    // Never intercept non-GET requests or Firebase API writes — let those go through
     if (event.request.method !== 'GET') return;
 
-    // Never cache Firebase Firestore/Auth data API calls (dynamic data)
     if (
         url.includes('firestore.googleapis.com') ||
         url.includes('identitytoolkit.googleapis.com') ||
         url.includes('securetoken.googleapis.com') ||
         url.includes('/api/') ||
-        url.includes('script.google.com') ||  // Google Apps Script (Sheets API)
+        url.includes('script.google.com') ||
         url.includes('googleapis.com/auth')
     ) {
-        return; // Let browser handle it directly
+        return;
     }
 
+    // Network-first for local application assets so edits are seen immediately
+    const isSameOrigin = event.request.url.startsWith(self.location.origin);
+    if (isSameOrigin) {
+        event.respondWith(
+            fetch(event.request).then((response) => {
+                if (response && response.status === 200) {
+                    const toCache = response.clone();
+                    caches.open(CACHE_VER).then((cache) => cache.put(event.request, toCache));
+                }
+                return response;
+            }).catch(() => {
+                return caches.match(event.request).then((cached) => {
+                    if (cached) return cached;
+                    if (event.request.mode === 'navigate') {
+                        return caches.match('/index.html');
+                    }
+                    return new Response('', { status: 503, statusText: 'Offline' });
+                });
+            })
+        );
+        return;
+    }
+
+    // Cache-first for CDN assets
     event.respondWith(
-        caches.match(event.request, { ignoreSearch: true }).then((cached) => {
-            if (cached) {
-                return cached; // Serve from cache immediately
-            }
-            // Not in cache — try network, then cache the result
+        caches.match(event.request).then((cached) => {
+            if (cached) return cached;
             return fetch(event.request).then((response) => {
                 if (!response || response.status !== 200) return response;
                 const toCache = response.clone();
-                caches.open(CACHE_VER).then((cache) => {
-                    try {
-                        cache.put(event.request, toCache);
-                    } catch (e) {}
-                });
+                caches.open(CACHE_VER).then((cache) => cache.put(event.request, toCache));
                 return response;
-            }).catch(() => {
-                // Offline and not in cache — return the app shell for navigation requests
-                if (event.request.mode === 'navigate') {
-                    return caches.match('/index.html', { ignoreSearch: true });
-                }
-                return new Response('', { status: 503, statusText: 'Offline' });
             });
         })
     );
