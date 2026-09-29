@@ -1944,41 +1944,8 @@ async function refreshAppDataManually() {
     showFolderSetupScreen();
 }
 
-        if (_useSheetsFallbackMode) {
-            disableSheetsFallbackMode();
-            updateBackendModeBanner();
-        }
 
-        showToast('Refreshing from Google Sheet first, then Firebase...', 'info');
-        await FirebaseService.flushWrites();
-        await syncFirebaseFromSheetsSourceOnRefresh();
-        setLoaderStatus('Applying latest data to website...');
-        await loadInitialData();
-        await mergeRecentSheetRowsIntoState(SHEETS_FALLBACK_DAYS);
-        await Promise.all([
-            loadMoneyBackups(true),
-            loadAvailableSheetMonths(true)
-        ]);
-        if (AppState.currentSection === 'karigar') {
-            invalidateKarigarCache();
-            await renderKarigarPage(true);
-        } else if (AppState.currentSection === 'money-backup') {
-            await renderMoneyBackupPage(true);
-        } else if (AppState.currentSection === 'size-prices') {
-            await renderSizePricesPage();
-        } else if (AppState.currentSection === 'data-sheet') {
-            renderDataSheet();
-        } else if (AppState.currentSection === 'dashboard') {
-            renderDashboard();
-        }
-        showToast('Data refreshed', 'success');
-    } catch (e) {
-        console.error('Manual refresh failed:', e);
-        showToast('Refresh failed', 'error');
-    } finally {
-        hideLoader();
-    }
-}
+
 
 async function switchCompany(previousCompany = '') {
     if (AppState.isSwitchingCompany) return;
