@@ -1,3 +1,48 @@
+// ===== GLOBAL FIREBASE SAFETY SHIM =====
+if (typeof window !== 'undefined' && typeof window.firebase === 'undefined') {
+    window.firebase = {
+        apps: [],
+        initializeApp: () => ({}),
+        firestore: () => ({
+            collection: () => ({
+                doc: () => ({
+                    get: async () => ({ exists: false, data: () => ({}) }),
+                    set: async () => {},
+                    update: async () => {},
+                    delete: async () => {}
+                }),
+                where: () => ({
+                    get: async () => ({ empty: true, docs: [] }),
+                    onSnapshot: () => () => {}
+                }),
+                get: async () => ({ empty: true, docs: [] }),
+                limit: () => ({
+                    get: async () => ({ empty: true, docs: [] })
+                }),
+                onSnapshot: () => () => {}
+            }),
+            batch: () => ({
+                set: () => {},
+                update: () => {},
+                delete: () => {},
+                commit: async () => {}
+            }),
+            runTransaction: async () => {},
+            FieldValue: {
+                serverTimestamp: () => new Date().toISOString()
+            }
+        }),
+        database: {
+            ServerValue: {
+                TIMESTAMP: { '.sv': 'timestamp' }
+            }
+        }
+    };
+}
+if (typeof globalThis !== 'undefined' && typeof globalThis.firebase === 'undefined') {
+    globalThis.firebase = window.firebase;
+}
+
 // ===== FIRESTORE TO REALTIME DATABASE SHIM =====
 // Emulates the firestore API over Firebase Realtime Database to bypass document read/write limits.
 function isFirestoreTimestamp(v) {
@@ -347,44 +392,43 @@ class RtdbDocSnapshot {
 }
 
 const FirebaseService = (() => {
-    if (typeof firebase === 'undefined') {
-        console.log('[FIREBASE] Firebase and Firestore are disabled / commented out. Pure offline LAN mode active.');
-        return {
-            init: () => {},
-            getDb: () => null,
-            bufferWrite: (key, fn) => { if (typeof fn === 'function') fn(); },
-            flushWrites: async () => {},
-            getPendingCount: () => 0,
-            getSyncStatus: () => 'offline',
-            onSyncStatusChange: () => {},
-            getAccounts: async () => ({ success: true, data: [] }),
-            getOrders: async () => ({ success: true, data: [] }),
-            updateOrder: async () => ({ success: true }),
-            saveRemark: async () => ({ success: true }),
-            getRemarks: async () => ({ success: true, data: [] }),
-            addAccount: async () => ({ success: true }),
-            editAccount: async () => ({ success: true }),
-            deleteAccount: async () => ({ success: true }),
-            updateAccountOrder: async () => ({ success: true }),
-            submitOrders: async () => ({ success: true }),
-            isEmpty: async () => false,
-            setBackupMeta: async () => {},
-            getBackupMeta: async () => null,
-            getAllDataForBackup: async () => ({}),
-            backupAndArchiveMonthlyData: async () => ({ success: true }),
-            clearOldOrders: async () => ({ success: true }),
-            seedFromSheets: async () => ({ success: true }),
-            migrateLegacyOrdersToDailyOrders: async () => ({ success: true }),
-            migrateDatabaseToIds: async () => ({ success: true }),
-            getKarigars: async () => ({ success: true, data: [] }),
-            getKarigarTransactions: async () => ({ success: true, data: [] }),
-            getDesignPrices: async () => ({ success: true, data: [] }),
-            fixHistoricalDataIntegrity: async () => ({ success: true }),
-            syncFromSheets: async () => ({ success: true }),
-            replaceFromSheets: async () => ({ success: true }),
-            replaceFromSheetsSelective: async () => ({ success: true }),
-        };
-    }
+    // Pure offline LAN mode - Firebase & Firestore are disabled
+    console.log('[FIREBASE] Firebase and Firestore are disabled / commented out. Pure offline LAN mode active.');
+    return {
+        init: () => {},
+        getDb: () => null,
+        bufferWrite: (key, fn) => { if (typeof fn === 'function') fn(); },
+        flushWrites: async () => {},
+        getPendingCount: () => 0,
+        getSyncStatus: () => 'offline',
+        onSyncStatusChange: () => {},
+        getAccounts: async () => ({ success: true, data: [] }),
+        getOrders: async () => ({ success: true, data: [] }),
+        updateOrder: async () => ({ success: true }),
+        saveRemark: async () => ({ success: true }),
+        getRemarks: async () => ({ success: true, data: [] }),
+        addAccount: async () => ({ success: true }),
+        editAccount: async () => ({ success: true }),
+        deleteAccount: async () => ({ success: true }),
+        updateAccountOrder: async () => ({ success: true }),
+        submitOrders: async () => ({ success: true }),
+        isEmpty: async () => false,
+        setBackupMeta: async () => {},
+        getBackupMeta: async () => null,
+        getAllDataForBackup: async () => ({}),
+        backupAndArchiveMonthlyData: async () => ({ success: true }),
+        clearOldOrders: async () => ({ success: true }),
+        seedFromSheets: async () => ({ success: true }),
+        migrateLegacyOrdersToDailyOrders: async () => ({ success: true }),
+        migrateDatabaseToIds: async () => ({ success: true }),
+        getKarigars: async () => ({ success: true, data: [] }),
+        getKarigarTransactions: async () => ({ success: true, data: [] }),
+        getDesignPrices: async () => ({ success: true, data: [] }),
+        fixHistoricalDataIntegrity: async () => ({ success: true }),
+        syncFromSheets: async () => ({ success: true }),
+        replaceFromSheets: async () => ({ success: true }),
+        replaceFromSheetsSelective: async () => ({ success: true }),
+    };
 
     let db = null;
     let _initialized = false;
@@ -3343,3 +3387,7 @@ const FirebaseService = (() => {
         onSyncStatusChange, getSyncStatus, setSyncStatus
     };
 })();
+
+if (typeof window !== 'undefined') {
+    window.FirebaseService = FirebaseService;
+}

@@ -1904,46 +1904,45 @@ function startLanFirebasePullSync() {
 
 async function refreshAppDataManually() {
     if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-        showLoader('Syncing from Firebase & refreshing LAN data...');
+        showLoader('Refreshing local data...');
         try {
-            // ── Pull latest Firebase data into LAN folder first (cross-profile sync) ──
-            const pullResult = await LanStorageService.pullLatestFromFirebase({ force: true });
-            if (pullResult && pullResult.pulled > 0) {
-                console.log(`[REFRESH] Pulled ${pullResult.pulled} records from Firebase before LAN read.`);
-            }
             await Promise.all([
                 fetchAccounts(),
                 fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
             ]);
             await loadAvailableSheetMonths(true);
             if (AppState.currentSection === 'data-sheet') renderDataSheet();
-            else if (AppState.currentSection === 'dashboard') renderDashboard();
-            else if (AppState.currentSection === 'daily-order') renderOrderEntryTable();
-            showToast('LAN data refreshed with latest Firebase data!', 'success');
+            showToast('Local data refreshed successfully!', 'success');
         } catch (e) {
             console.error(e);
-            showToast('Failed to refresh LAN data: ' + e.message, 'error');
+            showToast('Failed to refresh local data: ' + e.message, 'error');
         } finally {
             hideLoader();
         }
         return;
     }
 
-    showLoader('Checking server status...');
-    try {
-        const serverResponsive = await probeFirebaseWithCountdown(5);
-        if (!serverResponsive) {
-            enableSheetsFallbackMode();
-            updateBackendModeBanner();
-            setLoaderStatus('Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow)...');
-            await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
-            await loadAvailableSheetMonths(true);
-            if (AppState.currentSection === 'data-sheet') renderDataSheet();
-            else if (AppState.currentSection === 'dashboard') renderDashboard();
-            else if (AppState.currentSection === 'daily-order') renderOrderEntryTable();
-            showToast('Server down. Loaded latest Google Sheet data.', 'info');
-            return;
-        }
+    if (window.LanStorageService && window.LanStorageService.hasSavedHandle()) {
+        showLoader('Reconnecting shared folder...');
+        try {
+            const reconnected = await LanStorageService.autoReconnect();
+            if (reconnected && LanStorageService.isConnected()) {
+                await Promise.all([
+                    fetchAccounts(),
+                    fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
+                ]);
+                await loadAvailableSheetMonths(true);
+                if (AppState.currentSection === 'data-sheet') renderDataSheet();
+                showToast('Reconnected and refreshed local data!', 'success');
+                hideLoader();
+                return;
+            }
+        } catch (e) {}
+        hideLoader();
+    }
+    showToast('Please link your shared LAN folder first.', 'info');
+    showFolderSetupScreen();
+}
 
         if (_useSheetsFallbackMode) {
             disableSheetsFallbackMode();
@@ -2835,7 +2834,7 @@ async function loadInitialData() {
         // ═══ LAN-FIRST MODE (primary path) ═══
         if (LanStorageService.isConnected()) {
             showLoader('Loading local data...');
-            console.log("🚀 [INIT] ✅ LAN connected — loading from local folder (no Firebase read)");
+            console.log("🚀 [INIT] ✅ LAN connected — loading from local folder");
             
             await Promise.all([
                 fetchAccounts(),
@@ -2845,53 +2844,38 @@ async function loadInitialData() {
             await loadAvailableSheetMonths(true).catch(e => console.warn('[INIT] Month list fetch:', e));
             
             // Refresh pending badge
-            const pending = await LanStorageService.getPendingCount();
-            window.updateFirebasePendingBadge(pending, 'connected');
-            
-            // Try to flush any queued ops if online
-            if (navigator.onLine) {
-                LanStorageService.flushSyncQueue().catch(() => {});
-            }
+            window.updateFirebasePendingBadge(0, 'connected');
 
             console.log("🚀 [INIT] LAN data ready. Booting UI.");
-            if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
-                navigateTo('data-sheet');
-            } else {
-                navigateTo('data-sheet');
+            navigateTo('data-sheet');
+            return;
+        }
+
+        // Check if saved handle exists and try auto-reconnect
+        if (LanStorageService.hasSavedHandle()) {
+            showLoader('Reconnecting shared folder...');
+            try {
+                const reconnected = await LanStorageService.autoReconnect();
+                if (reconnected && LanStorageService.isConnected()) {
+                    await Promise.all([
+                        fetchAccounts(),
+                        fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
+                    ]);
+                    await loadAvailableSheetMonths(true).catch(() => {});
+                    window.updateFirebasePendingBadge(0, 'connected');
+                    console.log("🚀 [INIT] LAN reconnected. Booting UI.");
+                    navigateTo('data-sheet');
+                    return;
+                }
+            } catch (reconErr) {
+                console.warn('[INIT] Auto-reconnect failed:', reconErr);
             }
-            return;
         }
 
-        // ═══ NO LAN — Firebase fallback path ═══
-        showLoader('Connecting to Firebase...');
-        console.log("🚀 [INIT] No LAN folder connected. Trying Firebase...");
-        
-        const serverResponsive = await probeFirebaseWithCountdown(5);
-        if (!serverResponsive) {
-            hideLoader();
-            showToast('⚠️ No local folder and Firebase is offline. Please link your LAN folder.', 'error');
-            showFolderSetupScreen();
-            return;
-        }
-
-        await tryRecoverFirestoreMode();
-        updateBackendModeBanner();
-        
-        setLoaderStatus('Loading Firebase data...');
-        await Promise.all([
-            fetchAccounts(),
-            fetchAllCompaniesData({ refreshArchiveMonths: false })
-        ]);
-        
-        loadAvailableSheetMonths(true).catch(e => console.warn('[INIT] Month list fetch:', e));
-        
-        console.log("🚀 [INIT] Firebase data ready. Booting UI.");
-        if (AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') {
-            navigateTo('data-sheet');
-        } else {
-            navigateTo('data-sheet');
-        }
-        runStartupMaintenanceInBackground();
+        // If folder not linked or needs user gesture to unlock
+        hideLoader();
+        showFolderSetupScreen();
+        return;
 
     } catch (err) {
         console.error('[INIT] Failed:', err);

@@ -671,63 +671,65 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
 .sheet-table thead tr:first-child th {
     position: sticky;
     top: 0;
-    z-index: 20;
+    z-index: 22;
     background: #f1f5f9;
     color: var(--text-main);
     font-weight: 800;
-    font-size: 0.68rem;
+    font-size: 0.67rem;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
-    padding: 0.35rem 0.2rem;
-    border-bottom: 1px solid var(--border-color);
-    border-right: 1px solid #e2e8f0;
+    letter-spacing: 0.02em;
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0 4px;
+    border-bottom: 1px solid #cbd5e1;
+    border-right: 1px solid #cbd5e1;
     white-space: nowrap;
     text-align: center;
+    vertical-align: middle;
     overflow: hidden;
 }
 
 .sheet-table thead tr.sheet-subheader-row th {
     position: sticky;
-    top: 27px;
-    z-index: 19;
-    padding: 0.2rem 0.15rem;
-    font-size: 0.65rem;
+    top: 32px;
+    z-index: 21;
+    height: 24px;
+    line-height: 22px;
+    box-sizing: border-box;
+    padding: 0 2px;
+    font-size: 0.64rem;
     font-weight: 800;
     text-transform: uppercase;
-    border-bottom: 2px solid var(--border-color);
-    border-right: 1px solid #e2e8f0;
+    border-bottom: 2px solid #94a3b8;
+    border-right: 1px solid #cbd5e1;
     text-align: center;
+    vertical-align: middle;
 }
 
 .sheet-table thead th:last-child { border-right: none; }
 
 /* Account group header */
 .sheet-table thead th.sheet-acct-group {
-    background: #e0ecff;
-    color: var(--primary);
+    background: #dbeafe;
+    color: #1e40af;
     font-weight: 800;
-    border-bottom: 1px solid #c7d6f0;
+    border-bottom: 1px solid #93c5fd;
     font-size: 0.67rem;
     letter-spacing: 0.02em;
-    white-space: normal;
-    line-height: 1.15;
-    word-break: normal;
-    overflow-wrap: break-word;
+    white-space: nowrap;
+    line-height: 30px;
 }
 
 .sheet-header-name {
-    display: block;
-    width: 100%;
-    white-space: normal;
-    word-break: normal;
-    overflow-wrap: break-word;
-    line-height: 1.15;
-    max-height: 2.2em;
+    display: inline-block;
+    max-width: 100%;
+    white-space: nowrap;
     overflow: hidden;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
     text-overflow: ellipsis;
+    vertical-align: middle;
+    font-size: 0.67rem;
+    font-weight: 800;
+    line-height: 30px;
 }
 
 .sheet-table thead th.sheet-sub-col {
@@ -741,7 +743,7 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     background: #fff1f2 !important;
     color: #e11d48 !important;
     width: clamp(34px, 3.8vw, 44px);
-    min-width: 32px;
+    min-width: 34px;
 }
 
 .sheet-table thead th.sheet-sub-f,
@@ -749,55 +751,68 @@ body { background-color: var(--bg-main); color: var(--text-main); -webkit-font-s
     background: #eff6ff !important;
     color: #2563eb !important;
     width: clamp(34px, 3.8vw, 44px);
-    min-width: 32px;
+    min-width: 34px;
 }
 
 .sheet-table thead th.sheet-sub-total,
 .sheet-sub-total {
     background: #f1f5f9 !important;
     color: #0f172a !important;
-    width: clamp(40px, 4.5vw, 52px);
-    min-width: 38px;
+    width: clamp(44px, 4.8vw, 56px);
+    min-width: 44px;
 }
 
 /* Date column (frozen left) */
-.sheet-table thead th.sheet-date-col,
+.sheet-table thead th.sheet-date-col {
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 30;
+    height: 56px;
+    line-height: 56px;
+    vertical-align: middle;
+    background: #e2e8f0;
+    color: #0f172a;
+    font-weight: 900;
+    border-right: 2px solid #94a3b8;
+    border-bottom: 2px solid #94a3b8;
+    white-space: nowrap;
+    width: 82px;
+    min-width: 82px;
+    max-width: 82px;
+    text-align: left;
+    padding: 0 0.35rem;
+    box-sizing: border-box;
+}
+
 .sheet-table tbody td.sheet-date-cell {
     position: sticky;
     left: 0;
+    z-index: 10;
     background: #f8fafc;
-    font-weight: 800;
+    color: var(--text-main);
+    font-weight: 700;
     border-right: 2px solid #cbd5e1;
     white-space: nowrap;
     width: 82px;
     min-width: 82px;
     max-width: 82px;
     text-align: left;
-}
-.sheet-table thead th.sheet-date-col {
-    top: 0;
-    z-index: 25;
-}
-.sheet-table tbody td.sheet-date-cell {
-    z-index: 4;
+    font-size: 0.72rem;
+    padding: 0.28rem 0.35rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-sizing: border-box;
 }
 
 /* Separator between account groups */
 .sheet-acct-border {
     border-right: 2.5px solid #94a3b8 !important;
 }
-.sheet-table tbody td.sheet-date-cell {
-    background: #f8fafc;
-    color: var(--text-main);
-    font-size: 0.72rem;
-    padding: 0.3rem 0.35rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
 
 /* Body cells */
 .sheet-table tbody td {
-    padding: 0.25rem 0.15rem;
+    padding: 0.22rem 0.15rem;
     border-bottom: 1px solid #f1f5f9;
     border-right: 1px solid #f1f5f9;
     text-align: center;
@@ -813,12 +828,12 @@ td.sheet-m-col {
     border-right: 1px dashed #e2e8f0;
     background: #fff;
     width: clamp(34px, 3.8vw, 44px);
-    min-width: 32px;
+    min-width: 34px;
 }
 td.sheet-f-col {
     background: #fbfcfe;
     width: clamp(34px, 3.8vw, 44px);
-    min-width: 32px;
+    min-width: 34px;
 }
 
 /* Alternating row */
@@ -834,14 +849,12 @@ td.sheet-f-col {
     color: white;
     font-weight: 900;
     letter-spacing: 0.02em;
-    padding: 0.42rem 0.75rem;
+    padding: 0.38rem 0.75rem;
     text-align: left;
     border-top: 2px solid #991b1b;
     border-bottom: 2px solid #991b1b;
     border-right: none;
-    position: sticky;
-    top: 51px;
-    z-index: 12;
+    position: static;
 }
 
 .sheet-table tbody tr.sheet-month-row td span {
@@ -924,7 +937,10 @@ td.sheet-f-col {
     background: #fff1f2;
     color: #be123c;
     width: clamp(34px, 3.8vw, 44px);
-    min-width: 32px;
+    min-width: 34px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .sheet-table tbody td.sheet-total-cell.sheet-f-total,
@@ -932,7 +948,10 @@ td.sheet-f-col {
     background: #eff6ff;
     color: #1d4ed8;
     width: clamp(34px, 3.8vw, 44px);
-    min-width: 32px;
+    min-width: 34px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .sheet-table tbody td.sheet-total-cell.sheet-both-total,
@@ -940,8 +959,11 @@ td.sheet-f-col {
     background: #f1f5f9;
     color: #0f172a;
     font-weight: 900;
-    width: clamp(40px, 4.5vw, 52px);
-    min-width: 38px;
+    width: clamp(46px, 5vw, 60px);
+    min-width: 46px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     border-right: 2.5px solid #94a3b8;
 }
 
