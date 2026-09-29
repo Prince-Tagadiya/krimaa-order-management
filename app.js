@@ -5173,9 +5173,9 @@ async function renderDataSheet() {
         grandTotals.flipkart += rowF;
         grandTotals.both += rowBoth;
         
-        bodyHtml += `<td class="sheet-total-cell sheet-m-total">${rowM}</td>`;
-        bodyHtml += `<td class="sheet-total-cell sheet-f-total">${rowF}</td>`;
-        bodyHtml += `<td class="sheet-total-cell sheet-both-total">${rowBoth}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-m-total" title="M: ${rowM.toLocaleString()}">${rowM}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-f-total" title="F: ${rowF.toLocaleString()}">${rowF}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-both-total" title="Total: ${rowBoth.toLocaleString()}">${rowBoth}</td>`;
         
         const remarkVal = savedRemarks[date] || '';
         bodyHtml += `<td class="sheet-editable sheet-remarks-col"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
@@ -5187,16 +5187,18 @@ async function renderDataSheet() {
         bodyHtml += '<tr class="sheet-grand-row">';
         bodyHtml += '<td class="sheet-date-cell">TOTAL</td>';
         accounts.forEach((acc, idx) => {
+            const mVal = grandTotals.accounts[idx].meesho;
+            const fVal = grandTotals.accounts[idx].flipkart;
             if (acc.hasM) {
-                bodyHtml += `<td class="sheet-sub-m ${!acc.hasF ? 'sheet-acct-border' : ''} sheet-grand-acct-m" data-account-id="${escapeHtml(acc.id)}">${grandTotals.accounts[idx].meesho}</td>`;
+                bodyHtml += `<td class="sheet-sub-m ${!acc.hasF ? 'sheet-acct-border' : ''} sheet-grand-acct-m" data-account-id="${escapeHtml(acc.id)}" title="${escapeHtml(acc.name)} M: ${mVal.toLocaleString()}">${mVal}</td>`;
             }
             if (acc.hasF) {
-                bodyHtml += `<td class="sheet-sub-f sheet-acct-border sheet-grand-acct-f" data-account-id="${escapeHtml(acc.id)}">${grandTotals.accounts[idx].flipkart}</td>`;
+                bodyHtml += `<td class="sheet-sub-f sheet-acct-border sheet-grand-acct-f" data-account-id="${escapeHtml(acc.id)}" title="${escapeHtml(acc.name)} F: ${fVal.toLocaleString()}">${fVal}</td>`;
             }
         });
-        bodyHtml += `<td class="sheet-total-cell sheet-m-total sheet-grand-m">${grandTotals.meesho}</td>`;
-        bodyHtml += `<td class="sheet-total-cell sheet-f-total sheet-grand-f">${grandTotals.flipkart}</td>`;
-        bodyHtml += `<td class="sheet-total-cell sheet-both-total sheet-grand-both">${grandTotals.both}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-m-total sheet-grand-m" title="Meesho Grand Total: ${grandTotals.meesho.toLocaleString()}">${grandTotals.meesho}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-f-total sheet-grand-f" title="Flipkart Grand Total: ${grandTotals.flipkart.toLocaleString()}">${grandTotals.flipkart}</td>`;
+        bodyHtml += `<td class="sheet-total-cell sheet-both-total sheet-grand-both" title="Grand Total: ${grandTotals.both.toLocaleString()}">${grandTotals.both}</td>`;
         bodyHtml += '<td></td>';
         bodyHtml += '</tr>';
     }
