@@ -420,6 +420,14 @@ const LanStorageService = (() => {
                     const y = month.split('-')[0];
                     const m = month.split('-')[1];
                     all = await readFile(`orders_${y}_${m}`, []);
+                    // Legacy fallback: if monthly file is empty, check daily_orders.json
+                    if (!all || all.length === 0) {
+                        const legacy = await readFile('daily_orders', []);
+                        if (Array.isArray(legacy) && legacy.length > 0) {
+                            all = legacy.filter(o => (o.date || '').startsWith(month));
+                            console.log(`[LAN] Fallback to daily_orders.json for month ${month}: ${all.length} records`);
+                        }
+                    }
                 } else {
                     try {
                         for await (const entry of _dirHandle.values()) {
@@ -433,13 +441,20 @@ const LanStorageService = (() => {
                     } catch (err) {
                         console.warn('[LAN] Error reading all monthly files:', err);
                     }
+                    // Legacy fallback: if no monthly files had data, read daily_orders.json
+                    if (all.length === 0) {
+                        const legacy = await readFile('daily_orders', []);
+                        if (Array.isArray(legacy) && legacy.length > 0) {
+                            all = legacy;
+                            console.log(`[LAN] Fallback to daily_orders.json for all-time: ${all.length} records`);
+                        }
+                    }
                 }
-                
 
                 // Realistic Decoding: Group duplicate records, parse meesho and flipkart, compute total
                 const dedupMap = new Map();
                 all.forEach(o => {
-                    const m = parseInt(o.meesho, 10) || 0;
+                    const m = parseInt(o.meesho, 10) || parseInt(o.quantity, 10) || 0;
                     const f = parseInt(o.flipkart, 10) || 0;
                     const t = typeof o.total !== 'undefined' ? (parseInt(o.total, 10) || 0) : (m + f);
                     o.meesho = m;
