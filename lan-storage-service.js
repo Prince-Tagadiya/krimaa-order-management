@@ -676,6 +676,19 @@ const LanStorageService = (() => {
                 await writeFile('accounts', filtered);
                 return { success: true };
             }
+            if (action === 'updateAccountOrder') {
+                const accounts = await readFile('accounts', []);
+                const order = Array.isArray(payload.orderedAccounts) ? payload.orderedAccounts : [];
+                accounts.forEach(acc => {
+                    if (acc.companyId === companyId) {
+                        const idx = order.findIndex(id => id === acc.id || id === acc.accountId || id === acc.name);
+                        if (idx !== -1) acc.position = idx;
+                    }
+                });
+                accounts.sort((a, b) => (a.position ?? 9999) - (b.position ?? 9999));
+                await writeFile('accounts', accounts);
+                return { success: true };
+            }
             if (action === 'saveRemark') {
                 const remarks = await readFile('remarks', []);
                 const existing = remarks.find(r => r.date === payload.date);
