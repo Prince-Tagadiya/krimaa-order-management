@@ -7,7 +7,7 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <link rel="stylesheet" href="style.css?v=20261108-05">
+    <link rel="stylesheet" href="style.css?v=20261108-06">
     <link rel="manifest" href="manifest.json">
     <script>
         // Register Service Worker for full offline support
@@ -20,7 +20,7 @@
                 }
             });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=20261108-05').then(reg => {
+                navigator.serviceWorker.register('/sw.js?v=20261108-06').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
                     reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
@@ -1085,8 +1085,8 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20261108-05"></script>
-    <script src="app.js?v=20261108-05"></script>
+    <script src="lan-storage-service.js?v=20261108-06"></script>
+    <script src="app.js?v=20261108-06"></script>
 
 </body>
 </html>
