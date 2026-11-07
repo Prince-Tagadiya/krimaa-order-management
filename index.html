@@ -20,7 +20,7 @@
                 }
             });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=20261108-01').then(reg => {
+                navigator.serviceWorker.register('/sw.js?v=20261108-02').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
                     reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
@@ -1033,8 +1033,8 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20261108-01"></script>
-    <script src="app.js?v=20261108-01"></script>
+    <script src="lan-storage-service.js?v=20261108-02"></script>
+    <script src="app.js?v=20261108-02"></script>
 
 </body>
 </html>

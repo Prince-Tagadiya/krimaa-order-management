@@ -5304,7 +5304,56 @@ async function renderDataSheet() {
                     }
                 }
             }
-        } else if (e.key === 'Enter' || e.key === 'ArrowDown') {
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const tr = inp.closest('tr');
+            if (!tr) return;
+            const rowInputs = Array.from(tr.querySelectorAll('input.sheet-cell-input:not(.sheet-remark-input)'));
+            const currIdx = rowInputs.indexOf(inp);
+
+            if (!e.shiftKey) {
+                // Enter: move to the right box in the same row
+                if (currIdx !== -1 && currIdx < rowInputs.length - 1) {
+                    const nextInp = rowInputs[currIdx + 1];
+                    nextInp.focus();
+                    nextInp.select();
+                } else {
+                    // Reached end of row -> wrap to first box of the next day row
+                    let nextTr = tr.nextElementSibling;
+                    while (nextTr && (nextTr.classList.contains('sheet-month-row') || nextTr.classList.contains('sheet-grand-row'))) {
+                        nextTr = nextTr.nextElementSibling;
+                    }
+                    if (nextTr) {
+                        const target = nextTr.querySelector('input.sheet-cell-input:not(.sheet-remark-input)');
+                        if (target) {
+                            target.focus();
+                            target.select();
+                        }
+                    }
+                }
+            } else {
+                // Shift+Enter: move to the left box in the same row
+                if (currIdx > 0) {
+                    const prevInp = rowInputs[currIdx - 1];
+                    prevInp.focus();
+                    prevInp.select();
+                } else {
+                    // First box in row -> wrap to last box of the previous day row
+                    let prevTr = tr.previousElementSibling;
+                    while (prevTr && (prevTr.classList.contains('sheet-month-row') || prevTr.classList.contains('sheet-grand-row'))) {
+                        prevTr = prevTr.previousElementSibling;
+                    }
+                    if (prevTr) {
+                        const prevInputs = Array.from(prevTr.querySelectorAll('input.sheet-cell-input:not(.sheet-remark-input)'));
+                        if (prevInputs.length) {
+                            const target = prevInputs[prevInputs.length - 1];
+                            target.focus();
+                            target.select();
+                        }
+                    }
+                }
+            }
+        } else if (e.key === 'ArrowDown') {
             e.preventDefault();
             const tr = inp.closest('tr');
             if (!tr) return;
