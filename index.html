@@ -7,7 +7,7 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <link rel="stylesheet" href="style.css?v=20261108-01">
+    <link rel="stylesheet" href="style.css?v=20261108-04">
     <link rel="manifest" href="manifest.json">
     <script>
         // Register Service Worker for full offline support
@@ -20,7 +20,7 @@
                 }
             });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=20261108-03').then(reg => {
+                navigator.serviceWorker.register('/sw.js?v=20261108-04').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
                     reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
@@ -393,113 +393,136 @@
 
                 <!-- ========== KARIGAR MANAGEMENT ========== -->
                 <section id="karigar" class="content-section">
-                    <div class="flex-between mb-2">
-                        <div style="display: flex; align-items: center; gap: 1rem;">
-                            <h2 class="page-title font-bold text-xl"><i class='bx bx-user-circle'></i> Karigar Management</h2>
-                        </div>
-                        <div class="flex gap-2 items-center flex-wrap">
-                            <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: right;">
-                                <span class="text-xs text-muted uppercase font-bold mr-2">Total Pics</span>
-                                <strong id="karigar-overall-pics" class="text-lg text-primary">0</strong>
-                            </div>
-                            <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                                <span class="text-xs text-muted uppercase font-bold mr-2">Total Payable Balance</span>
-                                <strong id="karigar-overall-balance" class="text-lg text-primary">₹0.00</strong>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Cycle Toolbar & Audit Info Bar -->
-                    <div class="card mb-3" style="padding: 0.85rem 1rem;">
-                        <div class="flex-between" style="gap: 0.85rem; flex-wrap: wrap; align-items: center;">
-                            <!-- Left: Month / Cycle Selector & Status Badges -->
+                    <!-- Unified Modern Header -->
+                    <div class="karigar-header-bar">
+                        <!-- Top Row: Title, Cycle & Audit Badges, Summary Stats -->
+                        <div class="karigar-top-row">
                             <div class="flex items-center gap-2 flex-wrap">
-                                <span class="text-xs font-bold text-muted uppercase" style="letter-spacing: 0.5px;"><i class='bx bx-calendar'></i> Cycle:</span>
-                                <select id="karigar-cycle-select" class="form-select text-sm font-semibold" style="padding: 0.45rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: #f8fafc; font-weight: 600; cursor: pointer; min-width: 200px;">
-                                    <option value="current">Current Month Cycle (Live)</option>
-                                </select>
-                                <div id="karigar-cycle-badge" style="padding: 0.4rem 0.7rem; border-radius: 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
-                                    <i class='bx bx-check-shield'></i> <span id="karigar-cycle-date-text">Cycle: Active</span>
+                                <h2 class="page-title font-bold text-xl mb-0" style="display:flex;align-items:center;gap:8px;">
+                                    <i class='bx bx-user-circle text-primary'></i> Karigar Management
+                                </h2>
+                                <div id="karigar-cycle-badge" style="padding: 0.35rem 0.65rem; border-radius: 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; font-size: 0.75rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;">
+                                    <i class='bx bx-check-shield'></i> <span id="karigar-cycle-date-text">Active Cycle</span>
                                 </div>
-                                <div id="karigar-audit-badge" style="padding: 0.4rem 0.7rem; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;" title="Double-entry mathematical reconciliation with zero single-rupee variance">
+                                <div id="karigar-audit-badge" style="padding: 0.35rem 0.65rem; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.75rem; font-weight: 700; display: inline-flex; align-items: center; gap: 4px;" title="Double-entry mathematical reconciliation with zero single-rupee variance">
                                     <i class='bx bx-check-double'></i> <span id="karigar-audit-text">Zero Error Reconciled</span>
                                 </div>
                             </div>
 
-                            <!-- Right: Actions (Refresh, Bulk PDF, Summary PDF, Reset Month) -->
+                            <div class="karigar-stats-capsule">
+                                <div class="stat-col text-right">
+                                    <span class="stat-label">Total Pieces</span>
+                                    <span id="karigar-overall-pics" class="stat-val text-primary">0</span>
+                                </div>
+                                <div style="width: 1px; height: 24px; background: #e2e8f0;"></div>
+                                <div class="stat-col text-right">
+                                    <span class="stat-label">Payable Balance</span>
+                                    <span id="karigar-overall-balance" class="stat-val text-success">₹0.00 Clear</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Toolbar Row: Search, Cycle Dropdown & Actions in one clean line -->
+                        <div class="karigar-toolbar-row">
+                            <div class="karigar-search-box">
+                                <i class='bx bx-search'></i>
+                                <input type="text" id="karigar-search-input" placeholder="Search by Karigar name...">
+                            </div>
+
+                            <div class="flex items-center gap-2">
+                                <select id="karigar-cycle-select" class="form-select text-sm font-semibold" style="padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-weight: 600; cursor: pointer; min-width: 180px;">
+                                    <option value="current">Current Active Cycle (Live)</option>
+                                </select>
+                            </div>
+
                             <div class="flex items-center gap-2 flex-wrap">
                                 <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-karigar" title="Refresh all data and re-audit calculations">
-                                    <i class='bx bx-refresh'></i> Refresh Data
+                                    <i class='bx bx-refresh'></i> Refresh
                                 </button>
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF">
-                                    <i class='bx bxs-printer'></i> Bulk Salary Slips (PDF)
+                                    <i class='bx bxs-printer'></i> All Slips (PDF)
                                 </button>
-                                <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Download Summary Table PDF">
-                                    <i class='bx bxs-file-pdf'></i> Summary PDF
+                                <button type="button" class="btn btn-outline btn-sm" id="export-pdf-karigar-btn" title="Download Summary Sheet PDF">
+                                    <i class='bx bxs-file-pdf text-danger'></i> Summary PDF
                                 </button>
                                 <button type="button" class="btn btn-outline btn-sm text-danger" id="btn-reset-karigar" style="border-color:#fca5a5; display: none;" title="Archive active cycle, save backup, and start fresh month">
-                                    <i class='bx bx-reset'></i> Reset Month & Settle
+                                    <i class='bx bx-reset'></i> Reset Month
                                 </button>
                                 <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn" title="View past reset archives">
                                     <i class='bx bx-archive'></i> Archives
                                 </button>
+                                <button class="btn btn-primary btn-sm" id="btn-create-karigar" style="display: none; white-space: nowrap;">
+                                    <i class='bx bx-plus'></i> Add Karigar
+                                </button>
                             </div>
-                        </div>
-                    </div>
-
-                    <div class="card mb-3">
-                        <div class="flex-between" style="gap: 1rem; align-items: stretch; flex-wrap: wrap;">
-                            <div class="input-group" style="flex: 1; margin: 0;">
-                                <input type="text" id="karigar-search-input" placeholder="Search by Karigar name..." style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;">
-                            </div>
-                            <button class="btn btn-primary" id="btn-create-karigar" style="display: none; white-space: nowrap;">
-                                <i class='bx bx-plus'></i> Create New Karigar
-                            </button>
                         </div>
                     </div>
 
                     <!-- Karigar Grid -->
-                    <div id="karigar-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
+                    <div id="karigar-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem;">
                         <!-- JS injected cards -->
                     </div>
                 </section>
 
-                <!-- ========== SIZE PRICES ========== -->
+                <!-- ========== SIZE PRICES / RATE CHART ========== -->
                 <section id="size-prices" class="content-section">
-                    <div class="card">
-                        <div class="flex-between mb-2">
+                    <div class="size-chart-header">
+                        <div class="flex-between flex-wrap gap-2">
                             <div>
-                                <h2 class="page-title font-bold text-xl"><i class='bx bx-ruler'></i> Size Price Management</h2>
-                                <p class="text-sm text-muted">Saved Size/Design prices used in Jama auto-fill.</p>
+                                <h2 class="page-title font-bold text-xl mb-1" style="display:flex;align-items:center;gap:8px;">
+                                    <i class='bx bx-ruler text-primary'></i> Size & Design Rate Chart
+                                </h2>
+                                <p class="text-xs text-muted mb-0">
+                                    Pre-configured piece rates automatically auto-fill into Karigar Maal (Jama) entries.
+                                </p>
                             </div>
-                            <div>
-                                <button id="size-price-recycle-open-btn" class="btn btn-outline btn-sm" type="button">
+                            <div class="flex items-center gap-2">
+                                <button id="size-price-recycle-open-btn" class="btn btn-outline btn-sm" type="button" title="View deleted size prices">
                                     <i class='bx bx-trash'></i> Recycle Bin (<span id="size-price-recycle-count">0</span>)
                                 </button>
                             </div>
                         </div>
-                        <form id="size-price-form" class="mb-2" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:0.75rem;align-items:end;">
-                            <div class="input-group" style="margin:0;">
-                                <label>Size / Design</label>
-                                <input id="size-price-key" type="text" placeholder="e.g. 1128 or XL" required>
+
+                        <!-- Fast Simple Add / Update Form -->
+                        <form id="size-price-form" class="size-price-quick-form">
+                            <div style="flex: 1; min-width: 140px;">
+                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Size / Design No</label>
+                                <input id="size-price-key" type="text" placeholder="e.g. 1128 or XL" required style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;">
                             </div>
-                            <div class="input-group" style="margin:0;">
-                                <label>Price (₹)</label>
-                                <input id="size-price-value" type="number" step="0.01" min="0" placeholder="e.g. 90" required>
+                            <div style="flex: 1; min-width: 140px;">
+                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Price Per Piece (₹)</label>
+                                <input id="size-price-value" type="number" step="0.01" min="0" placeholder="e.g. 90.00" required style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;">
                             </div>
-                            <div class="input-group" style="margin:0;">
-                                <label>Active From</label>
-                                <input id="size-price-effective-date" type="datetime-local" required>
-                            </div>
-                            <button id="size-price-save-btn" class="btn btn-primary" type="submit"><i class='bx bx-save'></i> Save Price</button>
+                            <input id="size-price-effective-date" type="hidden">
+                            <button id="size-price-save-btn" class="btn btn-primary" type="submit" style="padding:0.6rem 1.25rem;">
+                                <i class='bx bx-check'></i> Save Price
+                            </button>
                         </form>
-                        <div id="size-price-chart" style="display:grid;grid-template-columns:1fr;gap:0.5rem;" class="mb-2"></div>
-                        <div class="table-responsive">
+                    </div>
+
+                    <!-- Search Filter & Grid Cards -->
+                    <div class="card mb-3 p-3">
+                        <div class="flex-between flex-wrap gap-2 mb-3">
+                            <div class="karigar-search-box" style="max-width: 320px;">
+                                <i class='bx bx-search'></i>
+                                <input type="text" id="size-price-search-input" placeholder="Search size or design...">
+                            </div>
+                            <div class="text-xs text-muted font-bold">
+                                Total Active Rates: <span id="size-price-total-count" class="text-primary font-extrabold">0</span>
+                            </div>
+                        </div>
+
+                        <div id="size-price-cards-grid" class="size-chart-grid">
+                            <!-- JS injected cards -->
+                        </div>
+
+                        <!-- Fallback Table View -->
+                        <div class="table-responsive mt-3" style="display: none;" id="size-price-table-wrap">
                             <table class="table">
                                 <thead>
                                     <tr>
-                                        <th class="text-left">Size/Design</th>
-                                        <th class="text-right">Price</th>
+                                        <th class="text-left">Size / Design</th>
+                                        <th class="text-right">Price Per Pic</th>
                                         <th class="text-center">Active From</th>
                                         <th class="text-center">Action</th>
                                     </tr>
@@ -1069,8 +1092,8 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20261108-03"></script>
-    <script src="app.js?v=20261108-03"></script>
+    <script src="lan-storage-service.js?v=20261108-04"></script>
+    <script src="app.js?v=20261108-04"></script>
 
 </body>
 </html>

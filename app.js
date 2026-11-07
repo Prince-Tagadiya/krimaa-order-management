@@ -6266,7 +6266,9 @@ async function renderSizePricesPage() {
     }
 
     const tbody = document.getElementById('size-price-tbody');
-    const chart = document.getElementById('size-price-chart');
+    const cardsGrid = document.getElementById('size-price-cards-grid');
+    const searchInput = document.getElementById('size-price-search-input');
+    const totalCountEl = document.getElementById('size-price-total-count');
     const form = document.getElementById('size-price-form');
     const keyInput = document.getElementById('size-price-key');
     const valueInput = document.getElementById('size-price-value');
@@ -6283,7 +6285,7 @@ async function renderSizePricesPage() {
     const historyBody = document.getElementById('size-price-history-tbody');
     const historyEmpty = document.getElementById('size-price-history-empty');
     const historyCloseBtn = document.getElementById('close-size-price-history-modal');
-    if (!tbody || !chart || !form || !keyInput || !valueInput || !effectiveDateInput || !saveBtn || !recycleOpenBtn || !recycleTbody || !recycleModal || !recycleEmpty || !recycleCloseBtn || !historyModal || !historyTitle || !historyBody || !historyEmpty || !historyCloseBtn) return;
+    if (!tbody || !form || !keyInput || !valueInput || !saveBtn || !recycleOpenBtn || !recycleTbody || !recycleModal || !recycleEmpty || !recycleCloseBtn || !historyModal || !historyTitle || !historyBody || !historyEmpty || !historyCloseBtn) return;
 
     const historyMap = {};
     Object.entries(rawHistoryMap || {}).forEach(([rawKey, list]) => {
@@ -6443,24 +6445,66 @@ async function renderSizePricesPage() {
         recycleModal.dataset.bound = 'true';
     }
 
+    if (cardsGrid) {
+        cardsGrid.innerHTML = rows.length ? rows.map(r => `
+            <div class="size-price-card" data-key="${r.key}">
+                <div class="flex-between">
+                    <span class="size-price-badge">${r.key}</span>
+                    <span class="size-price-amount">₹${r.value.toFixed(2)}</span>
+                </div>
+                <div class="text-xs text-muted" style="display:flex;align-items:center;gap:4px;">
+                    <i class='bx bx-check-circle text-success'></i> Active Piece Rate
+                </div>
+                <div class="flex gap-1 mt-1" style="justify-content: flex-end; padding-top: 0.5rem; border-top: 1px dashed #e2e8f0;">
+                    <button class="btn btn-outline btn-sm size-edit-btn" data-key="${r.key}" data-value="${r.value}" data-effective="${r.activeFrom}" ${isAdmin ? '' : 'disabled'} title="Edit rate">
+                        <i class='bx bx-edit'></i> Edit
+                    </button>
+                    <button class="btn btn-outline btn-sm size-history-btn" data-key="${r.key}" title="View price changes history">
+                        <i class='bx bx-history'></i>
+                    </button>
+                    <button class="btn btn-outline btn-sm text-danger size-delete-btn" data-key="${r.key}" ${isAdmin ? '' : 'disabled'} title="Delete / Move to recycle bin">
+                        <i class='bx bx-trash'></i>
+                    </button>
+                </div>
+            </div>
+        `).join('') : '<div class="card p-4 text-center text-muted" style="grid-column: 1 / -1;"><i class="bx bx-ruler text-4xl mb-2"></i><p>No size or design prices added yet. Use the form above to add your first rate!</p></div>';
+    }
+
+    if (totalCountEl) {
+        totalCountEl.textContent = String(rows.length);
+    }
+
+    if (searchInput && !searchInput.dataset.bound) {
+        searchInput.dataset.bound = 'true';
+        searchInput.addEventListener('input', () => {
+            const q = (searchInput.value || '').trim().toUpperCase();
+            if (cardsGrid) {
+                cardsGrid.querySelectorAll('.size-price-card').forEach(card => {
+                    const k = card.dataset.key || '';
+                    card.style.display = k.includes(q) ? '' : 'none';
+                });
+            }
+        });
+    }
+
     tbody.innerHTML = rows.length ? rows.map(r => `
         <tr>
             <td>${r.key}</td>
-            <td class=\"text-right\">₹${r.value.toFixed(2)}</td>
-            <td class=\"text-center\">${formatISODateTimeForDisplay(r.activeFrom) || '-'}</td>
-            <td class=\"text-center\">
-                <button class=\"btn btn-outline btn-sm size-edit-btn\" data-key=\"${r.key}\" data-value=\"${r.value}\" data-effective=\"${r.activeFrom}\" ${isAdmin ? '' : 'disabled'}>
+            <td class="text-right">₹${r.value.toFixed(2)}</td>
+            <td class="text-center">${formatISODateTimeForDisplay(r.activeFrom) || '-'}</td>
+            <td class="text-center">
+                <button class="btn btn-outline btn-sm size-edit-btn" data-key="${r.key}" data-value="${r.value}" data-effective="${r.activeFrom}" ${isAdmin ? '' : 'disabled'}>
                     <i class='bx bx-edit'></i> Edit
                 </button>
-                <button class=\"btn btn-danger btn-sm size-delete-btn\" data-key=\"${r.key}\" ${isAdmin ? '' : 'disabled'}>
+                <button class="btn btn-danger btn-sm size-delete-btn" data-key="${r.key}" ${isAdmin ? '' : 'disabled'}>
                     <i class='bx bx-trash'></i> Delete
                 </button>
-                <button class=\"btn btn-outline btn-sm size-history-btn\" data-key=\"${r.key}\">
+                <button class="btn btn-outline btn-sm size-history-btn" data-key="${r.key}">
                     <i class='bx bx-history'></i> History
                 </button>
             </td>
         </tr>
-    `).join('') : '<tr><td colspan=\"4\" class=\"text-center text-muted p-3\">No size/design prices saved yet.</td></tr>';
+    `).join('') : '<tr><td colspan="4" class="text-center text-muted p-3">No size/design prices saved yet.</td></tr>';
 
     if (recycleCountEl) recycleCountEl.textContent = String(recycleRows.length);
     recycleOpenBtn.disabled = recycleRows.length === 0;
@@ -6481,17 +6525,6 @@ async function renderSizePricesPage() {
         </tr>
     `).join('') : '<tr><td colspan="4" class="text-center text-muted p-2">No deleted sizes.</td></tr>';
     recycleEmpty.classList.toggle('hidden', recycleRows.length > 0);
-
-    const maxVal = rows.reduce((m, r) => Math.max(m, r.value), 0) || 1;
-    chart.innerHTML = rows.slice(0, 20).map(r => `
-        <div style=\"display:grid;grid-template-columns:120px 1fr 80px;gap:0.5rem;align-items:center;\">
-            <div class=\"text-xs text-muted\">${r.key}</div>
-            <div style=\"height:10px;background:#e2e8f0;border-radius:999px;overflow:hidden;\">
-                <div style=\"height:100%;width:${Math.max(4, (r.value / maxVal) * 100)}%;background:#135bec;\"></div>
-            </div>
-            <div class=\"text-right text-xs font-bold\">₹${r.value.toFixed(2)}</div>
-        </div>
-    `).join('');
 
     if (!form.dataset.bound) {
         form.addEventListener('submit', async (e) => {
@@ -6554,7 +6587,7 @@ async function renderSizePricesPage() {
         keyInput.dataset.bound = 'true';
     }
 
-    tbody.querySelectorAll('.size-edit-btn').forEach(btn => {
+    document.querySelectorAll('.size-edit-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             if (!isAdminUser()) return;
             form.dataset.editMode = '1';
@@ -6569,7 +6602,7 @@ async function renderSizePricesPage() {
         });
     });
 
-    tbody.querySelectorAll('.size-delete-btn').forEach(btn => {
+    document.querySelectorAll('.size-delete-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
             if (!isAdminUser()) return;
             const key = String(btn.dataset.key || '').trim().toUpperCase();
@@ -6612,7 +6645,7 @@ async function renderSizePricesPage() {
         });
     });
 
-    tbody.querySelectorAll('.size-history-btn').forEach(btn => {
+    document.querySelectorAll('.size-history-btn').forEach(btn => {
         btn.addEventListener('click', () => openHistoryModal(btn.dataset.key || ''));
     });
     recycleTbody.querySelectorAll('.size-recycle-history-btn').forEach(btn => {
@@ -7047,50 +7080,51 @@ function renderKarigarGrid() {
         const lastActivity = stats.lastTx ? `<span class="text-xs text-muted">Last active: ${formatISODateForDisplay(stats.lastTx.date)}</span>` : '<span class="text-xs text-muted">No activity yet</span>';
         
         const isNegative = stats.balance < 0;
-        const balColor = isNegative ? 'var(--danger)' : 'var(--success)';
+        const balColor = isNegative ? '#dc2626' : '#16a34a';
         
         html += `
-            <div class="card" style="display:flex; flex-direction:column; gap: 1rem;">
-                <div class="flex-between">
+            <div class="karigar-card">
+                <div class="karigar-card-header">
                     <div>
-                        <h3 class="font-bold text-lg">${k.name}</h3>
-                        ${lastActivity}
+                        <h3 class="karigar-card-name">${k.name}</h3>
+                        <div class="karigar-card-subtitle">${lastActivity}</div>
                     </div>
-                    <div class="karigar-balance-val" style="background: ${isNegative ? '#fee2e2' : '#dcfce7'}; color: ${balColor}; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: bold; text-align: right;">
-                        <span style="font-size: 0.7rem; display:block; text-transform:uppercase; margin-bottom: -2px;">Balance</span>
+                    <div class="karigar-bal-badge" style="background: ${isNegative ? '#fee2e2' : '#dcfce7'}; color: ${balColor};">
+                        <span class="bal-label">Balance</span>
                         <span class="actual-bal">₹${Math.abs(stats.balance).toFixed(2)}${isNegative ? ' Due' : ' Clear'}</span>
                     </div>
                 </div>
                 
-                <div style="display: flex; gap: 1rem; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); padding: 0.75rem 0; margin: 0 -0.5rem; justify-content: space-around; text-align: center;">
-                    <div>
-                        <span class="text-xs text-muted" style="display:block;">Total Maal (Jama)</span>
-                        <strong class="text-success">₹${stats.totalJama.toFixed(2)}</strong>
+                <div class="karigar-metrics-strip">
+                    <div class="m-col">
+                        <span class="m-lbl">Maal (Jama)</span>
+                        <span class="m-val text-success">₹${stats.totalJama.toFixed(2)}</span>
                     </div>
-                    <div style="width: 1px; background: var(--border-color);"></div>
-                    <div>
-                        <span class="text-xs text-muted" style="display:block;">Total Borrow (Upad)</span>
-                        <strong class="text-danger">₹${stats.totalUpad.toFixed(2)}</strong>
+                    <div class="m-col">
+                        <span class="m-lbl">Borrow (Upad)</span>
+                        <span class="m-val text-danger">₹${stats.totalUpad.toFixed(2)}</span>
                     </div>
-                    <div style="width: 1px; background: var(--border-color);"></div>
-                    <div>
-                        <span class="text-xs text-muted" style="display:block;">Total Pics</span>
-                        <strong class="text-primary">${stats.totalPics}</strong>
+                    <div class="m-col">
+                        <span class="m-lbl">Total Pics</span>
+                        <span class="m-val text-primary">${stats.totalPics}</span>
                     </div>
                 </div>
 
-                <div class="flex gap-2 w-100" style="margin-top: auto; display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
-                    <button class="btn btn-outline btn-karigar-upad ${isAdmin ? '' : 'disabled'}" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" ${isAdmin ? '' : 'disabled title="Only admin can add Borrow (Upad)"'}>
-                        <i class='bx bx-minus-circle'></i> Borrow (Upad)
+                <div class="karigar-actions-primary">
+                    <button class="btn btn-outline btn-karigar-upad ${isAdmin ? '' : 'disabled'}" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" ${isAdmin ? '' : 'disabled title="Only admin can add Borrow (Upad)"'} style="color:#dc2626; border-color:#fca5a5;">
+                        <i class='bx bx-minus-circle'></i> Borrow
                     </button>
-                    <button class="btn btn-primary btn-karigar-jama" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}">
+                    <button class="btn btn-primary btn-karigar-jama" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="background:#059669; border-color:#059669;">
                         <i class='bx bx-plus-circle'></i> Maal (Jama)
                     </button>
-                    <button class="btn btn-outline btn-sm btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2;">
-                        <i class='bx bx-history'></i> View Detailed History
+                </div>
+
+                <div class="karigar-actions-secondary">
+                    <button class="btn-subtle btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="View detailed history">
+                        <i class='bx bx-history'></i> History
                     </button>
-                    <button class="btn btn-outline btn-sm btn-karigar-slip-pdf" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2; border-color:#cbd5e1; background:#f8fafc;" title="Download Black & White Printable Salary Slip (PDF)">
-                        <i class='bx bxs-file-pdf text-danger'></i> Download Salary Slip (PDF)
+                    <button class="btn-subtle btn-karigar-slip-pdf" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="Download printable salary slip PDF">
+                        <i class='bx bxs-file-pdf text-danger'></i> Salary Slip
                     </button>
                 </div>
             </div>
