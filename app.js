@@ -1984,6 +1984,7 @@ async function switchCompany(previousCompany = '') {
         if (AppState.currentSection === 'dashboard') renderDashboard();
         else if (AppState.currentSection === 'add-account') renderAccountsList();
         else if (AppState.currentSection === 'karigar') renderKarigarPage(true);
+        else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
         else if (AppState.currentSection === 'data-sheet') {
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
@@ -2011,6 +2012,7 @@ async function switchCompany(previousCompany = '') {
         if (AppState.currentSection === 'dashboard') renderDashboard();
         else if (AppState.currentSection === 'add-account') renderAccountsList();
         else if (AppState.currentSection === 'karigar') await renderKarigarPage(true);
+        else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
         else if (AppState.currentSection === 'data-sheet') { 
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
@@ -2174,6 +2176,7 @@ function applyRolePermissions() {
     const navSheet = document.getElementById('nav-data-sheet');
     const navAccounts = document.getElementById('nav-manage-accounts');
     const navKarigar = document.getElementById('nav-karigar');
+    const navSizePrices = document.getElementById('nav-size-prices');
 
     if (role === 'order' || role === 'order_c2') {
         // Order role: allow Data Sheet, Manage Accounts if permitted (e.g. Dhyan Order), and Karigar Management
@@ -2181,11 +2184,13 @@ function applyRolePermissions() {
         if (navSheet) navSheet.style.display = '';
         if (navAccounts) navAccounts.style.display = canManageAccounts() ? '' : 'none';
         if (navKarigar) navKarigar.style.display = '';
+        if (navSizePrices) navSizePrices.style.display = '';
     } else {
         if (navDash) navDash.style.display = '';
         if (navSheet) navSheet.style.display = '';
         if (navAccounts) navAccounts.style.display = '';
         if (navKarigar) navKarigar.style.display = '';
+        if (navSizePrices) navSizePrices.style.display = '';
     }
 
     const allowedSet = new Set(getAllowedCompanies());
@@ -6667,7 +6672,20 @@ async function loadKarigarData(forceReload = false) {
             rebuildKarigarComputedCache();
         }
         if (pRes.success) {
-            AppState.designPrices = pRes.data || {};
+            let priceMap = {};
+            if (Array.isArray(pRes.data)) {
+                pRes.data.forEach(item => {
+                    const k = String(item.key || item.id || '').split('__').slice(-1)[0].trim().toUpperCase();
+                    if (k && !item.isDeletedLatest && !item.isDeleted) {
+                        priceMap[k] = Math.round(((parseFloat(item.price) || 0) + Number.EPSILON) * 100) / 100;
+                    }
+                });
+            } else if (pRes.data && typeof pRes.data === 'object') {
+                Object.entries(pRes.data).forEach(([k, v]) => {
+                    priceMap[String(k).trim().toUpperCase()] = Math.round(((parseFloat(v) || 0) + Number.EPSILON) * 100) / 100;
+                });
+            }
+            AppState.designPrices = priceMap;
             AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = AppState.designPrices;
             AppState.designPriceHistoryByCompany[DESIGN_PRICE_SCOPE] = pRes.history || {};
         }
@@ -7479,17 +7497,18 @@ function openKarigarHistoryModal(id, name) {
     
     let totalJama = 0;
     let totalUpad = 0;
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
     
     if (txs.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-muted">No transactions recorded for this karigar.</td></tr>';
     } else {
         txs.forEach(t => {
             const isJama = t.type === 'jama';
-            const jamaVal = isJama ? parseFloat(t.total || 0) : 0;
-            const upadVal = isJama ? parseFloat(t.upadAmount || 0) : parseFloat(t.amount || 0);
+            const jamaVal = isJama ? round2(t.total || 0) : 0;
+            const upadVal = isJama ? round2(t.upadAmount || 0) : round2(t.amount || 0);
             
-            totalJama += jamaVal;
-            totalUpad += upadVal;
+            totalJama = round2(totalJama + jamaVal);
+            totalUpad = round2(totalUpad + upadVal);
             
             let companyTag = '';
             if (t.companyId === 'company1') companyTag = `<span class="badge badge-primary badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C1</span>`;
@@ -7531,12 +7550,13 @@ function openKarigarHistoryModal(id, name) {
         });
     }
     
+    const netBal = round2(totalJama - totalUpad);
     document.getElementById('history-total-jama').textContent = '₹' + totalJama.toFixed(2);
     document.getElementById('history-total-upad').textContent = '₹' + totalUpad.toFixed(2);
-    document.getElementById('history-net-balance').textContent = '₹' + (totalJama - totalUpad).toFixed(2);
+    document.getElementById('history-net-balance').textContent = '₹' + netBal.toFixed(2);
     
     const balEl = document.getElementById('history-net-balance');
-    if (totalJama - totalUpad < 0) {
+    if (netBal < 0) {
         balEl.classList.remove('text-primary', 'text-success');
         balEl.classList.add('text-danger');
     } else {
@@ -7656,13 +7676,14 @@ async function editKarigarHistory(txId, karigarId, karigarName) {
         updates.designName = String(newDesign || '').trim();
         updates.size = String(newSize || '').trim();
         updates.pic = parseInt(newPic, 10) || 0;
-        updates.price = parseFloat(newPrice) || 0;
-        updates.upadAmount = parseFloat(newUpad) || 0;
+        updates.price = Math.round(((parseFloat(newPrice) || 0) + Number.EPSILON) * 100) / 100;
+        updates.upadAmount = Math.round(((parseFloat(newUpad) || 0) + Number.EPSILON) * 100) / 100;
+        updates.total = Math.round(((updates.pic * updates.price) + Number.EPSILON) * 100) / 100;
         updates.type = 'jama';
     } else {
         const newAmount = prompt('Borrow Amount:', String(tx.amount || 0));
         if (newAmount === null) return;
-        updates.amount = parseFloat(newAmount) || 0;
+        updates.amount = Math.round(((parseFloat(newAmount) || 0) + Number.EPSILON) * 100) / 100;
         updates.type = 'upad';
     }
 

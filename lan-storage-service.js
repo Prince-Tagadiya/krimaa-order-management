@@ -257,28 +257,75 @@ const LanStorageService = (() => {
     }
 
     async function enqueueSyncOp(colName, docId, data, op) {
-        // Firebase disabled for offline LAN mode
-        return;
+        if (!_dirHandle || _status !== 'connected') return;
+        try {
+            const queue = await _loadQueue();
+            const existingIdx = queue.findIndex(q => q.colName === colName && q.docId === docId && q.op === op);
+            const entry = { colName, docId, data, op, queuedAt: new Date().toISOString() };
+            if (existingIdx >= 0) {
+                queue[existingIdx] = entry;
+            } else {
+                queue.push(entry);
+            }
+            await _saveQueue(queue);
+            _pendingCount = queue.length;
+            _notifyPendingBadge();
+        } catch (e) {
+            console.warn('[LAN] Failed to enqueue sync op:', e.message);
+        }
     }
 
     async function getPendingCount() {
-        return 0;
+        if (!_dirHandle) return 0;
+        const queue = await _loadQueue();
+        return queue.length;
     }
 
     async function _refreshPendingCount() {
-        _pendingCount = 0;
+        _pendingCount = await getPendingCount();
         _notifyPendingBadge();
     }
 
     function _notifyPendingBadge() {
         if (typeof window !== 'undefined' && typeof window.updateFirebasePendingBadge === 'function') {
-            window.updateFirebasePendingBadge(0, _status);
+            window.updateFirebasePendingBadge(_pendingCount, _status);
         }
     }
 
     async function flushSyncQueue() {
-        // Firebase disabled for offline LAN mode
-        return;
+        if (!_dirHandle || _status !== 'connected') return;
+        const queue = await _loadQueue();
+        if (!queue.length) return;
+        if (typeof firebase === 'undefined' || !firebase.apps || !firebase.apps.length) return;
+
+        const remaining = [];
+        let successCount = 0;
+        const db = firebase.firestore();
+        for (const entry of queue) {
+            try {
+                const ref = db.collection(entry.colName).doc(entry.docId);
+                if (entry.op === 'delete') {
+                    await ref.delete();
+                } else if (entry.op === 'merge') {
+                    await ref.set(entry.data, { merge: true });
+                } else {
+                    await ref.set(entry.data);
+                }
+                successCount++;
+            } catch (e) {
+                console.warn('[LAN] Sync flush failed for', entry.colName, entry.docId, '— will retry:', e.message);
+                remaining.push(entry);
+            }
+        }
+        await _saveQueue(remaining);
+        _pendingCount = remaining.length;
+        _notifyPendingBadge();
+        if (remaining.length === 0) {
+            console.log('[LAN] All queued operations flushed to Firebase!');
+        }
+        if (successCount > 0 && typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('lan:sync-flushed', { detail: { count: successCount } }));
+        }
     }
 
     // ───── FIREBASE → LAN PULL SYNC ─────
@@ -399,7 +446,29 @@ const LanStorageService = (() => {
             if (action === 'getDesignPrices') {
                 const all = await readFile('design_prices', []);
                 const filtered = all.filter(d => (d.companyId || 'global') === (companyId || 'global'));
-                return { success: true, data: filtered };
+                const map = {};
+                filtered.forEach(d => {
+                    const key = String(d.key || d.id || '').split('__').slice(-1)[0].trim().toUpperCase();
+                    if (key && !d.isDeletedLatest && !d.isDeleted) {
+                        map[key] = Math.round(((parseFloat(d.price) || 0) + Number.EPSILON) * 100) / 100;
+                    }
+                });
+                const allHistory = await readFile('design_price_history', []);
+                const historyByKey = {};
+                allHistory.filter(d => (d.companyId || 'global') === (companyId || 'global')).forEach(h => {
+                    const k = String(h.key || '').trim().toUpperCase();
+                    if (!k) return;
+                    if (!historyByKey[k]) historyByKey[k] = [];
+                    historyByKey[k].push({
+                        effectiveFrom: h.effectiveFrom || h.updatedAt || '',
+                        price: Math.round(((parseFloat(h.price) || 0) + Number.EPSILON) * 100) / 100,
+                        isDeleted: !!h.isDeleted
+                    });
+                });
+                Object.keys(historyByKey).forEach(k => {
+                    historyByKey[k].sort((a, b) => String(a.effectiveFrom).localeCompare(String(b.effectiveFrom)));
+                });
+                return { success: true, data: map, raw: filtered, history: historyByKey, companyId };
             }
             if (action === 'getRemarks') {
                 const all = await readFile('remarks', []);

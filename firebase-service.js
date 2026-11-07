@@ -111,23 +111,28 @@ async function _deleteLocalDoc(colName, docId) {
 function _syncToCloudInBackground(colName, docId, data, op) {
     (async () => {
         try {
-            // If LAN is connected, queue the op for background push
-            if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-                await window.LanStorageService.enqueueSyncOp(colName, docId, data, op);
+            // Direct Firebase write if online and available
+            if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0) {
+                const db = firebase.firestore();
+                const ref = db.collection(colName).doc(docId);
+                if (op === 'delete') {
+                    await ref.delete();
+                } else if (op === 'merge') {
+                    await ref.set(data, { merge: true });
+                } else {
+                    await ref.set(data);
+                }
                 return;
             }
-            // Direct Firebase write when not in LAN mode
-            const db = firebase.firestore();
-            const ref = db.collection(colName).doc(docId);
-            if (op === 'delete') {
-                await ref.delete();
-            } else if (op === 'merge') {
-                await ref.set(data, { merge: true });
-            } else {
-                await ref.set(data);
+            // If offline or Firebase not yet initialized, enqueue in LAN sync queue
+            if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+                await window.LanStorageService.enqueueSyncOp(colName, docId, data, op);
             }
         } catch (e) {
             console.warn("Background cloud sync paused (offline):", e.message);
+            if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
+                await window.LanStorageService.enqueueSyncOp(colName, docId, data, op);
+            }
         }
     })();
 }
@@ -392,44 +397,6 @@ class RtdbDocSnapshot {
 }
 
 const FirebaseService = (() => {
-    // Pure offline LAN mode - Firebase & Firestore are disabled
-    console.log('[FIREBASE] Firebase and Firestore are disabled / commented out. Pure offline LAN mode active.');
-    return {
-        init: () => {},
-        getDb: () => null,
-        bufferWrite: (key, fn) => { if (typeof fn === 'function') fn(); },
-        flushWrites: async () => {},
-        getPendingCount: () => 0,
-        getSyncStatus: () => 'offline',
-        onSyncStatusChange: () => {},
-        getAccounts: async () => ({ success: true, data: [] }),
-        getOrders: async () => ({ success: true, data: [] }),
-        updateOrder: async () => ({ success: true }),
-        saveRemark: async () => ({ success: true }),
-        getRemarks: async () => ({ success: true, data: [] }),
-        addAccount: async () => ({ success: true }),
-        editAccount: async () => ({ success: true }),
-        deleteAccount: async () => ({ success: true }),
-        updateAccountOrder: async () => ({ success: true }),
-        submitOrders: async () => ({ success: true }),
-        isEmpty: async () => false,
-        setBackupMeta: async () => {},
-        getBackupMeta: async () => null,
-        getAllDataForBackup: async () => ({}),
-        backupAndArchiveMonthlyData: async () => ({ success: true }),
-        clearOldOrders: async () => ({ success: true }),
-        seedFromSheets: async () => ({ success: true }),
-        migrateLegacyOrdersToDailyOrders: async () => ({ success: true }),
-        migrateDatabaseToIds: async () => ({ success: true }),
-        getKarigars: async () => ({ success: true, data: [] }),
-        getKarigarTransactions: async () => ({ success: true, data: [] }),
-        getDesignPrices: async () => ({ success: true, data: [] }),
-        fixHistoricalDataIntegrity: async () => ({ success: true }),
-        syncFromSheets: async () => ({ success: true }),
-        replaceFromSheets: async () => ({ success: true }),
-        replaceFromSheetsSelective: async () => ({ success: true }),
-    };
-
     let db = null;
     let _initialized = false;
 
@@ -444,10 +411,12 @@ const FirebaseService = (() => {
     // ───── INIT ─────
     function init() {
         if (_initialized) return;
-        if (typeof FIREBASE_CONFIG !== 'undefined') {
+        if (typeof FIREBASE_CONFIG !== 'undefined' && FIREBASE_CONFIG) {
             FIREBASE_CONFIG.databaseURL = "https://krimaa-f7fc3-default-rtdb.asia-southeast1.firebasedatabase.app/";
         }
-        firebase.initializeApp(FIREBASE_CONFIG);
+        if (typeof firebase !== 'undefined' && firebase.apps && !firebase.apps.length && typeof FIREBASE_CONFIG !== 'undefined') {
+            firebase.initializeApp(FIREBASE_CONFIG);
+        }
         db = new RtdbShim();
         
         // Keep default online mode to avoid deprecated persistence API warnings.
@@ -2328,7 +2297,7 @@ const FirebaseService = (() => {
             karigarName: String(data.karigarName || '').trim(),
             date: safeTxDate,
             transactionDateTime: transactionDateTime,
-            amount: parseFloat(data.amount),
+            amount: Math.round(((parseFloat(data.amount) || 0) + Number.EPSILON) * 100) / 100,
             companyId: safeCompanyId,
             addedBy: data.addedBy || 'admin',
             ...buildActorMeta(actor, 'created'),
@@ -2372,9 +2341,9 @@ const FirebaseService = (() => {
         if (typeof updates.designName !== 'undefined') patch.designName = String(updates.designName || '').trim();
         if (typeof updates.size !== 'undefined') patch.size = String(updates.size || '').trim();
         if (typeof updates.pic !== 'undefined') patch.pic = parseInt(updates.pic, 10) || 0;
-        if (typeof updates.price !== 'undefined') patch.price = parseFloat(updates.price) || 0;
-        if (typeof updates.upadAmount !== 'undefined') patch.upadAmount = parseFloat(updates.upadAmount) || 0;
-        if (typeof updates.amount !== 'undefined') patch.amount = parseFloat(updates.amount) || 0;
+        if (typeof updates.price !== 'undefined') patch.price = Math.round(((parseFloat(updates.price) || 0) + Number.EPSILON) * 100) / 100;
+        if (typeof updates.upadAmount !== 'undefined') patch.upadAmount = Math.round(((parseFloat(updates.upadAmount) || 0) + Number.EPSILON) * 100) / 100;
+        if (typeof updates.amount !== 'undefined') patch.amount = Math.round(((parseFloat(updates.amount) || 0) + Number.EPSILON) * 100) / 100;
 
         const finalType = String(updates.type || current.type || '').trim().toLowerCase();
         if (finalType) patch.type = finalType;
@@ -2388,7 +2357,7 @@ const FirebaseService = (() => {
         if (shouldRecalcTotal) {
             const pic = typeof patch.pic !== 'undefined' ? patch.pic : (parseInt(current.pic, 10) || 0);
             const price = typeof patch.price !== 'undefined' ? patch.price : (parseFloat(current.price) || 0);
-            patch.total = price * pic;
+            patch.total = Math.round(((price * pic) + Number.EPSILON) * 100) / 100;
         }
 
         await txRef.update(patch);

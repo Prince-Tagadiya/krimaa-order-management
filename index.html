@@ -105,6 +105,7 @@
                 <li id="nav-data-sheet"><a href="#" class="nav-btn active" data-target="data-sheet"><i class='bx bx-spreadsheet'></i> Data Sheet</a></li>
                 <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
                 <li id="nav-karigar"><a href="#" class="nav-btn" data-target="karigar"><i class='bx bx-user-circle'></i> Karigar Management</a></li>
+                <li id="nav-size-prices"><a href="#" class="nav-btn" data-target="size-prices"><i class='bx bx-ruler'></i> Size Prices</a></li>
                 <!-- <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li> -->
             </ul>
             <div class="sidebar-footer">
@@ -418,6 +419,52 @@
                     <!-- Karigar Grid -->
                     <div id="karigar-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
                         <!-- JS injected cards -->
+                    </div>
+                </section>
+
+                <!-- ========== SIZE PRICES ========== -->
+                <section id="size-prices" class="content-section">
+                    <div class="card">
+                        <div class="flex-between mb-2">
+                            <div>
+                                <h2 class="page-title font-bold text-xl"><i class='bx bx-ruler'></i> Size Price Management</h2>
+                                <p class="text-sm text-muted">Saved Size/Design prices used in Jama auto-fill.</p>
+                            </div>
+                            <div>
+                                <button id="size-price-recycle-open-btn" class="btn btn-outline btn-sm" type="button">
+                                    <i class='bx bx-trash'></i> Recycle Bin (<span id="size-price-recycle-count">0</span>)
+                                </button>
+                            </div>
+                        </div>
+                        <form id="size-price-form" class="mb-2" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:0.75rem;align-items:end;">
+                            <div class="input-group" style="margin:0;">
+                                <label>Size / Design</label>
+                                <input id="size-price-key" type="text" placeholder="e.g. 1128 or XL" required>
+                            </div>
+                            <div class="input-group" style="margin:0;">
+                                <label>Price (₹)</label>
+                                <input id="size-price-value" type="number" step="0.01" min="0" placeholder="e.g. 90" required>
+                            </div>
+                            <div class="input-group" style="margin:0;">
+                                <label>Active From</label>
+                                <input id="size-price-effective-date" type="datetime-local" required>
+                            </div>
+                            <button id="size-price-save-btn" class="btn btn-primary" type="submit"><i class='bx bx-save'></i> Save Price</button>
+                        </form>
+                        <div id="size-price-chart" style="display:grid;grid-template-columns:1fr;gap:0.5rem;" class="mb-2"></div>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th class="text-left">Size/Design</th>
+                                        <th class="text-right">Price</th>
+                                        <th class="text-center">Active From</th>
+                                        <th class="text-center">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="size-price-tbody"></tbody>
+                            </table>
+                        </div>
                     </div>
                 </section>
 
@@ -964,24 +1011,23 @@
         </div>
     </div>
 
-    <!-- Firebase SDK (compat for vanilla JS) - Disabled for offline LAN mode
+    <!-- Firebase SDK (compat for vanilla JS) -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
-    -->
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <script src="runtime-env-loader.js"></script>
-    <script src="firebase-service.js?v=20260929-09"></script>
+    <script src="firebase-service.js?v=20261107-02"></script>
     <div id="background-sheets-loader" class="hidden" style="position: fixed; bottom: 20px; right: 20px; background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: 10px; border-radius: 50%; width: 40px; height: 40px; z-index: 9999; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20261107-01"></script>
-    <script src="app.js?v=20261107-01"></script>
+    <script src="lan-storage-service.js?v=20261107-02"></script>
+    <script src="app.js?v=20261107-02"></script>
 
 </body>
 </html>
