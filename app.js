@@ -848,9 +848,17 @@ function startLanFolderWatcher() {
                     _apiReadCache.clear();
                 }
                 await fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true });
-                if (typeof navigateTo === 'function') {
-                    const activeSection = document.querySelector('.nav-btn.active')?.dataset.section || 'data-sheet';
-                    navigateTo(activeSection);
+                const currentSec = AppState.currentSection || document.querySelector('.nav-btn.active')?.dataset.target || 'data-sheet';
+                if (currentSec === 'karigar') {
+                    await renderKarigarPage(false);
+                } else if (currentSec === 'size-prices') {
+                    await renderSizePricesPage();
+                } else if (currentSec === 'data-sheet') {
+                    if (!(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) {
+                        renderDataSheet();
+                    }
+                } else if (typeof navigateTo === 'function') {
+                    navigateTo(currentSec);
                 }
                 showToast('🔄 LAN folder updated! Data reloaded smoothly.', 'info');
             }
@@ -7645,6 +7653,17 @@ function setupKarigarFastEnterNavigation() {
             }
         });
 
+        // Fast Arrow Key browsing for Karigar dropdown
+        if (id === 'karigar-jama-select') {
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    setTimeout(() => {
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }, 0);
+                }
+            });
+        }
+
         el.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
             if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -7653,6 +7672,19 @@ function setupKarigarFastEnterNavigation() {
 
             const form = document.getElementById('karigar-jama-form');
             if (form && form.dataset.submitting === 'true') return;
+
+            // Karigar select Enter -> jump straight to Design Name / No.
+            if (id === 'karigar-jama-select') {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                const designEl = document.getElementById('karigar-jama-design');
+                if (designEl) {
+                    designEl.focus();
+                    if (typeof designEl.select === 'function') {
+                        try { designEl.select(); } catch (err) {}
+                    }
+                }
+                return;
+            }
 
             const isLastField = (!isAdminUser() && (id === 'karigar-jama-price' || id === 'karigar-jama-pic')) || (index >= jamaFields.length - 1);
             if (isLastField) {
@@ -7703,6 +7735,17 @@ function setupKarigarFastEnterNavigation() {
             }
         });
 
+        // Fast Arrow Key browsing for Karigar dropdown - instantly refreshes balance display
+        if (id === 'karigar-upad-select') {
+            el.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    setTimeout(() => {
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }, 0);
+                }
+            });
+        }
+
         el.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
             if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -7712,7 +7755,20 @@ function setupKarigarFastEnterNavigation() {
             const form = document.getElementById('karigar-upad-form');
             if (form && form.dataset.submitting === 'true') return;
 
-            if (index >= upadFields.length - 1) {
+            // Karigar select Enter -> jump straight to Upad Amount
+            if (id === 'karigar-upad-select') {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                const amountEl = document.getElementById('karigar-upad-amount');
+                if (amountEl) {
+                    amountEl.focus();
+                    if (typeof amountEl.select === 'function') {
+                        try { amountEl.select(); } catch (err) {}
+                    }
+                }
+                return;
+            }
+
+            if (index >= upadFields.length - 1 || id === 'karigar-upad-amount') {
                 if (typeof form?.requestSubmit === 'function') {
                     form.requestSubmit();
                 } else {
@@ -7799,10 +7855,16 @@ function openKarigarJamaModal(id, name) {
     document.getElementById('karigar-jama-total-display').textContent = '0';
     document.getElementById('karigar-jama-modal').classList.add('show');
 
-    // Bulk entry UX: focus design field immediately.
+    // Focus Karigar dropdown so Arrow keys browse karigars and Enter moves to Design
     setTimeout(() => {
-        document.getElementById('karigar-jama-design')?.focus();
-    }, 0);
+        setupKarigarFastEnterNavigation();
+        const sel = document.getElementById('karigar-jama-select');
+        if (sel) {
+            sel.focus();
+        } else {
+            document.getElementById('karigar-jama-design')?.focus();
+        }
+    }, 40);
 }
 
 function openKarigarUpadModal(id, name) {
@@ -7870,6 +7932,17 @@ function openKarigarUpadModal(id, name) {
     }
     
     document.getElementById('karigar-upad-modal').classList.add('show');
+
+    // Focus Karigar dropdown so Arrow keys browse karigars and Enter moves to Upad Amount
+    setTimeout(() => {
+        setupKarigarFastEnterNavigation();
+        const sel = document.getElementById('karigar-upad-select');
+        if (sel) {
+            sel.focus();
+        } else {
+            document.getElementById('karigar-upad-amount')?.focus();
+        }
+    }, 40);
 }
 
 function openKarigarHistoryModal(id, name) {
