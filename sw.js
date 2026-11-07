@@ -1,7 +1,7 @@
 // ===== KRIMAA SERVICE WORKER — OFFLINE-FIRST =====
 // Cache all app shell + CDN assets. Serve from cache first, network as fallback.
 // Increment CACHE_VER whenever you deploy new code.
-const CACHE_VER = 'krimaa-v23';
+const CACHE_VER = 'krimaa-v24';
 
 const SHELL_FILES = [
     '/',
@@ -34,7 +34,18 @@ const ALL_CACHE_FILES = [...SHELL_FILES, ...CDN_FILES];
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_VER).then(async (cache) => {
-            await cache.addAll(SHELL_FILES);
+            await Promise.all(
+                SHELL_FILES.map(async (url) => {
+                    try {
+                        const res = await fetch(url, { cache: 'reload' });
+                        if (res && res.status === 200) {
+                            await cache.put(url, res);
+                        }
+                    } catch (e) {
+                        console.warn('[SW] Could not cache shell file:', url, e.message);
+                    }
+                })
+            );
             for (const url of CDN_FILES) {
                 try {
                     await cache.add(new Request(url, { mode: 'cors' }));
