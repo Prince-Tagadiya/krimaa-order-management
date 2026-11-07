@@ -1983,6 +1983,7 @@ async function switchCompany(previousCompany = '') {
         applyCurrentCompanySnapshotFromMemory();
         if (AppState.currentSection === 'dashboard') renderDashboard();
         else if (AppState.currentSection === 'add-account') renderAccountsList();
+        else if (AppState.currentSection === 'karigar') renderKarigarPage(true);
         else if (AppState.currentSection === 'data-sheet') {
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
@@ -2009,6 +2010,7 @@ async function switchCompany(previousCompany = '') {
 
         if (AppState.currentSection === 'dashboard') renderDashboard();
         else if (AppState.currentSection === 'add-account') renderAccountsList();
+        else if (AppState.currentSection === 'karigar') await renderKarigarPage(true);
         else if (AppState.currentSection === 'data-sheet') { 
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
@@ -2171,16 +2173,19 @@ function applyRolePermissions() {
     const navDash = document.getElementById('nav-dashboard');
     const navSheet = document.getElementById('nav-data-sheet');
     const navAccounts = document.getElementById('nav-manage-accounts');
+    const navKarigar = document.getElementById('nav-karigar');
 
     if (role === 'order' || role === 'order_c2') {
-        // Order role: allow Data Sheet, and Manage Accounts if permitted (e.g. Dhyan Order)
+        // Order role: allow Data Sheet, Manage Accounts if permitted (e.g. Dhyan Order), and Karigar Management
         if (navDash) navDash.style.display = 'none';
         if (navSheet) navSheet.style.display = '';
         if (navAccounts) navAccounts.style.display = canManageAccounts() ? '' : 'none';
+        if (navKarigar) navKarigar.style.display = '';
     } else {
         if (navDash) navDash.style.display = '';
         if (navSheet) navSheet.style.display = '';
         if (navAccounts) navAccounts.style.display = '';
+        if (navKarigar) navKarigar.style.display = '';
     }
 
     const allowedSet = new Set(getAllowedCompanies());

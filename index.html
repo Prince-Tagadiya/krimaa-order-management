@@ -104,6 +104,7 @@
             <ul class="nav-links mt-2">
                 <li id="nav-data-sheet"><a href="#" class="nav-btn active" data-target="data-sheet"><i class='bx bx-spreadsheet'></i> Data Sheet</a></li>
                 <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
+                <li id="nav-karigar"><a href="#" class="nav-btn" data-target="karigar"><i class='bx bx-user-circle'></i> Karigar Management</a></li>
                 <!-- <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li> -->
             </ul>
             <div class="sidebar-footer">
@@ -382,9 +383,43 @@
                 <!-- ========== MONEY BACKUP ========== -->
                 
 
-                
+                <!-- ========== KARIGAR MANAGEMENT ========== -->
+                <section id="karigar" class="content-section">
+                    <div class="flex-between mb-2">
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <h2 class="page-title font-bold text-xl"><i class='bx bx-user-circle'></i> Karigar Management</h2>
+                            <button id="btn-reset-karigar" class="btn btn-outline btn-sm text-danger" style="display: none;"><i class='bx bx-refresh'></i> Reset Karigar Data</button>
+                        </div>
+                        <div class="flex gap-2 items-center">
+                            <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Export to PDF"><i class='bx bxs-file-pdf'></i> Export PDF</button>
+                            <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn"><i class='bx bx-archive'></i> View History</button>
+                            <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: right;">
+                                <span class="text-xs text-muted uppercase font-bold mr-2">Total Pics</span>
+                                <strong id="karigar-overall-pics" class="text-lg text-primary">0</strong>
+                            </div>
+                            <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                                <span class="text-xs text-muted uppercase font-bold mr-2">Total Payable Balance</span>
+                                <strong id="karigar-overall-balance" class="text-lg text-primary">₹0.00</strong>
+                            </div>
+                        </div>
+                    </div>
 
-                
+                    <div class="card mb-3">
+                        <div class="flex-between" style="gap: 1rem; align-items: stretch; flex-wrap: wrap;">
+                            <div class="input-group" style="flex: 1; margin: 0;">
+                                <input type="text" id="karigar-search-input" placeholder="Search by Karigar name..." style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;">
+                            </div>
+                            <button class="btn btn-primary" id="btn-create-karigar" style="display: none; white-space: nowrap;">
+                                <i class='bx bx-plus'></i> Create New Karigar
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Karigar Grid -->
+                    <div id="karigar-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem;">
+                        <!-- JS injected cards -->
+                    </div>
+                </section>
 
                 <!-- ========== DATA SHEET ========== -->
                 <section id="data-sheet" class="content-section">
@@ -945,8 +980,8 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20260930-17"></script>
-    <script src="app.js?v=20260930-17"></script>
+    <script src="lan-storage-service.js?v=20261107-01"></script>
+    <script src="app.js?v=20261107-01"></script>
 
 </body>
 </html>
