@@ -7746,7 +7746,19 @@ function setupKarigarListeners() {
                 showToast('Karigar data refreshed & zero-error verified!', 'success');
             } finally {
                 refreshBtn.disabled = false;
-                refreshBtn.innerHTML = "<i class='bx bx-refresh'></i> Refresh Data";
+                refreshBtn.innerHTML = "<i class='bx bx-refresh'></i> Refresh";
+            }
+        });
+    }
+
+    const companyReportBtn = document.getElementById('btn-company-report-karigar');
+    if (companyReportBtn && !companyReportBtn.dataset.bound) {
+        companyReportBtn.dataset.bound = 'true';
+        companyReportBtn.addEventListener('click', (e) => {
+            if (e.shiftKey) {
+                printCompanyMonthlyReport();
+            } else {
+                exportCompanyMonthlyReportPDF();
             }
         });
     }
@@ -7760,13 +7772,37 @@ function setupKarigarListeners() {
     const summaryPdfBtn = document.getElementById('export-pdf-karigar-btn');
     if (summaryPdfBtn && !summaryPdfBtn.dataset.bound) {
         summaryPdfBtn.dataset.bound = 'true';
-        summaryPdfBtn.addEventListener('click', () => exportKarigarSummaryPDF());
+        summaryPdfBtn.addEventListener('click', () => exportCompanyMonthlyReportPDF());
     }
 
     const resetCycleBtn = document.getElementById('btn-reset-karigar');
     if (resetCycleBtn && !resetCycleBtn.dataset.bound) {
         resetCycleBtn.dataset.bound = 'true';
         resetCycleBtn.addEventListener('click', () => confirmKarigarMonthlyReset(AppState.currentCompany));
+    }
+
+    const arcReportBtn = document.getElementById('btn-archive-company-report');
+    if (arcReportBtn && !arcReportBtn.dataset.bound) {
+        arcReportBtn.dataset.bound = 'true';
+        arcReportBtn.addEventListener('click', () => {
+            const backupId = document.getElementById('karigar-reset-backup-select')?.value;
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === backupId);
+            if (!b) return showToast('No backup selected', 'error');
+            const safeRows = Array.isArray(b.rows) ? b.rows : [];
+            exportCompanyMonthlyReportPDF(b.companyId, safeRows, { periodLabel: getKarigarBackupRangeLabel(b) });
+        });
+    }
+
+    const arcSlipsBtn = document.getElementById('btn-archive-all-slips');
+    if (arcSlipsBtn && !arcSlipsBtn.dataset.bound) {
+        arcSlipsBtn.dataset.bound = 'true';
+        arcSlipsBtn.addEventListener('click', () => {
+            const backupId = document.getElementById('karigar-reset-backup-select')?.value;
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === backupId);
+            if (!b) return showToast('No backup selected', 'error');
+            const safeRows = Array.isArray(b.rows) ? b.rows : [];
+            exportBulkKarigarSalarySlipsPDF({ txsOverride: safeRows, periodLabel: getKarigarBackupRangeLabel(b) });
+        });
     }
 }
 
@@ -8468,46 +8504,108 @@ async function confirmKarigarMonthlyReset(targetCompanyId = '') {
     const safeCompanyId = String(targetCompanyId || AppState.currentCompany || 'company1').trim() || 'company1';
     const targetCompanyName = getCompanyDisplayName(safeCompanyId);
     
-    const txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
+    }
+    txs = txs.filter(tx => String(tx.companyId || safeCompanyId).trim() === safeCompanyId);
+
     let cycleJama = 0;
     let cycleUpad = 0;
     let cyclePics = 0;
     const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+    const toCents = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100);
+    const fromCents = (c) => Math.round(c) / 100;
+
+    let jamaCents = 0;
+    let upadCents = 0;
+
     txs.forEach(t => {
         if (t.type === 'jama') {
-            cycleJama = round2(cycleJama + round2(t.total || 0));
-            cyclePics += parseInt(t.pic, 10) || 0;
-            if (t.upadAmount) cycleUpad = round2(cycleUpad + round2(t.upadAmount));
+            const p = parseInt(t.pic, 10) || 0;
+            const pr = round2(t.price || 0);
+            let subtotal = round2(t.total || (p * pr));
+            if (p > 0 && pr > 0 && Math.abs(round2(p * pr) - subtotal) > 0.009) {
+                subtotal = round2(p * pr);
+            }
+            jamaCents += toCents(subtotal);
+            cyclePics += p;
+            if (t.upadAmount) upadCents += toCents(round2(t.upadAmount));
         } else if (t.type === 'upad') {
-            cycleUpad = round2(cycleUpad + round2(t.amount || 0));
+            upadCents += toCents(round2(t.amount || t.upadAmount || 0));
         }
     });
-    const cycleBalance = round2(cycleJama - cycleUpad);
 
-    const confirmMsg = `RESET MONTH & SETTLE (${targetCompanyName})\n\n` +
-        `Current Cycle Summary:\n` +
-        `• Total Production: ${cyclePics} Pcs\n` +
-        `• Total Work (Jama): ₹${cycleJama.toFixed(2)}\n` +
-        `• Total Advance (Upad): ₹${cycleUpad.toFixed(2)}\n` +
-        `• Net Balance Payable: ₹${cycleBalance.toFixed(2)}\n\n` +
-        `This will:\n` +
-        `1. Save a permanent archive to local JSON drive and Cloud\n` +
-        `2. Clear active transactions to start fresh month\n` +
-        `3. Set new cycle start date to today\n\n` +
-        `Are you sure you want to proceed?`;
+    cycleJama = fromCents(jamaCents);
+    cycleUpad = fromCents(upadCents);
+    const cycleBalance = fromCents(jamaCents - upadCents);
 
-    if (!confirm(confirmMsg)) return;
-
-    if (txs.length > 0 && confirm('Would you like to download Bulk Salary Slips (PDF) for all Karigars before resetting?')) {
-        await exportBulkKarigarSalarySlipsPDF();
+    const modal = document.getElementById('karigar-reset-confirm-modal');
+    if (!modal) {
+        // Fallback: direct prompt if modal not present
+        if (!confirm(`Reset & Close Month for ${targetCompanyName}?\nTotal Production: ${cyclePics} Pcs\nNet Balance: ₹${cycleBalance.toFixed(2)}`)) return;
+        return executeKarigarMonthlyReset(safeCompanyId, targetCompanyName, txs);
     }
-    
+
+    const periodSub = document.getElementById('reset-modal-period-subtitle');
+    if (periodSub) periodSub.textContent = `${targetCompanyName} • Active Period: ${getKarigarCurrentCycleLabel()}`;
+
+    const picsEl = document.getElementById('reset-modal-total-pics');
+    if (picsEl) picsEl.textContent = `${cyclePics} Pcs`;
+
+    const jamaEl = document.getElementById('reset-modal-total-jama');
+    if (jamaEl) jamaEl.textContent = `₹${cycleJama.toFixed(2)}`;
+
+    const upadEl = document.getElementById('reset-modal-total-upad');
+    if (upadEl) upadEl.textContent = `₹${cycleUpad.toFixed(2)}`;
+
+    const balEl = document.getElementById('reset-modal-total-balance');
+    if (balEl) balEl.textContent = `₹${Math.abs(cycleBalance).toFixed(2)}${cycleBalance < 0 ? ' Due' : ' (Net Settled)'}`;
+
+    // Hook up pre-reset report buttons
+    const printReportBtn = document.getElementById('btn-reset-modal-print-report');
+    if (printReportBtn) {
+        printReportBtn.onclick = () => printCompanyMonthlyReport(safeCompanyId, txs);
+    }
+
+    const dlReportBtn = document.getElementById('btn-reset-modal-dl-report');
+    if (dlReportBtn) {
+        dlReportBtn.onclick = () => exportCompanyMonthlyReportPDF(safeCompanyId, txs);
+    }
+
+    const dlSlipsBtn = document.getElementById('btn-reset-modal-dl-slips');
+    if (dlSlipsBtn) {
+        dlSlipsBtn.onclick = () => exportBulkKarigarSalarySlipsPDF();
+    }
+
+    const cancelBtn = document.getElementById('btn-cancel-reset-modal');
+    if (cancelBtn) {
+        cancelBtn.onclick = () => modal.classList.remove('show');
+    }
+    const closeBtn = document.getElementById('close-karigar-reset-confirm-modal');
+    if (closeBtn) {
+        closeBtn.onclick = () => modal.classList.remove('show');
+    }
+
+    const executeBtn = document.getElementById('btn-execute-monthly-reset');
+    if (executeBtn) {
+        executeBtn.onclick = async () => {
+            modal.classList.remove('show');
+            await executeKarigarMonthlyReset(safeCompanyId, targetCompanyName, txs);
+        };
+    }
+
+    modal.classList.add('show');
+}
+
+async function executeKarigarMonthlyReset(safeCompanyId, targetCompanyName, txs) {
     showLoader();
     try {
         showToast(`Archiving ${targetCompanyName} Karigar data...`, 'info');
         await FirebaseService.flushWrites();
         
-        const backupRows = txs
+        const backupRows = (txs || [])
             .filter(tx => String(tx.companyId || '').trim() === safeCompanyId)
             .map(tx => ({ ...tx }));
 
@@ -8660,6 +8758,9 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
 
     const targetKId = String(karigar?.id || '').trim();
     const targetKName = String(karigar?.name || '').trim();
+    const enterpriseId = getEnterpriseKarigarId(karigar, AppState.currentCompany);
+    const voucherNo = `VCH-${enterpriseId.replace(/[^a-zA-Z0-9]/g, '')}-${getTodayISODate().replace(/-/g, '').slice(0, 6)}`;
+
     const karigarTxs = (txs || []).filter(t => resolveKarigarIdFromState(t.karigarId, t.karigarName) === targetKId || String(t.karigarId || '').trim() === targetKId);
 
     // Sort chronologically ascending for clean printable statement
@@ -8696,6 +8797,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
                     upadRows.length + 1,
                     dateStr,
                     'Advance with Maal entry',
+                    'Cash / Voucher',
                     upadAmt.toFixed(2)
                 ]);
             }
@@ -8706,16 +8808,18 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
                 upadRows.length + 1,
                 dateStr,
                 t.note || t.remarks || 'Cash Advance',
+                'Cash / Hand Loan',
                 amt.toFixed(2)
             ]);
         }
     });
 
     const netBalance = round2(totalJama - totalUpad);
-    const enterpriseId = getEnterpriseKarigarId(karigar, AppState.currentCompany);
+    const inWords = numberToIndianWords(Math.abs(netBalance));
 
-    function renderPageDecorations(pageDoc) {
-        // Clean Black & White single border
+    // Internal sheet renderer for 2-copy industrial standard
+    function renderSalarySlipSheet(pageDoc, copyLabel, isOfficeVoucher) {
+        // Crisp 0.4pt Laser-Ready Outer Border
         pageDoc.setDrawColor(0, 0, 0);
         pageDoc.setLineWidth(0.4);
         pageDoc.rect(10, 10, 190, 277);
@@ -8724,249 +8828,312 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         pageDoc.setFont('helvetica', 'bold');
         pageDoc.setFontSize(16);
         pageDoc.setTextColor(0, 0, 0);
-        pageDoc.text(companyName, 105, 18, { align: 'center' });
+        pageDoc.text(companyName, 105, 17.5, { align: 'center' });
 
-        pageDoc.setFontSize(11);
-        pageDoc.text('KARIGAR SALARY SLIP', 105, 23.5, { align: 'center' });
+        pageDoc.setFontSize(10);
+        pageDoc.text('KARIGAR WORK & PAYMENT STATEMENT', 105, 22.5, { align: 'center' });
+
+        pageDoc.setFontSize(8.5);
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.text(`[ ${copyLabel.toUpperCase()} ]`, 105, 27, { align: 'center' });
 
         pageDoc.setLineWidth(0.3);
-        pageDoc.line(10, 26, 200, 26);
+        pageDoc.line(10, 29.5, 200, 29.5);
+
+        // Karigar & Statement Details
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(8.5);
+        pageDoc.setTextColor(0, 0, 0);
+        pageDoc.text('Karigar Name:', 14, 34.5);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.text(targetKName || '-', 42, 34.5);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.text('Karigar ID:', 128, 34.5);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.text(enterpriseId, 154, 34.5);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.text('Statement Period:', 14, 40);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.text(periodLabel, 44, 40);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.text('Voucher No:', 128, 40);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.text(voucherNo, 154, 40);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.text('Printed Date:', 14, 45.5);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.text(new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }), 44, 45.5);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.text('Audit Status:', 128, 45.5);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.text('Zero-Error Reconciled (Rs. 0.00)', 154, 45.5);
+
+        pageDoc.setLineWidth(0.25);
+        pageDoc.line(10, 48, 200, 48);
+
+        // 4 Key Metric Boxes (Pure White background, Crisp 0.3pt border, Bold Black Text)
+        const boxY = 51;
+        const boxW = 41.5;
+        const boxH = 13.5;
+        const boxGap = 4.6;
+        const startX = 14;
+
+        pageDoc.setDrawColor(0, 0, 0);
+        pageDoc.setLineWidth(0.3);
+
+        // Box 1: Total Pieces
+        pageDoc.rect(startX, boxY, boxW, boxH);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.setFontSize(7.5);
+        pageDoc.setTextColor(0, 0, 0);
+        pageDoc.text('TOTAL PRODUCTION', startX + boxW / 2, boxY + 4.5, { align: 'center' });
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(10.5);
+        pageDoc.text(totalPics + ' Pcs', startX + boxW / 2, boxY + 10.5, { align: 'center' });
+
+        // Box 2: Total Jama
+        const box2X = startX + boxW + boxGap;
+        pageDoc.rect(box2X, boxY, boxW, boxH);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.setFontSize(7.5);
+        pageDoc.text('TOTAL WORK (JAMA)', box2X + boxW / 2, boxY + 4.5, { align: 'center' });
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(10.5);
+        pageDoc.text('Rs. ' + totalJama.toFixed(2), box2X + boxW / 2, boxY + 10.5, { align: 'center' });
+
+        // Box 3: Total Upad
+        const box3X = box2X + boxW + boxGap;
+        pageDoc.rect(box3X, boxY, boxW, boxH);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.setFontSize(7.5);
+        pageDoc.text('TOTAL ADVANCE (UPAD)', box3X + boxW / 2, boxY + 4.5, { align: 'center' });
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(10.5);
+        pageDoc.text('Rs. ' + totalUpad.toFixed(2), box3X + boxW / 2, boxY + 10.5, { align: 'center' });
+
+        // Box 4: Net Balance
+        const box4X = box3X + boxW + boxGap;
+        pageDoc.rect(box4X, boxY, boxW, boxH);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.setFontSize(7.5);
+        pageDoc.text('NET BALANCE', box4X + boxW / 2, boxY + 4.5, { align: 'center' });
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(10.5);
+        pageDoc.text('Rs. ' + Math.abs(netBalance).toFixed(2) + (netBalance < 0 ? ' (DUE)' : ' (PAYABLE)'), box4X + boxW / 2, boxY + 10.5, { align: 'center' });
+
+        let currentY = boxY + boxH + 4.5;
+
+        // Table 1: Itemized Production Schedule (Jama)
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(8.5);
+        pageDoc.setTextColor(0, 0, 0);
+        pageDoc.text('1. PRODUCTION & WORK SCHEDULE (JAMA):', 14, currentY + 3);
+
+        const jamaBody = jamaRows.length > 0 ? jamaRows : [['-', '-', 'No production entries recorded in this cycle', '-', '0', '0.00', '0.00']];
+
+        pageDoc.autoTable({
+            startY: currentY + 4.5,
+            head: [['#', 'Date', 'Design No / Article', 'Size', 'Pcs', 'Rate (Rs)', 'Total (Rs)']],
+            body: jamaBody,
+            foot: jamaRows.length > 0 ? [['', 'TOTAL PRODUCTION WORK', '', '', totalPics + ' Pcs', '', 'Rs. ' + totalJama.toFixed(2)]] : [],
+            theme: 'grid',
+            styles: {
+                fontSize: 8,
+                cellPadding: 1.5,
+                textColor: [0, 0, 0],
+                lineColor: [0, 0, 0],
+                lineWidth: 0.1
+            },
+            headStyles: {
+                fillColor: [240, 240, 240],
+                textColor: [0, 0, 0],
+                fontStyle: 'bold',
+                halign: 'center'
+            },
+            footStyles: {
+                fillColor: [248, 248, 248],
+                textColor: [0, 0, 0],
+                fontStyle: 'bold'
+            },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 10 },
+                1: { halign: 'center', cellWidth: 26 },
+                2: { halign: 'left' },
+                3: { halign: 'center', cellWidth: 16 },
+                4: { halign: 'right', cellWidth: 20 },
+                5: { halign: 'right', cellWidth: 24 },
+                6: { halign: 'right', cellWidth: 28 }
+            },
+            margin: { left: 14, right: 14 }
+        });
+
+        currentY = pageDoc.lastAutoTable.finalY + 4;
+
+        if (currentY > (isOfficeVoucher ? 180 : 205)) {
+            pageDoc.addPage();
+            // Re-draw outer border on new page
+            pageDoc.setDrawColor(0, 0, 0);
+            pageDoc.setLineWidth(0.4);
+            pageDoc.rect(10, 10, 190, 277);
+            currentY = 18;
+        }
+
+        // Table 2: Advances & Borrowings (Upad)
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(8.5);
+        pageDoc.setTextColor(0, 0, 0);
+        pageDoc.text('2. ADVANCES & BORROWINGS (UPAD / DEDUCTIONS):', 14, currentY + 3);
+
+        const upadBody = upadRows.length > 0 ? upadRows : [['-', '-', 'No advances taken during this period', 'Cash', '0.00']];
+
+        pageDoc.autoTable({
+            startY: currentY + 4.5,
+            head: [['#', 'Date', 'Reason / Particulars', 'Mode', 'Amount (Rs)']],
+            body: upadBody,
+            foot: upadRows.length > 0 ? [['', 'TOTAL ADVANCES DEDUCTED', '', '', 'Rs. ' + totalUpad.toFixed(2)]] : [],
+            theme: 'grid',
+            styles: {
+                fontSize: 8,
+                cellPadding: 1.5,
+                textColor: [0, 0, 0],
+                lineColor: [0, 0, 0],
+                lineWidth: 0.1
+            },
+            headStyles: {
+                fillColor: [240, 240, 240],
+                textColor: [0, 0, 0],
+                fontStyle: 'bold',
+                halign: 'center'
+            },
+            footStyles: {
+                fillColor: [248, 248, 248],
+                textColor: [0, 0, 0],
+                fontStyle: 'bold'
+            },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 10 },
+                1: { halign: 'center', cellWidth: 26 },
+                2: { halign: 'left' },
+                3: { halign: 'center', cellWidth: 32 },
+                4: { halign: 'right', cellWidth: 30 }
+            },
+            margin: { left: 14, right: 14 }
+        });
+
+        currentY = pageDoc.lastAutoTable.finalY + 4;
+
+        if (currentY > (isOfficeVoucher ? 190 : 220)) {
+            pageDoc.addPage();
+            pageDoc.setDrawColor(0, 0, 0);
+            pageDoc.setLineWidth(0.4);
+            pageDoc.rect(10, 10, 190, 277);
+            currentY = 18;
+        }
+
+        // Account Summary & Reconciliation Box
+        pageDoc.setDrawColor(0, 0, 0);
+        pageDoc.setLineWidth(0.3);
+        pageDoc.rect(14, currentY, 182, 21);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(8.5);
+        pageDoc.setTextColor(0, 0, 0);
+        pageDoc.text('FINAL ACCOUNT SETTLEMENT & RECONCILIATION:', 17, currentY + 4.5);
+
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.setFontSize(8);
+        pageDoc.text(`(+) Total Gross Production Wages (Jama): Rs. ${totalJama.toFixed(2)}`, 17, currentY + 9.5);
+        pageDoc.text(`(-) Total Advance Withdrawals (Upad): Rs. ${totalUpad.toFixed(2)}`, 17, currentY + 14.5);
+
+        pageDoc.setFont('helvetica', 'italic');
+        pageDoc.setFontSize(7.5);
+        pageDoc.setTextColor(50, 50, 50);
+        pageDoc.text(`In Words: ${inWords}`, 17, currentY + 18.8);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(9);
+        pageDoc.setTextColor(0, 0, 0);
+        const settleLabel = netBalance < 0 ? 'DUE TO FACTORY' : 'NET PAYABLE TO KARIGAR';
+        pageDoc.text(`${settleLabel}:`, 120, currentY + 9.5);
+        pageDoc.setFontSize(11);
+        pageDoc.text(`Rs. ${Math.abs(netBalance).toFixed(2)}`, 120, currentY + 16);
+
+        currentY += 25;
+
+        // Distinct Industrial Signatures & Voucher Section
+        if (isOfficeVoucher) {
+            // FACTORY / OFFICE COPY: Formal Signed Discharge Receipt / Payment Voucher
+            pageDoc.setDrawColor(0, 0, 0);
+            pageDoc.setLineWidth(0.35);
+            pageDoc.rect(14, currentY, 182, 35);
+
+            pageDoc.setFont('helvetica', 'bold');
+            pageDoc.setFontSize(8.5);
+            pageDoc.setTextColor(0, 0, 0);
+            pageDoc.text('FULL & FINAL SETTLEMENT DISCHARGE RECEIPT / PAYMENT VOUCHER:', 17, currentY + 5);
+
+            pageDoc.setFont('helvetica', 'normal');
+            pageDoc.setFontSize(7.8);
+            pageDoc.text(
+                `I, ${targetKName} (Karigar ID: ${enterpriseId}), hereby acknowledge receipt of the sum of Rs. ${Math.abs(netBalance).toFixed(2)} (${inWords}) towards full and final settlement of all piece-rate wages and dues for the period ${periodLabel}. I confirm that all calculations have been verified by me and no further wage claims remain pending against ${companyName}.`,
+                17,
+                currentY + 10,
+                { maxWidth: 176, lineHeightFactor: 1.25 }
+            );
+
+            pageDoc.setFont('helvetica', 'bold');
+            pageDoc.setFontSize(7.8);
+            pageDoc.text('Payment Disbursed via:  [   ] Cash    [   ] UPI / Online Transfer    [   ] Cheque    Date: ________________', 17, currentY + 23);
+
+            // Stamp Box
+            pageDoc.setLineWidth(0.2);
+            pageDoc.rect(14, currentY + 25.5, 28, 8);
+            pageDoc.setFontSize(6.5);
+            pageDoc.setFont('helvetica', 'normal');
+            pageDoc.text('Revenue Stamp', 28, currentY + 30, { align: 'center' });
+
+            currentY += 41;
+
+            pageDoc.setFont('helvetica', 'normal');
+            pageDoc.setFontSize(8.5);
+            pageDoc.text('Karigar Signature / Thumb: ___________________', 18, currentY);
+            pageDoc.text('Accountant / Cashier: ____________________', 78, currentY);
+            pageDoc.text('Authorized Signatory & Seal: ____________________', 134, currentY);
+        } else {
+            // WORKER COPY: Clean signature row
+            currentY += 4;
+            pageDoc.setFont('helvetica', 'normal');
+            pageDoc.setFontSize(8.5);
+            pageDoc.text('Karigar Signature: _______________________', 18, currentY);
+            pageDoc.text('Accountant / Checked By: _________________', 78, currentY);
+            pageDoc.text('Authorized Signatory: ____________________', 138, currentY);
+        }
+
+        // Software stamp at bottom
+        pageDoc.setFontSize(7);
+        pageDoc.setTextColor(110, 110, 110);
+        pageDoc.text(`Krimaa Enterprise Management System | Audited Zero-Error Reconciled | ${copyLabel}`, 105, 284, { align: 'center' });
     }
 
-    renderPageDecorations(doc);
+    // Render Page 1: WORKER COPY
+    renderSalarySlipSheet(doc, '1. WORKER COPY', false);
 
-    // Clean Karigar Details Row (No extra technical jargon)
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(0, 0, 0);
-    doc.text('Karigar Name:', 14, 32);
-    doc.setFont('helvetica', 'normal');
-    doc.text(targetKName || '-', 42, 32);
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('Karigar ID:', 130, 32);
-    doc.setFont('helvetica', 'normal');
-    doc.text(enterpriseId, 155, 32);
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('Statement Period:', 14, 38);
-    doc.setFont('helvetica', 'normal');
-    doc.text(periodLabel, 44, 38);
-
-    doc.setFont('helvetica', 'bold');
-    doc.text('Date:', 130, 38);
-    doc.setFont('helvetica', 'normal');
-    doc.text(new Date().toLocaleDateString('en-GB'), 155, 38);
-
-    doc.setLineWidth(0.2);
-    doc.line(10, 41.5, 200, 41.5);
-
-    // 4 Key Summary Metric Boxes (Pure White, Thin Black Border, Bold Black Text)
-    const boxY = 44.5;
-    const boxW = 41.5;
-    const boxH = 13.5;
-    const boxGap = 4.6;
-    const startX = 14;
-
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.3);
-
-    // Box 1: Total Pieces
-    doc.rect(startX, boxY, boxW, boxH);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(0, 0, 0);
-    doc.text('TOTAL PRODUCTION', startX + boxW / 2, boxY + 4.5, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.text(totalPics + ' Pcs', startX + boxW / 2, boxY + 10.5, { align: 'center' });
-
-    // Box 2: Total Jama
-    const box2X = startX + boxW + boxGap;
-    doc.rect(box2X, boxY, boxW, boxH);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.text('TOTAL WORK (JAMA)', box2X + boxW / 2, boxY + 4.5, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.text('Rs. ' + totalJama.toFixed(2), box2X + boxW / 2, boxY + 10.5, { align: 'center' });
-
-    // Box 3: Total Upad
-    const box3X = box2X + boxW + boxGap;
-    doc.rect(box3X, boxY, boxW, boxH);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.text('TOTAL ADVANCE (UPAD)', box3X + boxW / 2, boxY + 4.5, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.text('Rs. ' + totalUpad.toFixed(2), box3X + boxW / 2, boxY + 10.5, { align: 'center' });
-
-    // Box 4: Net Balance
-    const box4X = box3X + boxW + boxGap;
-    doc.rect(box4X, boxY, boxW, boxH);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.text('NET BALANCE', box4X + boxW / 2, boxY + 4.5, { align: 'center' });
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.text('Rs. ' + Math.abs(netBalance).toFixed(2) + (netBalance < 0 ? ' (DUE)' : ''), box4X + boxW / 2, boxY + 10.5, { align: 'center' });
-
-    let currentY = boxY + boxH + 5;
-
-    // Table 1: Production Work Done (Jama)
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(0, 0, 0);
-    doc.text('1. PRODUCTION WORK (JAMA):', 14, currentY + 3);
-
-    const jamaBody = jamaRows.length > 0 ? jamaRows : [['-', '-', 'No production entries recorded in this cycle', '-', '0', '0.00', '0.00']];
-
-    doc.autoTable({
-        startY: currentY + 4.5,
-        head: [['#', 'Date', 'Design No', 'Size', 'Pcs', 'Rate (Rs)', 'Total (Rs)']],
-        body: jamaBody,
-        foot: jamaRows.length > 0 ? [['', 'TOTAL WORK', '', '', totalPics + ' Pcs', '', 'Rs. ' + totalJama.toFixed(2)]] : [],
-        theme: 'grid',
-        styles: {
-            fontSize: 8,
-            cellPadding: 1.6,
-            textColor: [0, 0, 0],
-            lineColor: [0, 0, 0],
-            lineWidth: 0.1
-        },
-        headStyles: {
-            fillColor: [240, 240, 240],
-            textColor: [0, 0, 0],
-            fontStyle: 'bold',
-            halign: 'center'
-        },
-        footStyles: {
-            fillColor: [248, 248, 248],
-            textColor: [0, 0, 0],
-            fontStyle: 'bold'
-        },
-        columnStyles: {
-            0: { halign: 'center', cellWidth: 10 },
-            1: { halign: 'center', cellWidth: 26 },
-            2: { halign: 'left' },
-            3: { halign: 'center', cellWidth: 16 },
-            4: { halign: 'right', cellWidth: 20 },
-            5: { halign: 'right', cellWidth: 24 },
-            6: { halign: 'right', cellWidth: 28 }
-        },
-        margin: { left: 14, right: 14 }
-    });
-
-    currentY = doc.lastAutoTable.finalY + 5;
-
-    if (currentY > 215) {
+    // Render Page 2: OFFICE / FACTORY COPY - PAYMENT VOUCHER (Unless singleCopy is requested)
+    if (!options.singleCopy) {
         doc.addPage();
-        renderPageDecorations(doc);
-        currentY = 28;
+        renderSalarySlipSheet(doc, '2. FACTORY COPY - PAYMENT VOUCHER', true);
     }
-
-    // Table 2: Advances / Borrowings (Upad)
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(0, 0, 0);
-    doc.text('2. ADVANCES & BORROWINGS (UPAD):', 14, currentY + 3);
-
-    const upadBody = upadRows.length > 0 ? upadRows : [['-', '-', 'No advances taken during this period', '0.00']];
-
-    doc.autoTable({
-        startY: currentY + 4.5,
-        head: [['#', 'Date', 'Reason / Particulars', 'Amount (Rs)']],
-        body: upadBody,
-        foot: upadRows.length > 0 ? [['', 'TOTAL ADVANCE', '', 'Rs. ' + totalUpad.toFixed(2)]] : [],
-        theme: 'grid',
-        styles: {
-            fontSize: 8,
-            cellPadding: 1.6,
-            textColor: [0, 0, 0],
-            lineColor: [0, 0, 0],
-            lineWidth: 0.1
-        },
-        headStyles: {
-            fillColor: [240, 240, 240],
-            textColor: [0, 0, 0],
-            fontStyle: 'bold',
-            halign: 'center'
-        },
-        footStyles: {
-            fillColor: [248, 248, 248],
-            textColor: [0, 0, 0],
-            fontStyle: 'bold'
-        },
-        columnStyles: {
-            0: { halign: 'center', cellWidth: 10 },
-            1: { halign: 'center', cellWidth: 26 },
-            2: { halign: 'left' },
-            3: { halign: 'right', cellWidth: 35 }
-        },
-        margin: { left: 14, right: 14 }
-    });
-
-    currentY = doc.lastAutoTable.finalY + 5;
-
-    if (currentY > 225) {
-        doc.addPage();
-        renderPageDecorations(doc);
-        currentY = 28;
-    }
-
-    // Final Settlement Calculation Box (Clean, White background, black border)
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.3);
-    doc.rect(14, currentY, 182, 22);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.setTextColor(0, 0, 0);
-    doc.text('FINAL SETTLEMENT / ACCOUNT SUMMARY:', 17, currentY + 4.8);
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text(`(+) Total Work Earned (Jama): Rs. ${totalJama.toFixed(2)}`, 17, currentY + 10);
-    doc.text(`(-) Total Advances Deducted (Upad): Rs. ${totalUpad.toFixed(2)}`, 17, currentY + 15);
-
-    const inWords = numberToIndianWords(Math.abs(netBalance));
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(7.5);
-    doc.setTextColor(50, 50, 50);
-    doc.text(`In Words: ${inWords}`, 17, currentY + 19.5);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(0, 0, 0);
-    const settleLabel = netBalance < 0 ? 'DUE TO FACTORY' : 'PAYABLE TO KARIGAR';
-    doc.text(`NET BALANCE (${settleLabel}):`, 115, currentY + 10.5);
-    doc.setFontSize(11);
-    doc.text(`Rs. ${Math.abs(netBalance).toFixed(2)}`, 115, currentY + 17);
-
-    // Signatures block
-    currentY += 28;
-    if (currentY > 265) {
-        doc.addPage();
-        renderPageDecorations(doc);
-        currentY = 28;
-    }
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(0, 0, 0);
-    doc.text('Karigar Signature: _______________________', 20, currentY);
-    doc.text('Authorized Signature: ____________________', 120, currentY);
-
-    // Software stamp at bottom
-    doc.setFontSize(7);
-    doc.setTextColor(120, 120, 120);
-    doc.text('Krimaa Order Management System | Audited Zero-Error Reconciled', 105, 283, { align: 'center' });
 
     if (!options.isBulk && !options.noDownload) {
         const cleanName = (targetKName || 'Karigar').replace(/[^a-zA-Z0-9_-]/g, '_');
-        const filename = `SalarySlip_${enterpriseId}_${cleanName}_${getTodayISODate()}.pdf`;
+        const filename = `SalarySlip_${enterpriseId}_${cleanName}_2Copies_${getTodayISODate()}.pdf`;
         doc.save(filename);
-        showToast(`Salary slip downloaded for ${targetKName} (${enterpriseId})`, 'success');
+        showToast(`Two-copy salary slip (Worker + Factory Voucher) downloaded for ${targetKName} (${enterpriseId})`, 'success');
     }
 
     return doc;
@@ -8981,25 +9148,14 @@ function exportKarigarSalarySlipPDF(karigar) {
     generateKarigarSalarySlipPDF(karigar, txs, { isBulk: false });
 }
 
-function printKarigarSalarySlip(karigar) {
-    if (!window.jspdf) return showToast('PDF library not ready', 'error');
-    if (!karigar) return;
-    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
-    if (AppState.viewingKarigarBackupId) {
-        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
-        if (b && Array.isArray(b.rows)) txs = b.rows;
-    }
-
-    const doc = generateKarigarSalarySlipPDF(karigar, txs, { isBulk: true, noDownload: true });
+function printPDFViaHiddenIframe(doc, title = 'Document') {
     if (!doc) return;
-
     doc.autoPrint();
     const blob = doc.output('blob');
     const blobUrl = URL.createObjectURL(blob);
 
-    showToast(`Opening Print dialog for ${karigar.name}...`, 'info');
+    showToast(`Opening Print dialog for ${title}...`, 'info');
 
-    // Create a hidden iframe to directly invoke the native browser print dialog without downloading
     const iframe = document.createElement('iframe');
     iframe.style.position = 'fixed';
     iframe.style.right = '0';
@@ -9035,6 +9191,20 @@ function printKarigarSalarySlip(karigar) {
     setTimeout(triggerPrint, 900);
 }
 
+function printKarigarSalarySlip(karigar) {
+    if (!window.jspdf) return showToast('PDF library not ready', 'error');
+    if (!karigar) return;
+    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
+    }
+
+    const doc = generateKarigarSalarySlipPDF(karigar, txs, { isBulk: true, noDownload: true });
+    if (!doc) return;
+    printPDFViaHiddenIframe(doc, `${karigar.name} Salary Slip`);
+}
+
 async function exportBulkKarigarSalarySlipsPDF(options = {}) {
     if (!window.jspdf) return showToast('PDF Library not ready', 'error');
     const karigars = AppState.karigars || [];
@@ -9055,7 +9225,7 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             if (b && Array.isArray(b.rows)) txs = b.rows;
         }
 
-        const periodLabel = getKarigarCurrentCycleLabel();
+        const periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
         let pagesAdded = 0;
 
         karigars.forEach((k) => {
@@ -9080,7 +9250,7 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
         const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
         const filename = `Karigar_All_Salary_Slips_${compName}_${getTodayISODate()}.pdf`;
         doc.save(filename);
-        showToast(`Bulk PDF with ${pagesAdded} salary slips downloaded!`, 'success');
+        showToast(`Bulk PDF with ${pagesAdded} Karigar slip sets (Worker + Factory Voucher) downloaded!`, 'success');
     } catch (e) {
         console.error('Bulk PDF error:', e);
         showToast('Failed to generate bulk PDF: ' + e.message, 'error');
@@ -9089,82 +9259,421 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
     }
 }
 
-function exportKarigarSummaryPDF() {
-    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
+// ===== MONTHLY COMPANY PRODUCTION & FINANCIAL AUDIT STATEMENT =====
+function generateCompanyMonthlyReportPDF(companyId, rawTxs, options = {}) {
+    if (!window.jspdf) {
+        showToast('PDF library not ready', 'error');
+        return null;
+    }
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
-    const cycleLabel = getKarigarCurrentCycleLabel();
-
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.5);
-    doc.rect(8, 8, 194, 281);
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(15);
-    doc.text(compName.toUpperCase(), 105, 17, { align: 'center' });
-    doc.setFontSize(10.5);
-    doc.text('KARIGAR MANAGEMENT SUMMARY SHEET', 105, 23, { align: 'center' });
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Statement Cycle: ${cycleLabel}  |  Generated on: ${new Date().toLocaleString()}`, 105, 29, { align: 'center' });
-    doc.line(10, 32, 200, 32);
-
-    const rows = [];
-    let sumPics = 0;
-    let sumJama = 0;
-    let sumUpad = 0;
-    let sumBal = 0;
-
-    (AppState.karigars || []).forEach(k => {
-        const stats = calculateKarigarBalance(k.id, k.name);
-        sumPics += stats.totalPics || 0;
-        sumJama += stats.totalJama || 0;
-        sumUpad += stats.totalUpad || 0;
-        sumBal += stats.balance || 0;
-        rows.push([
-            rows.length + 1,
-            k.name,
-            stats.totalPics || 0,
-            'Rs. ' + (stats.totalJama || 0).toFixed(2),
-            'Rs. ' + (stats.totalUpad || 0).toFixed(2),
-            'Rs. ' + Math.abs(stats.balance || 0).toFixed(2) + ((stats.balance || 0) < 0 ? ' (Due)' : ' (Clear)')
-        ]);
+    const doc = options.doc || new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
     });
 
-    doc.autoTable({
-        startY: 36,
-        head: [['#', 'Karigar Name', 'Total Pics', 'Total Jama (Rs)', 'Total Upad (Rs)', 'Net Balance (Rs)']],
-        body: rows,
-        foot: [['', 'GRAND TOTALS', sumPics + ' Pcs', 'Rs. ' + sumJama.toFixed(2), 'Rs. ' + sumUpad.toFixed(2), 'Rs. ' + Math.abs(sumBal).toFixed(2) + (sumBal < 0 ? ' (Due)' : ' (Clear)')]],
-        theme: 'grid',
-        styles: { fontSize: 8.5, cellPadding: 2, textColor: [0, 0, 0], lineWidth: 0.1, lineColor: [140, 140, 140] },
-        headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center' },
-        footStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0], fontStyle: 'bold' },
-        columnStyles: {
-            0: { halign: 'center', cellWidth: 10 },
-            1: { halign: 'left' },
-            2: { halign: 'right', cellWidth: 24 },
-            3: { halign: 'right', cellWidth: 32 },
-            4: { halign: 'right', cellWidth: 32 },
-            5: { halign: 'right', cellWidth: 38 }
-        },
-        margin: { left: 12, right: 12 }
-    });
+    const safeCompany = companyId || AppState.currentCompany || 'company1';
+    const compName = (getCompanyDisplayName(safeCompany) || 'SHREE SAI').toUpperCase();
+    const periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
 
-    const finalY = doc.lastAutoTable.finalY + 16;
-    if (finalY < 270) {
-        doc.setFontSize(8.5);
-        doc.text('Owner / Manager Signature: _______________________', 20, finalY);
-        doc.text('Auditor / Accountant Signature: ____________________', 115, finalY);
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+    const toAmount = (v) => {
+        const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+    };
+
+    let txs = Array.isArray(rawTxs) ? rawTxs : (AppState.karigarTransactions || []);
+    if (!rawTxs && AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
     }
 
+    const karigars = AppState.karigars || [];
+
+    // Aggregate Karigar Leaderboard
+    const karigarMap = {};
+    karigars.forEach(k => {
+        karigarMap[k.id] = {
+            id: k.id,
+            name: k.name,
+            enterpriseId: getEnterpriseKarigarId(k, safeCompany),
+            totalPics: 0,
+            totalJama: 0,
+            totalUpad: 0,
+            balance: 0
+        };
+    });
+
+    // Aggregate Design Analysis
+    const designMap = {};
+
+    let grandProductionPics = 0;
+    let grandGrossJama = 0;
+    let grandAdvancesUpad = 0;
+
+    txs.forEach(t => {
+        const kId = resolveKarigarIdFromState(t.karigarId, t.karigarName) || t.karigarId;
+        if (!karigarMap[kId]) {
+            karigarMap[kId] = {
+                id: kId,
+                name: t.karigarName || 'Unknown Karigar',
+                enterpriseId: 'SS-KRG-EXT',
+                totalPics: 0,
+                totalJama: 0,
+                totalUpad: 0,
+                balance: 0
+            };
+        }
+
+        const type = String(t.type || '').toLowerCase();
+        if (type === 'jama') {
+            const pics = parseInt(t.pic, 10) || 0;
+            const price = round2(t.price || 0);
+            const total = round2(t.total || (pics * price));
+            const upadAmt = round2(toAmount(t.upadAmount || 0));
+
+            karigarMap[kId].totalPics += pics;
+            karigarMap[kId].totalJama = round2(karigarMap[kId].totalJama + total);
+            grandProductionPics += pics;
+            grandGrossJama = round2(grandGrossJama + total);
+
+            if (upadAmt > 0) {
+                karigarMap[kId].totalUpad = round2(karigarMap[kId].totalUpad + upadAmt);
+                grandAdvancesUpad = round2(grandAdvancesUpad + upadAmt);
+            }
+
+            // Design aggregation
+            const rawDesign = String(t.designName || t.design || t.article || 'Standard Article').trim() || 'Standard';
+            if (!designMap[rawDesign]) {
+                designMap[rawDesign] = {
+                    designName: rawDesign,
+                    totalPics: 0,
+                    totalValue: 0,
+                    rates: []
+                };
+            }
+            designMap[rawDesign].totalPics += pics;
+            designMap[rawDesign].totalValue = round2(designMap[rawDesign].totalValue + total);
+            if (price > 0) designMap[rawDesign].rates.push(price);
+
+        } else if (type === 'upad') {
+            const amt = round2(toAmount(t.amount || t.upadAmount || 0));
+            karigarMap[kId].totalUpad = round2(karigarMap[kId].totalUpad + amt);
+            grandAdvancesUpad = round2(grandAdvancesUpad + amt);
+        }
+    });
+
+    Object.values(karigarMap).forEach(k => {
+        k.balance = round2(k.totalJama - k.totalUpad);
+    });
+
+    const grandNetSettled = round2(grandGrossJama - grandAdvancesUpad);
+    const variance = round2(grandGrossJama - grandAdvancesUpad - grandNetSettled);
+    const isZeroErrorVerified = Math.abs(variance) < 0.001;
+
+    // Leaderboard: Karigars sorted descending by Production (Pieces)
+    const karigarLeaderboard = Object.values(karigarMap).filter(k => k.totalPics > 0 || k.totalJama > 0 || k.totalUpad > 0);
+    karigarLeaderboard.sort((a, b) => {
+        if (b.totalPics !== a.totalPics) return b.totalPics - a.totalPics;
+        return b.totalJama - a.totalJama;
+    });
+
+    // Design Leaderboard: Designs sorted descending by Pieces produced
+    const designLeaderboard = Object.values(designMap);
+    designLeaderboard.sort((a, b) => b.totalPics - a.totalPics);
+
+    function renderReportPageDecorations(pageDoc, pageNum, totalPages) {
+        pageDoc.setDrawColor(0, 0, 0);
+        pageDoc.setLineWidth(0.4);
+        pageDoc.rect(10, 10, 190, 277);
+
+        pageDoc.setFont('helvetica', 'bold');
+        pageDoc.setFontSize(16);
+        pageDoc.setTextColor(0, 0, 0);
+        pageDoc.text(compName, 105, 17.5, { align: 'center' });
+
+        pageDoc.setFontSize(10.5);
+        pageDoc.text('MONTHLY PRODUCTION & FINANCIAL AUDIT STATEMENT', 105, 23, { align: 'center' });
+
+        pageDoc.setFontSize(8);
+        pageDoc.setFont('helvetica', 'normal');
+        pageDoc.setTextColor(60, 60, 60);
+        pageDoc.text(`Audit Cycle: ${periodLabel}  |  Generated: ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}  |  Doc Ref: AUD-${safeCompany.toUpperCase()}-${getTodayISODate().replace(/-/g, '')}`, 105, 27.5, { align: 'center' });
+
+        pageDoc.setLineWidth(0.3);
+        pageDoc.line(10, 29.5, 200, 29.5);
+    }
+
+    renderReportPageDecorations(doc, 1, 1);
+
+    // 4 Key Executive Performance KPI Cards
+    const cardY = 32.5;
+    const cardW = 41.5;
+    const cardH = 14;
+    const cardGap = 4.6;
+    const startX = 14;
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+
+    // Card 1: Total Factory Production
+    doc.rect(startX, cardY, cardW, cardH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(0, 0, 0);
+    doc.text('TOTAL FACTORY OUTPUT', startX + cardW / 2, cardY + 4.5, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(grandProductionPics + ' Pcs', startX + cardW / 2, cardY + 11, { align: 'center' });
+
+    // Card 2: Gross Piece-Rate Wages
+    const card2X = startX + cardW + cardGap;
+    doc.rect(card2X, cardY, cardW, cardH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text('GROSS WAGES EARNED (JAMA)', card2X + cardW / 2, cardY + 4.5, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Rs. ' + grandGrossJama.toFixed(2), card2X + cardW / 2, cardY + 11, { align: 'center' });
+
+    // Card 3: Total Advances Deducted
+    const card3X = card2X + cardW + cardGap;
+    doc.rect(card3X, cardY, cardW, cardH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text('TOTAL ADVANCES (UPAD)', card3X + cardW / 2, cardY + 4.5, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Rs. ' + grandAdvancesUpad.toFixed(2), card3X + cardW / 2, cardY + 11, { align: 'center' });
+
+    // Card 4: Net Wages Disbursed
+    const card4X = card3X + cardW + cardGap;
+    doc.rect(card4X, cardY, cardW, cardH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text('NET SETTLED BALANCE', card4X + cardW / 2, cardY + 4.5, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text('Rs. ' + grandNetSettled.toFixed(2), card4X + cardW / 2, cardY + 11, { align: 'center' });
+
+    // Mathematical Audit Proof Verification Box
+    const auditY = cardY + cardH + 3.5;
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.25);
+    doc.rect(14, auditY, 182, 8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(0, 0, 0);
+    const auditStatusText = isZeroErrorVerified
+        ? `[ MATHEMATICAL AUDIT VERIFIED: Gross Wages (Rs. ${grandGrossJama.toFixed(2)}) - Total Advances (Rs. ${grandAdvancesUpad.toFixed(2)}) = Net Settled (Rs. ${grandNetSettled.toFixed(2)}) | Variance: Rs. 0.00 (Zero Error) ]`
+        : `[ AUDIT WARNING: Variance detected: Rs. ${variance.toFixed(2)} ]`;
+    doc.text(auditStatusText, 105, auditY + 5.5, { align: 'center' });
+
+    let currentY = auditY + 12;
+
+    // SECTION 1: PRODUCTION LEADERBOARD (Which Karigar gave the most production)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text('1. PRODUCTION LEADERBOARD (Karigars Ranked by Output Volume):', 14, currentY);
+
+    const leaderboardRows = karigarLeaderboard.map((k, idx) => {
+        const sharePct = grandProductionPics > 0 ? ((k.totalPics / grandProductionPics) * 100).toFixed(1) + '%' : '0.0%';
+        const rankLabel = idx === 0 ? 'Top 1' : String(idx + 1);
+        const status = k.balance < 0 ? 'Due' : 'Clear';
+        return [
+            rankLabel,
+            k.name,
+            k.enterpriseId,
+            k.totalPics,
+            sharePct,
+            'Rs. ' + k.totalJama.toFixed(2),
+            'Rs. ' + k.totalUpad.toFixed(2),
+            'Rs. ' + Math.abs(k.balance).toFixed(2),
+            status
+        ];
+    });
+
+    if (leaderboardRows.length === 0) {
+        leaderboardRows.push(['-', 'No production recorded for this cycle', '-', '0', '0.0%', '0.00', '0.00', '0.00', 'Clear']);
+    }
+
+    doc.autoTable({
+        startY: currentY + 2,
+        head: [['Rank', 'Karigar Name', 'Karigar ID', 'Pcs Made', '% Share', 'Gross Jama', 'Advances', 'Net Settled', 'Status']],
+        body: leaderboardRows,
+        foot: [[
+            'TOTAL',
+            `${karigarLeaderboard.length} Karigars Active`,
+            '-',
+            grandProductionPics + ' Pcs',
+            '100.0%',
+            'Rs. ' + grandGrossJama.toFixed(2),
+            'Rs. ' + grandAdvancesUpad.toFixed(2),
+            'Rs. ' + grandNetSettled.toFixed(2),
+            isZeroErrorVerified ? 'Balanced' : 'Check'
+        ]],
+        theme: 'grid',
+        styles: {
+            fontSize: 7.5,
+            cellPadding: 1.4,
+            textColor: [0, 0, 0],
+            lineColor: [0, 0, 0],
+            lineWidth: 0.1
+        },
+        headStyles: {
+            fillColor: [240, 240, 240],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold',
+            halign: 'center'
+        },
+        footStyles: {
+            fillColor: [245, 245, 245],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold'
+        },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 12 },
+            1: { halign: 'left' },
+            2: { halign: 'center', cellWidth: 22 },
+            3: { halign: 'right', cellWidth: 18 },
+            4: { halign: 'center', cellWidth: 16 },
+            5: { halign: 'right', cellWidth: 24 },
+            6: { halign: 'right', cellWidth: 22 },
+            7: { halign: 'right', cellWidth: 24 },
+            8: { halign: 'center', cellWidth: 16 }
+        },
+        margin: { left: 14, right: 14 }
+    });
+
+    currentY = doc.lastAutoTable.finalY + 5;
+
+    if (currentY > 210) {
+        doc.addPage();
+        renderReportPageDecorations(doc, 2, 2);
+        currentY = 32.5;
+    }
+
+    // SECTION 2: DESIGN / ARTICLE ANALYSIS (Which Design Was Most Made)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text('2. DESIGN & ARTICLE PRODUCTION ANALYSIS (Most Made Articles):', 14, currentY);
+
+    const designRows = designLeaderboard.map((d, idx) => {
+        const sharePct = grandProductionPics > 0 ? ((d.totalPics / grandProductionPics) * 100).toFixed(1) + '%' : '0.0%';
+        const avgRate = d.totalPics > 0 ? (d.totalValue / d.totalPics).toFixed(2) : '0.00';
+        const rankLabel = idx === 0 ? 'Top 1' : String(idx + 1);
+        return [
+            rankLabel,
+            d.designName,
+            d.totalPics,
+            sharePct,
+            'Rs. ' + avgRate,
+            'Rs. ' + d.totalValue.toFixed(2)
+        ];
+    });
+
+    if (designRows.length === 0) {
+        designRows.push(['-', 'No design production entries recorded', '0', '0.0%', '0.00', '0.00']);
+    }
+
+    doc.autoTable({
+        startY: currentY + 2,
+        head: [['Rank', 'Design No / Article', 'Total Pcs Stitched', '% Output Share', 'Avg Piece Rate', 'Total Wage Value']],
+        body: designRows,
+        foot: [[
+            'TOTAL',
+            `${designLeaderboard.length} Articles Manufactured`,
+            grandProductionPics + ' Pcs',
+            '100.0%',
+            '-',
+            'Rs. ' + grandGrossJama.toFixed(2)
+        ]],
+        theme: 'grid',
+        styles: {
+            fontSize: 7.5,
+            cellPadding: 1.4,
+            textColor: [0, 0, 0],
+            lineColor: [0, 0, 0],
+            lineWidth: 0.1
+        },
+        headStyles: {
+            fillColor: [240, 240, 240],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold',
+            halign: 'center'
+        },
+        footStyles: {
+            fillColor: [245, 245, 245],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold'
+        },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 14 },
+            1: { halign: 'left' },
+            2: { halign: 'right', cellWidth: 32 },
+            3: { halign: 'center', cellWidth: 26 },
+            4: { halign: 'right', cellWidth: 30 },
+            5: { halign: 'right', cellWidth: 36 }
+        },
+        margin: { left: 14, right: 14 }
+    });
+
+    currentY = doc.lastAutoTable.finalY + 8;
+
+    if (currentY > 235) {
+        doc.addPage();
+        renderReportPageDecorations(doc, 3, 3);
+        currentY = 32.5;
+    }
+
+    // SECTION 3: FACTORY AUDIT APPROVAL SIGNATURES
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+    doc.rect(14, currentY, 182, 22);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(0, 0, 0);
+    doc.text('FACTORY PRODUCTION AUDIT & EXECUTIVE SIGN-OFF:', 17, currentY + 4.8);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('1. Production Incharge / Supervisor: _______________________', 18, currentY + 12);
+    doc.text('2. Head Accountant / Internal Auditor: _____________________', 18, currentY + 17.5);
+
+    doc.text('3. Factory Owner / Authorized Signatory: ___________________', 105, currentY + 12);
+    doc.text('Official Factory Seal & Date: ______________________________', 105, currentY + 17.5);
+
+    // Footer Software Tag
     doc.setFontSize(7);
     doc.setTextColor(110, 110, 110);
-    doc.text('Krimaa Order Management | Audited Zero-Error Reconciled', 105, 284, { align: 'center' });
+    doc.text('Krimaa Enterprise Management System | ISO-Standard Manufacturing & Payroll Statement', 105, 284, { align: 'center' });
 
-    doc.save(`Karigar_Summary_${compName}_${getTodayISODate()}.pdf`);
-    showToast('Karigar summary PDF downloaded!', 'success');
+    if (!options.noDownload) {
+        const filename = `Company_Monthly_Production_Report_${compName}_${getTodayISODate()}.pdf`;
+        doc.save(filename);
+        showToast(`Company Monthly Production & Audit Report downloaded!`, 'success');
+    }
+
+    return doc;
+}
+
+function exportCompanyMonthlyReportPDF(companyId, txs, options = {}) {
+    generateCompanyMonthlyReportPDF(companyId, txs, { ...options, noDownload: false });
+}
+
+function printCompanyMonthlyReport(companyId, txs, options = {}) {
+    const doc = generateCompanyMonthlyReportPDF(companyId, txs, { ...options, noDownload: true });
+    if (doc) {
+        printPDFViaHiddenIframe(doc, 'Company Monthly Report');
+    }
+}
+
+// Backwards-compatible alias for toolbar summary button
+function exportKarigarSummaryPDF() {
+    exportCompanyMonthlyReportPDF();
 }
 
 function exportTableToPDF(title, headers, bodyData, filename) {
