@@ -346,6 +346,27 @@ const LanStorageService = (() => {
 
 
     async function generateBackupPayload() {
+        const zip = new JSZip();
+        const handledFiles = new Set();
+
+        // 1. Pack all local files from the connected LAN folder (preserves all historical months & karigar records)
+        if (_dirHandle && _status === "connected") {
+            try {
+                for await (const entry of _dirHandle.values()) {
+                    if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+                        const data = await readFile(entry.name, null);
+                        if (data !== null) {
+                            zip.file(entry.name, JSON.stringify(data, null, 2));
+                            handledFiles.add(entry.name);
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[LAN] Error scanning local directory for backup:', err);
+            }
+        }
+
+        // 2. Include any additional collections from Cloud Firestore that weren't in the folder
         const collections = [
             "accounts", "daily_orders", "daily_summary", "karigars", "karigar_reset_backups",
             "karigar_transactions", "money_records", "money_backups", "design_prices",
@@ -359,16 +380,18 @@ const LanStorageService = (() => {
             }
         }
 
-        const zip = new JSZip();
-        if (typeof firebase !== 'undefined' && firebase.firestore) {
+        if (typeof firebase !== 'undefined' && firebase.firestore && firebase.apps && firebase.apps.length > 0) {
             const db = firebase.firestore();
             for (const colName of collections) {
+                const fname = `${colName}.json`;
+                if (handledFiles.has(fname)) continue;
                 try {
                     const snap = await db.collection(colName).get();
                     if (!snap.empty) {
                         const docs = [];
                         snap.forEach(doc => docs.push({ id: doc.id, ...doc.data() }));
-                        zip.file(`${colName}.json`, JSON.stringify(docs, null, 2));
+                        zip.file(fname, JSON.stringify(docs, null, 2));
+                        handledFiles.add(fname);
                     }
                 } catch (e) {
                     console.warn(`Export skipped for ${colName}:`, e.message);
@@ -376,10 +399,13 @@ const LanStorageService = (() => {
             }
         } else {
             for (const colName of collections) {
+                const fname = `${colName}.json`;
+                if (handledFiles.has(fname)) continue;
                 try {
                     const data = await readFile(colName, null);
                     if (data !== null) {
-                        zip.file(`${colName}.json`, JSON.stringify(data, null, 2));
+                        zip.file(fname, JSON.stringify(data, null, 2));
+                        handledFiles.add(fname);
                     }
                 } catch (e) {}
             }
