@@ -6795,6 +6795,7 @@ async function renderKarigarPage(forceReload = false) {
     renderKarigarGrid();
     setupKarigarListeners();
     setupKarigarFastEnterNavigation();
+    setupKarigarGlobalShortcuts();
 }
 
 function resolveKarigarIdFromState(karigarId, karigarName) {
@@ -7026,30 +7027,110 @@ function calculateKarigarBalance(karigarId, karigarName) {
     return { totalJama, totalUpad, totalPics, balance, lastTx: tx[0] };
 }
 
+let _selectedKarigarCardIndex = -1;
+
+function highlightSelectedCard() {
+    const cards = document.querySelectorAll('#karigar-grid .karigar-card');
+    cards.forEach((c, idx) => {
+        if (idx === _selectedKarigarCardIndex) {
+            c.classList.add('keyboard-selected');
+            try { c.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch(e){}
+        } else {
+            c.classList.remove('keyboard-selected');
+        }
+    });
+}
+
+function getSelectedOrFirstKarigar() {
+    const grid = document.getElementById('karigar-grid');
+    if (!grid) return null;
+    const cards = grid.querySelectorAll('.karigar-card');
+    if (cards.length === 0) return null;
+    
+    let targetCard = null;
+    if (_selectedKarigarCardIndex >= 0 && _selectedKarigarCardIndex < cards.length) {
+        targetCard = cards[_selectedKarigarCardIndex];
+    } else {
+        targetCard = cards[0];
+    }
+    const jamaBtn = targetCard.querySelector('.btn-karigar-jama');
+    if (!jamaBtn) return null;
+    const kid = jamaBtn.dataset.id;
+    const kname = jamaBtn.dataset.name;
+    return (AppState.karigars || []).find(k => k.id === kid) || { id: kid, name: kname };
+}
+
+async function autoCreateKarigarFromSearch(name) {
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return;
+    if (!isAdminUser()) {
+        return showToast('Only admin can add Karigar', 'error');
+    }
+    showLoader(`Creating new karigar "${cleanName}"...`);
+    try {
+        await FirebaseService.addKarigar(cleanName, AppState.currentCompany, buildAuditActor());
+        _pendingDataChangesForBackup = true;
+        scheduleBackgroundSheetBackup('addKarigar');
+        const searchInput = document.getElementById('karigar-search-input');
+        if (searchInput) searchInput.value = '';
+        showToast(`Karigar "${cleanName}" created successfully!`, 'success');
+        invalidateKarigarCache();
+        await renderKarigarPage(true);
+
+        // Find newly created karigar and open Jama modal immediately
+        const newlyCreated = (AppState.karigars || []).find(k => (k.name || '').toLowerCase() === cleanName.toLowerCase());
+        if (newlyCreated) {
+            openKarigarJamaModal(newlyCreated.id, newlyCreated.name);
+        }
+    } catch (err) {
+        showToast(err.message || 'Failed to create karigar', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+window.autoCreateKarigarFromSearch = autoCreateKarigarFromSearch;
+
 function renderKarigarGrid() {
     const grid = document.getElementById('karigar-grid');
     const searchInput = document.getElementById('karigar-search-input');
-    const query = (searchInput.value || '').trim().toLowerCase();
+    const rawSearch = (searchInput ? searchInput.value : '').trim();
+    const query = rawSearch.toLowerCase();
     const btnCreate = document.getElementById('btn-create-karigar');
     const isAdmin = isAdminUser();
     
     if (!grid) return;
     grid.innerHTML = '';
     
-    let filtered = AppState.karigars;
+    let filtered = AppState.karigars || [];
     if (query) {
-        filtered = AppState.karigars.filter(k => (k.name || '').toLowerCase().includes(query));
+        filtered = (AppState.karigars || []).filter(k => (k.name || '').toLowerCase().includes(query));
     }
     
-    const exactMatch = AppState.karigars.some(k => (k.name || '').toLowerCase() === query);
-    if (query && !exactMatch) {
+    const exactMatch = (AppState.karigars || []).some(k => (k.name || '').toLowerCase() === query);
+    if (query && !exactMatch && isAdmin) {
         btnCreate.style.display = 'block';
     } else {
         btnCreate.style.display = 'none';
     }
     
     if (filtered.length === 0) {
-        grid.innerHTML = `<div class="card p-4 text-center text-muted" style="grid-column: 1 / -1;"><i class="bx bx-user-x text-4xl mb-2"></i><p>No karigars found.</p></div>`;
+        const escQuery = rawSearch.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const safeJsQuery = rawSearch.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const createBtnHtml = (rawSearch && isAdmin) ? `
+            <div style="margin-top: 1rem;">
+                <button type="button" class="btn btn-primary" onclick="autoCreateKarigarFromSearch('${safeJsQuery}')" style="box-shadow: 0 4px 12px rgba(37,99,235,0.25); font-weight:600;">
+                    <i class='bx bx-user-plus'></i> Press <kbd class="kbd-shortcut" style="margin:0 4px;">Enter</kbd> to Create Karigar "${escQuery}"
+                </button>
+            </div>
+        ` : '';
+        grid.innerHTML = `
+            <div class="card p-4 text-center text-muted" style="grid-column: 1 / -1; padding: 2.5rem 1rem;">
+                <i class="bx bx-user-x text-4xl mb-2" style="font-size: 2.5rem; opacity: 0.6;"></i>
+                <h4 style="font-weight: 700; color: #1e293b; margin: 0.5rem 0 0.25rem 0;">${rawSearch ? `No Karigar found matching "${escQuery}"` : 'No karigars found.'}</h4>
+                <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 0;">${rawSearch ? 'Press <strong>Enter</strong> to automatically create this Karigar and open Maal (Jama).' : ''}</p>
+                ${createBtnHtml}
+            </div>
+        `;
         return;
     }
     
@@ -7077,7 +7158,7 @@ function renderKarigarGrid() {
     let globalBalanceSum = 0;
     let globalPicsSum = 0;
     
-    filtered.forEach(k => {
+    filtered.forEach((k, idx) => {
         const stats = calculateKarigarBalance(k.id, k.name);
         globalBalanceSum += stats.balance;
         globalPicsSum += (parseInt(stats.totalPics, 10) || 0);
@@ -7089,7 +7170,7 @@ function renderKarigarGrid() {
         
         const entId = getEnterpriseKarigarId(k, AppState.currentCompany);
         html += `
-            <div class="karigar-card">
+            <div class="karigar-card" data-id="${k.id}" data-idx="${idx}">
                 <div class="karigar-card-header">
                     <div>
                         <div class="flex items-center gap-2" style="margin-bottom: 2px;">
@@ -7120,21 +7201,26 @@ function renderKarigarGrid() {
                 </div>
 
                 <div class="karigar-actions-primary">
-                    <button class="btn btn-outline btn-karigar-upad ${isAdmin ? '' : 'disabled'}" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" ${isAdmin ? '' : 'disabled title="Only admin can add Borrow (Upad)"'} style="color:#dc2626; border-color:#fca5a5;">
-                        <i class='bx bx-minus-circle'></i> Borrow
+                    <button class="btn btn-outline btn-karigar-upad ${isAdmin ? '' : 'disabled'}" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" ${isAdmin ? '' : 'disabled title="Only admin can add Borrow (Upad) [U]"'} style="color:#dc2626; border-color:#fca5a5;">
+                        <kbd class="kbd-shortcut">U</kbd> Borrow
                     </button>
-                    <button class="btn btn-primary btn-karigar-jama" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="background:#059669; border-color:#059669;">
-                        <i class='bx bx-plus-circle'></i> Maal (Jama)
+                    <button class="btn btn-primary btn-karigar-jama" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="background:#059669; border-color:#059669;" title="Add Maal piece-rate work [J]">
+                        <kbd class="kbd-shortcut">J</kbd> Maal (Jama)
                     </button>
                 </div>
 
-                <div class="karigar-actions-secondary">
-                    <button class="btn-subtle btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="View detailed history">
-                        <i class='bx bx-history'></i> History
+                <div class="karigar-actions-secondary" style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:0.5rem;">
+                    <button class="btn-subtle btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="View detailed history [H]">
+                        <kbd class="kbd-shortcut">H</kbd> History
                     </button>
-                    <button class="btn-subtle btn-karigar-slip-pdf" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="Download printable salary slip PDF">
-                        <i class='bx bxs-file-pdf text-danger'></i> Salary Slip
-                    </button>
+                    <div style="display:flex; gap:4px; align-items:center;">
+                        <button class="btn-subtle btn-karigar-slip-print" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="Direct Print Salary Slip (No download) [P]" style="color:#0f172a; font-weight:700;">
+                            <kbd class="kbd-shortcut">P</kbd> <i class='bx bx-printer'></i> Print
+                        </button>
+                        <button class="btn-subtle btn-karigar-slip-pdf" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="Download PDF file">
+                            <i class='bx bxs-file-pdf text-danger'></i> PDF
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
@@ -7174,6 +7260,15 @@ function renderKarigarGrid() {
             openKarigarHistoryModal(el.dataset.id, el.dataset.name);
         });
     });
+    grid.querySelectorAll('.btn-karigar-slip-print').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const el = e.currentTarget;
+            const karigarId = el.dataset.id;
+            const karigarName = el.dataset.name;
+            const k = (AppState.karigars || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
+            printKarigarSalarySlip(k);
+        });
+    });
     grid.querySelectorAll('.btn-karigar-slip-pdf').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const el = e.currentTarget;
@@ -7183,12 +7278,58 @@ function renderKarigarGrid() {
             exportKarigarSalarySlipPDF(k);
         });
     });
+
+    // Make clicking any card select it for keyboard shortcuts
+    grid.querySelectorAll('.karigar-card').forEach((card, idx) => {
+        card.addEventListener('click', (e) => {
+            if (['BUTTON', 'A', 'INPUT'].includes(e.target.tagName) || e.target.closest('button')) return;
+            _selectedKarigarCardIndex = idx;
+            highlightSelectedCard();
+        });
+    });
+
+    if (_selectedKarigarCardIndex >= 0) {
+        highlightSelectedCard();
+    }
 }
 
 function setupKarigarListeners() {
     const searchInput = document.getElementById('karigar-search-input');
     if (searchInput && !searchInput.dataset.bound) {
-        searchInput.addEventListener('input', renderKarigarGrid);
+        searchInput.addEventListener('input', () => {
+            _selectedKarigarCardIndex = -1;
+            renderKarigarGrid();
+        });
+
+        // Enter key in search box: Open if matched, or Auto-Create new Karigar!
+        searchInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const rawVal = (searchInput.value || '').trim();
+                if (!rawVal) return;
+
+                // 1. Exact match?
+                const exact = (AppState.karigars || []).find(k => (k.name || '').toLowerCase() === rawVal.toLowerCase());
+                if (exact) {
+                    openKarigarJamaModal(exact.id, exact.name);
+                    return;
+                }
+
+                // 2. Single filtered match?
+                const filtered = (AppState.karigars || []).filter(k => (k.name || '').toLowerCase().includes(rawVal.toLowerCase()));
+                if (filtered.length === 1) {
+                    openKarigarJamaModal(filtered[0].id, filtered[0].name);
+                    return;
+                }
+
+                // 3. No match -> automatically create new Karigar!
+                if (!isAdminUser()) {
+                    showToast('Only admin can add Karigar', 'error');
+                    return;
+                }
+                await autoCreateKarigarFromSearch(rawVal);
+            }
+        });
         searchInput.dataset.bound = 'true';
     }
 
@@ -7788,6 +7929,151 @@ function setupKarigarFastEnterNavigation() {
     });
 }
 
+function setupKarigarGlobalShortcuts() {
+    if (window.__karigarGlobalShortcutsBound) return;
+    window.__karigarGlobalShortcutsBound = true;
+
+    window.addEventListener('keydown', (e) => {
+        if (AppState.currentSection !== 'karigar') return;
+
+        const activeModal = document.querySelector('.modal.show');
+        if (activeModal) {
+            // If History modal is open, pressing 'P' directly prints salary slip
+            if (activeModal.id === 'karigar-history-modal') {
+                if ((e.key === 'p' || e.key === 'P') && !['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) {
+                    e.preventDefault();
+                    document.getElementById('btn-print-slip-employee')?.click();
+                }
+            }
+            return;
+        }
+
+        const targetTag = (e.target?.tagName || '').toUpperCase();
+        const searchInput = document.getElementById('karigar-search-input');
+
+        // If typing inside an input/select/textarea
+        if (['INPUT', 'SELECT', 'TEXTAREA'].includes(targetTag)) {
+            if (e.target === searchInput) {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    searchInput.value = '';
+                    searchInput.blur();
+                    renderKarigarGrid();
+                    return;
+                }
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    searchInput.blur();
+                    _selectedKarigarCardIndex = 0;
+                    highlightSelectedCard();
+                    return;
+                }
+            }
+            return;
+        }
+
+        // Cmd+P or Ctrl+P on Karigar page: Print slip
+        if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) printKarigarSalarySlip(k);
+            return;
+        }
+
+        // If other modifiers are active, allow standard OS shortcuts
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+        // '/' shortcut: focus search input immediately
+        if (e.key === '/') {
+            e.preventDefault();
+            if (searchInput) {
+                searchInput.focus();
+                searchInput.select();
+            }
+            return;
+        }
+
+        const key = e.key.toLowerCase();
+
+        // J: Open Maal (Jama)
+        if (key === 'j') {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) openKarigarJamaModal(k.id, k.name);
+            return;
+        }
+
+        // U: Open Borrow (Upad)
+        if (key === 'u') {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) openKarigarUpadModal(k.id, k.name);
+            return;
+        }
+
+        // P: Direct Print Slip (No download)
+        if (key === 'p') {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) printKarigarSalarySlip(k);
+            return;
+        }
+
+        // H: Open History
+        if (key === 'h') {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) openKarigarHistoryModal(k.id, k.name);
+            return;
+        }
+
+        // R: Refresh
+        if (key === 'r') {
+            e.preventDefault();
+            document.getElementById('btn-refresh-karigar')?.click();
+            return;
+        }
+
+        // Arrow keys to navigate cards
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const cards = document.querySelectorAll('#karigar-grid .karigar-card');
+            if (cards.length > 0) {
+                if (_selectedKarigarCardIndex === -1) _selectedKarigarCardIndex = 0;
+                else _selectedKarigarCardIndex = Math.min(cards.length - 1, _selectedKarigarCardIndex + 1);
+                highlightSelectedCard();
+            }
+            return;
+        }
+
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const cards = document.querySelectorAll('#karigar-grid .karigar-card');
+            if (cards.length > 0) {
+                if (_selectedKarigarCardIndex === -1) _selectedKarigarCardIndex = 0;
+                else _selectedKarigarCardIndex = Math.max(0, _selectedKarigarCardIndex - 1);
+                highlightSelectedCard();
+            }
+            return;
+        }
+
+        // Enter on selected card opens Jama
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) openKarigarJamaModal(k.id, k.name);
+            return;
+        }
+
+        // Any single printable character typed anywhere without clicking: auto-focus search!
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+            if (searchInput) {
+                searchInput.focus();
+            }
+        }
+    });
+}
+
 function openKarigarJamaModal(id, name) {
     // Populate Karigar dropdown for bulk entry.
     const select = document.getElementById('karigar-jama-select');
@@ -8025,6 +8311,13 @@ function openKarigarHistoryModal(id, name) {
     const printSlipBtn = document.getElementById('btn-print-slip-employee');
     if (printSlipBtn) {
         printSlipBtn.onclick = () => {
+            const k = (AppState.karigars || []).find(x => x.id === resolvedId) || { id: resolvedId, name: name };
+            printKarigarSalarySlip(k);
+        };
+    }
+    const dlSlipBtn = document.getElementById('btn-download-slip-employee');
+    if (dlSlipBtn) {
+        dlSlipBtn.onclick = () => {
             const k = (AppState.karigars || []).find(x => x.id === resolvedId) || { id: resolvedId, name: name };
             exportKarigarSalarySlipPDF(k);
         };
@@ -8669,7 +8962,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
     doc.setTextColor(120, 120, 120);
     doc.text('Krimaa Order Management System | Audited Zero-Error Reconciled', 105, 283, { align: 'center' });
 
-    if (!options.isBulk) {
+    if (!options.isBulk && !options.noDownload) {
         const cleanName = (targetKName || 'Karigar').replace(/[^a-zA-Z0-9_-]/g, '_');
         const filename = `SalarySlip_${enterpriseId}_${cleanName}_${getTodayISODate()}.pdf`;
         doc.save(filename);
@@ -8686,6 +8979,60 @@ function exportKarigarSalarySlipPDF(karigar) {
         if (b && Array.isArray(b.rows)) txs = b.rows;
     }
     generateKarigarSalarySlipPDF(karigar, txs, { isBulk: false });
+}
+
+function printKarigarSalarySlip(karigar) {
+    if (!window.jspdf) return showToast('PDF library not ready', 'error');
+    if (!karigar) return;
+    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
+    }
+
+    const doc = generateKarigarSalarySlipPDF(karigar, txs, { isBulk: true, noDownload: true });
+    if (!doc) return;
+
+    doc.autoPrint();
+    const blob = doc.output('blob');
+    const blobUrl = URL.createObjectURL(blob);
+
+    showToast(`Opening Print dialog for ${karigar.name}...`, 'info');
+
+    // Create a hidden iframe to directly invoke the native browser print dialog without downloading
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '1px';
+    iframe.style.height = '1px';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0.01';
+    iframe.src = blobUrl;
+    document.body.appendChild(iframe);
+
+    let printed = false;
+    const triggerPrint = () => {
+        if (printed) return;
+        printed = true;
+        try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+        } catch (err) {
+            console.warn('Iframe print error, falling back to window.open:', err);
+            const w = window.open(blobUrl, '_blank');
+            if (w) w.focus();
+        }
+        setTimeout(() => {
+            try { document.body.removeChild(iframe); } catch(e){}
+            try { URL.revokeObjectURL(blobUrl); } catch(e){}
+        }, 120000);
+    };
+
+    iframe.onload = () => {
+        setTimeout(triggerPrint, 250);
+    };
+    setTimeout(triggerPrint, 900);
 }
 
 async function exportBulkKarigarSalarySlipsPDF(options = {}) {

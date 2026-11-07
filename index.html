@@ -427,7 +427,7 @@
                             <div class="karigar-toolbar-left">
                                 <div class="karigar-search-box">
                                     <i class='bx bx-search'></i>
-                                    <input type="text" id="karigar-search-input" placeholder="Search by Karigar name...">
+                                    <input type="text" id="karigar-search-input" placeholder="Type to search or add new Karigar (Press Enter)...">
                                 </div>
                                 <select id="karigar-cycle-select" class="form-select text-sm font-semibold" style="padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-weight: 600; cursor: pointer; min-width: 170px;">
                                     <option value="current">Current Active Cycle (Live)</option>
@@ -435,7 +435,7 @@
                             </div>
 
                             <div class="karigar-toolbar-actions">
-                                <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-karigar" title="Refresh all data and re-audit calculations">
+                                <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-karigar" title="Refresh all data [R]">
                                     <i class='bx bx-refresh'></i> Refresh
                                 </button>
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF">
@@ -448,6 +448,19 @@
                                     <i class='bx bx-plus'></i> Add Karigar
                                 </button>
                             </div>
+                        </div>
+
+                        <!-- Keyboard Shortcut Helpers Strip -->
+                        <div class="karigar-shortcut-hints" style="display: flex; gap: 0.85rem; align-items: center; margin-top: 0.65rem; font-size: 0.73rem; color: #64748b; flex-wrap: wrap; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                            <span style="font-weight: 700; color: #1e293b;"><i class='bx bx-command'></i> Shortcuts:</span>
+                            <span><kbd class="kbd-shortcut">/</kbd> Search / Type Name</span>
+                            <span><kbd class="kbd-shortcut">Enter</kbd> Open / Create Karigar</span>
+                            <span><kbd class="kbd-shortcut">J</kbd> Maal (Jama)</span>
+                            <span><kbd class="kbd-shortcut">U</kbd> Borrow (Upad)</span>
+                            <span><kbd class="kbd-shortcut">P</kbd> Direct Print Slip</span>
+                            <span><kbd class="kbd-shortcut">H</kbd> History</span>
+                            <span><kbd class="kbd-shortcut">↑ / ↓</kbd> Select Card</span>
+                            <span><kbd class="kbd-shortcut">Esc</kbd> Clear / Close</span>
                         </div>
                     </div>
 
@@ -805,7 +818,8 @@
                     <p class="text-xs text-muted">All Maal (Jama) and Borrow (Upad) entries <span style="opacity:0.75;">| Shortcut: Enter/Esc to close</span></p>
                 </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <button id="btn-print-slip-employee" class="btn btn-primary btn-sm" style="background:#1e293b; border-color:#1e293b;"><i class='bx bxs-file-pdf'></i> Print Salary Slip</button>
+                    <button id="btn-print-slip-employee" class="btn btn-primary btn-sm" style="background:#1e293b; border-color:#1e293b;" title="Direct Print [P]"><i class='bx bx-printer'></i> <kbd class="kbd-shortcut">P</kbd> Print Slip</button>
+                    <button id="btn-download-slip-employee" class="btn btn-outline btn-sm" title="Download PDF file"><i class='bx bxs-file-pdf text-danger'></i> Download PDF</button>
                     <button id="btn-edit-employee" class="btn btn-outline btn-sm"><i class='bx bx-edit'></i> Edit Employee</button>
                     <button id="btn-delete-employee" class="btn btn-danger btn-sm"><i class='bx bx-user-x'></i> Delete Employee</button>
                     <button id="close-karigar-history-modal" class="btn-icon"><i class='bx bx-x'></i></button>
