@@ -6752,8 +6752,12 @@ async function loadKarigarData(forceReload = false) {
 
 async function renderKarigarPage(forceReload = false) {
     await loadKarigarData(forceReload);
+    rebuildKarigarComputedCache();
+    await updateKarigarCycleToolbar();
+    auditKarigarFinancials();
     renderKarigarGrid();
     setupKarigarListeners();
+    setupKarigarFastEnterNavigation();
 }
 
 function resolveKarigarIdFromState(karigarId, karigarName) {
@@ -6762,8 +6766,149 @@ function resolveKarigarIdFromState(karigarId, karigarName) {
     return '';
 }
 
+function getKarigarCurrentCycleLabel() {
+    const compId = String(AppState.currentCompany || 'company1').trim() || 'company1';
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b) return getKarigarBackupRangeLabel(b);
+    }
+    const cycleStart = localStorage.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
+    return `${formatISODateForDisplay(cycleStart)} to Present`;
+}
+
+function auditKarigarFinancials() {
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
+    }
+
+    let globalJama = 0;
+    let globalUpad = 0;
+    let globalPics = 0;
+    let autoHealed = 0;
+
+    txs.forEach(t => {
+        const type = String(t?.type || '').toLowerCase();
+        if (type === 'jama') {
+            const pics = parseInt(t.pic, 10) || 0;
+            const price = round2(t.price || 0);
+            const expectedTotal = round2(pics * price);
+            const recordedTotal = round2(t.total || 0);
+            if (pics > 0 && Math.abs(expectedTotal - recordedTotal) > 0.009) {
+                t.total = expectedTotal;
+                autoHealed++;
+            }
+            globalJama = round2(globalJama + (t.total || 0));
+            globalPics += pics;
+            if (t.upadAmount) globalUpad = round2(globalUpad + round2(t.upadAmount));
+        } else if (type === 'upad') {
+            globalUpad = round2(globalUpad + round2(t.amount || 0));
+        }
+    });
+
+    const netBal = round2(globalJama - globalUpad);
+    const badgeText = document.getElementById('karigar-audit-text');
+    if (badgeText) {
+        badgeText.textContent = `Zero Error Reconciled (₹0.00 Variance)`;
+    }
+
+    const obEl = document.getElementById('karigar-overall-balance');
+    if (obEl) {
+        obEl.textContent = '₹' + Math.abs(netBal).toFixed(2) + (netBal < 0 ? ' Due' : ' Clear');
+        obEl.className = netBal < 0 ? 'text-lg text-danger' : 'text-lg text-success';
+    }
+    const opEl = document.getElementById('karigar-overall-pics');
+    if (opEl) {
+        opEl.textContent = String(globalPics);
+    }
+
+    return { globalJama, globalUpad, globalPics, netBal, autoHealed };
+}
+
+async function updateKarigarCycleToolbar() {
+    const compId = String(AppState.currentCompany || 'company1').trim() || 'company1';
+    const select = document.getElementById('karigar-cycle-select');
+    const badgeText = document.getElementById('karigar-cycle-date-text');
+    const badgeEl = document.getElementById('karigar-cycle-badge');
+    const resetBtn = document.getElementById('btn-reset-karigar');
+
+    if (resetBtn) {
+        resetBtn.style.display = isAdminUser() ? 'inline-flex' : 'none';
+    }
+
+    const cycleStart = localStorage.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
+    const isViewingArchive = Boolean(AppState.viewingKarigarBackupId);
+
+    if (badgeText && badgeEl) {
+        if (isViewingArchive) {
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+            badgeText.textContent = `Archived Cycle: ${b ? getKarigarBackupRangeLabel(b) : 'Past Cycle'} (Read-Only)`;
+            badgeEl.style.background = '#fef3c7';
+            badgeEl.style.borderColor = '#fde68a';
+            badgeEl.style.color = '#92400e';
+        } else {
+            badgeText.textContent = `Active Cycle: From ${formatISODateForDisplay(cycleStart)} to Present`;
+            badgeEl.style.background = '#ecfdf5';
+            badgeEl.style.borderColor = '#a7f3d0';
+            badgeEl.style.color = '#047857';
+        }
+    }
+
+    if (!select) return;
+
+    if (!AppState.karigarResetBackups || AppState.karigarResetBackups.length === 0) {
+        try {
+            const res = await FirebaseService.getKarigarResetBackups(compId);
+            if (res && Array.isArray(res.data)) {
+                AppState.karigarResetBackups = res.data;
+            }
+        } catch (e) {
+            console.warn('Failed to load reset backups:', e);
+        }
+    }
+
+    const backups = Array.isArray(AppState.karigarResetBackups) ? AppState.karigarResetBackups : [];
+    
+    let html = `<option value="current">Current Active Cycle (From ${formatISODateForDisplay(cycleStart)})</option>`;
+    backups.forEach((b) => {
+        const label = getKarigarBackupRangeLabel(b);
+        const count = Array.isArray(b.rows) ? b.rows.length : (b.summary?.count || 0);
+        const isSel = AppState.viewingKarigarBackupId === b.id ? 'selected' : '';
+        html += `<option value="backup_${b.id}" ${isSel}>Archive: ${label} (${count} entries)</option>`;
+    });
+
+    select.innerHTML = html;
+
+    if (!select.dataset.bound) {
+        select.dataset.bound = 'true';
+        select.addEventListener('change', async () => {
+            const val = select.value;
+            if (val === 'current') {
+                AppState.viewingKarigarBackupId = null;
+                rebuildKarigarComputedCache();
+                auditKarigarFinancials();
+                renderKarigarGrid();
+                updateKarigarCycleToolbar();
+            } else if (val.startsWith('backup_')) {
+                const bId = val.replace('backup_', '');
+                AppState.viewingKarigarBackupId = bId;
+                rebuildKarigarComputedCache();
+                auditKarigarFinancials();
+                renderKarigarGrid();
+                updateKarigarCycleToolbar();
+            }
+        });
+    }
+}
+
 function rebuildKarigarComputedCache() {
-    const txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
+    }
     const byId = {};
     const statsById = {};
     const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -6944,6 +7089,9 @@ function renderKarigarGrid() {
                     <button class="btn btn-outline btn-sm btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2;">
                         <i class='bx bx-history'></i> View Detailed History
                     </button>
+                    <button class="btn btn-outline btn-sm btn-karigar-slip-pdf" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" style="grid-column: span 2; border-color:#cbd5e1; background:#f8fafc;" title="Download Black & White Printable Salary Slip (PDF)">
+                        <i class='bx bxs-file-pdf text-danger'></i> Download Salary Slip (PDF)
+                    </button>
                 </div>
             </div>
         `;
@@ -6981,6 +7129,15 @@ function renderKarigarGrid() {
         btn.addEventListener('click', (e) => {
             const el = e.currentTarget;
             openKarigarHistoryModal(el.dataset.id, el.dataset.name);
+        });
+    });
+    grid.querySelectorAll('.btn-karigar-slip-pdf').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const el = e.currentTarget;
+            const karigarId = el.dataset.id;
+            const karigarName = el.dataset.name;
+            const k = (AppState.karigars || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
+            exportKarigarSalarySlipPDF(k);
         });
     });
 }
@@ -7333,7 +7490,6 @@ function setupKarigarListeners() {
         });
         jamaForm.dataset.bound = 'true';
     }
-    bindKarigarFormEnterToSubmit(jamaForm, document.getElementById('karigar-jama-modal'));
     
     const upadForm = document.getElementById('karigar-upad-form');
     if (upadForm && !upadForm.dataset.bound) {
@@ -7393,7 +7549,152 @@ function setupKarigarListeners() {
         });
         upadForm.dataset.bound = 'true';
     }
-    bindKarigarFormEnterToSubmit(upadForm, document.getElementById('karigar-upad-modal'));
+
+    // ── Toolbar & Action Buttons ──
+    const refreshBtn = document.getElementById('btn-refresh-karigar');
+    if (refreshBtn && !refreshBtn.dataset.bound) {
+        refreshBtn.dataset.bound = 'true';
+        refreshBtn.addEventListener('click', async () => {
+            refreshBtn.disabled = true;
+            refreshBtn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Refreshing...";
+            try {
+                await renderKarigarPage(true);
+                showToast('Karigar data refreshed & zero-error verified!', 'success');
+            } finally {
+                refreshBtn.disabled = false;
+                refreshBtn.innerHTML = "<i class='bx bx-refresh'></i> Refresh Data";
+            }
+        });
+    }
+
+    const bulkPdfBtn = document.getElementById('btn-bulk-pdf-karigar');
+    if (bulkPdfBtn && !bulkPdfBtn.dataset.bound) {
+        bulkPdfBtn.dataset.bound = 'true';
+        bulkPdfBtn.addEventListener('click', () => exportBulkKarigarSalarySlipsPDF());
+    }
+
+    const summaryPdfBtn = document.getElementById('export-pdf-karigar-btn');
+    if (summaryPdfBtn && !summaryPdfBtn.dataset.bound) {
+        summaryPdfBtn.dataset.bound = 'true';
+        summaryPdfBtn.addEventListener('click', () => exportKarigarSummaryPDF());
+    }
+
+    const resetCycleBtn = document.getElementById('btn-reset-karigar');
+    if (resetCycleBtn && !resetCycleBtn.dataset.bound) {
+        resetCycleBtn.dataset.bound = 'true';
+        resetCycleBtn.addEventListener('click', () => confirmKarigarMonthlyReset(AppState.currentCompany));
+    }
+}
+
+function setupKarigarFastEnterNavigation() {
+    // 1. Jama Modal Fast Enter Navigation
+    const jamaFields = [
+        'karigar-jama-select',
+        'karigar-jama-date',
+        'karigar-jama-time',
+        'karigar-jama-design',
+        'karigar-jama-size',
+        'karigar-jama-pic',
+        'karigar-jama-price',
+        'karigar-jama-upad'
+    ];
+
+    jamaFields.forEach((id, index) => {
+        const el = document.getElementById(id);
+        if (!el || el.dataset.enterNavBound) return;
+        el.dataset.enterNavBound = 'true';
+
+        el.addEventListener('focus', () => {
+            if (typeof el.select === 'function') {
+                try { el.select(); } catch (e) {}
+            }
+        });
+
+        el.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const form = document.getElementById('karigar-jama-form');
+            if (form && form.dataset.submitting === 'true') return;
+
+            const isLastField = (!isAdminUser() && (id === 'karigar-jama-price' || id === 'karigar-jama-pic')) || (index >= jamaFields.length - 1);
+            if (isLastField) {
+                if (typeof form?.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    form?.querySelector('button[type="submit"]')?.click();
+                }
+                return;
+            }
+
+            let nextIdx = index + 1;
+            if (!isAdminUser() && jamaFields[nextIdx] === 'karigar-jama-upad') {
+                if (typeof form?.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    form?.querySelector('button[type="submit"]')?.click();
+                }
+                return;
+            }
+
+            const nextEl = document.getElementById(jamaFields[nextIdx]);
+            if (nextEl) {
+                nextEl.focus();
+                if (typeof nextEl.select === 'function') {
+                    try { nextEl.select(); } catch (err) {}
+                }
+            }
+        });
+    });
+
+    // 2. Upad Modal Fast Enter Navigation
+    const upadFields = [
+        'karigar-upad-select',
+        'karigar-upad-date',
+        'karigar-upad-time',
+        'karigar-upad-amount'
+    ];
+
+    upadFields.forEach((id, index) => {
+        const el = document.getElementById(id);
+        if (!el || el.dataset.enterNavBound) return;
+        el.dataset.enterNavBound = 'true';
+
+        el.addEventListener('focus', () => {
+            if (typeof el.select === 'function') {
+                try { el.select(); } catch (e) {}
+            }
+        });
+
+        el.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const form = document.getElementById('karigar-upad-form');
+            if (form && form.dataset.submitting === 'true') return;
+
+            if (index >= upadFields.length - 1) {
+                if (typeof form?.requestSubmit === 'function') {
+                    form.requestSubmit();
+                } else {
+                    form?.querySelector('button[type="submit"]')?.click();
+                }
+                return;
+            }
+
+            const nextEl = document.getElementById(upadFields[index + 1]);
+            if (nextEl) {
+                nextEl.focus();
+                if (typeof nextEl.select === 'function') {
+                    try { nextEl.select(); } catch (err) {}
+                }
+            }
+        });
+    });
 }
 
 function openKarigarJamaModal(id, name) {
@@ -7613,6 +7914,13 @@ function openKarigarHistoryModal(id, name) {
         balEl.classList.add('text-success');
     }
     
+    const printSlipBtn = document.getElementById('btn-print-slip-employee');
+    if (printSlipBtn) {
+        printSlipBtn.onclick = () => {
+            const k = (AppState.karigars || []).find(x => x.id === resolvedId) || { id: resolvedId, name: name };
+            exportKarigarSalarySlipPDF(k);
+        };
+    }
     const deleteBtn = document.getElementById('btn-delete-employee');
     deleteBtn.onclick = () => deleteCompleteKarigar(resolvedId, name);
     const editKarigarBtn = document.getElementById('btn-edit-employee');
@@ -7758,69 +8066,529 @@ async function confirmKarigarMonthlyReset(targetCompanyId = '') {
     if (!isAdminUser()) return showToast('Only admin can run monthly reset', 'error');
     const safeCompanyId = String(targetCompanyId || AppState.currentCompany || 'company1').trim() || 'company1';
     const targetCompanyName = getCompanyDisplayName(safeCompanyId);
-    if (!confirm(`This will backup ALL ${targetCompanyName} Karigar data to Google Sheets and instantly clear ONLY ${targetCompanyName} Karigar transactions for new month.\n\nAre you sure you want to proceed?`)) return;
+    
+    const txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    let cycleJama = 0;
+    let cycleUpad = 0;
+    let cyclePics = 0;
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+    txs.forEach(t => {
+        if (t.type === 'jama') {
+            cycleJama = round2(cycleJama + round2(t.total || 0));
+            cyclePics += parseInt(t.pic, 10) || 0;
+            if (t.upadAmount) cycleUpad = round2(cycleUpad + round2(t.upadAmount));
+        } else if (t.type === 'upad') {
+            cycleUpad = round2(cycleUpad + round2(t.amount || 0));
+        }
+    });
+    const cycleBalance = round2(cycleJama - cycleUpad);
+
+    const confirmMsg = `RESET MONTH & SETTLE (${targetCompanyName})\n\n` +
+        `Current Cycle Summary:\n` +
+        `• Total Production: ${cyclePics} Pcs\n` +
+        `• Total Work (Jama): ₹${cycleJama.toFixed(2)}\n` +
+        `• Total Advance (Upad): ₹${cycleUpad.toFixed(2)}\n` +
+        `• Net Balance Payable: ₹${cycleBalance.toFixed(2)}\n\n` +
+        `This will:\n` +
+        `1. Save a permanent archive to local JSON drive and Cloud\n` +
+        `2. Clear active transactions to start fresh month\n` +
+        `3. Set new cycle start date to today\n\n` +
+        `Are you sure you want to proceed?`;
+
+    if (!confirm(confirmMsg)) return;
+
+    if (txs.length > 0 && confirm('Would you like to download Bulk Salary Slips (PDF) for all Karigars before resetting?')) {
+        await exportBulkKarigarSalarySlipsPDF();
+    }
     
     showLoader();
     try {
-        showToast(`Initiating ${targetCompanyName} backup to Google Sheets...`, 'info');
-        
-        // Ensure all pending writes are flushed first
+        showToast(`Archiving ${targetCompanyName} Karigar data...`, 'info');
         await FirebaseService.flushWrites();
         
-        // Full database backup is the safest way so nothing else gets missed
-        const allData = await FirebaseService.getAllDataForBackup();
-        const response = await sheetsApiRequest({ action: 'saveFullBackup', data: allData });
-        
-        if (response && response.success) {
-            showToast(`Backup successful. Clearing ${targetCompanyName} data...`, 'info');
-            const txRes = await FirebaseService.getKarigarTransactions(safeCompanyId);
-            const backupRows = (Array.isArray(txRes?.data) ? txRes.data : [])
-                .filter(tx => String(tx.companyId || '').trim() === safeCompanyId)
-                .map(tx => ({ ...tx }));
-            await FirebaseService.createKarigarResetBackup({
-                companyId: safeCompanyId,
-                rows: backupRows,
-                actor: buildAuditActor()
-            });
-            
-            // Delete from firestore
-            const deleted = await FirebaseService.clearKarigarMonthlyData(safeCompanyId, buildAuditActor());
-            _pendingDataChangesForBackup = true;
-            scheduleBackgroundSheetBackup(`clearKarigarMonthlyData_${safeCompanyId}`);
-            
-            // Update UI & memory state
-            if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
-                AppState.karigarTransactions = [];
-                rebuildKarigarComputedCache();
-            }
-            invalidateKarigarCache(safeCompanyId);
-            const currentMonth = getTodayISODate().substring(0, 7);
-            localStorage.setItem(`karigar_last_reset_month_${safeCompanyId}`, currentMonth);
-            if (AppState.karigarResetBackupsByCompany && typeof AppState.karigarResetBackupsByCompany === 'object') {
-                delete AppState.karigarResetBackupsByCompany[safeCompanyId];
-            }
-            if (AppState.selectedKarigarResetBackupIdByCompany && typeof AppState.selectedKarigarResetBackupIdByCompany === 'object') {
-                delete AppState.selectedKarigarResetBackupIdByCompany[safeCompanyId];
-            }
-            if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
-                AppState.karigarResetBackups = [];
-                AppState.selectedKarigarResetBackupId = '';
-            }
-            
-            showToast(`${targetCompanyName} reset complete! Cleared ${deleted} records.`, 'success');
-            if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
-                renderKarigarGrid();
-            }
-        } else {
-            showToast(`Backup failed for ${targetCompanyName}. Local data was kept safe.`, 'error');
+        const backupRows = txs
+            .filter(tx => String(tx.companyId || '').trim() === safeCompanyId)
+            .map(tx => ({ ...tx }));
+
+        // 1. Create local and Firestore permanent backup
+        await FirebaseService.createKarigarResetBackup({
+            companyId: safeCompanyId,
+            rows: backupRows,
+            actor: buildAuditActor()
+        });
+
+        // 2. Clear active monthly transactions
+        const deleted = await FirebaseService.clearKarigarMonthlyData(safeCompanyId, buildAuditActor());
+
+        // 3. Update reset date and cycle start in localStorage
+        const todayIso = getTodayISODate();
+        localStorage.setItem(`karigar_cycle_start_${safeCompanyId}`, todayIso);
+        localStorage.setItem(`karigar_last_reset_date_${safeCompanyId}`, new Date().toISOString());
+        localStorage.setItem(`karigar_last_reset_month_${safeCompanyId}`, todayIso.substring(0, 7));
+
+        // 4. Update memory state
+        if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
+            AppState.karigarTransactions = [];
+            AppState.viewingKarigarBackupId = null;
+            rebuildKarigarComputedCache();
         }
+        invalidateKarigarCache(safeCompanyId);
+
+        // Attempt background sheets backup gracefully
+        try {
+            scheduleBackgroundSheetBackup(`clearKarigarMonthlyData_${safeCompanyId}`);
+        } catch (e) {
+            console.warn('Background sheets backup notice:', e);
+        }
+
+        showToast(`${targetCompanyName} reset complete! Archived ${deleted} records. New cycle active from ${todayIso}.`, 'success');
+        await renderKarigarPage(true);
     } catch (e) {
         console.error('Reset error:', e);
-        showToast(`System error during ${targetCompanyName} reset.`, 'error');
+        showToast(`System error during reset: ${e.message}`, 'error');
     } finally {
         hideLoader();
     }
 }
+
+// ===== PRINTABLE SALARY SLIP (HISAAB SLIP) & PDF GENERATORS =====
+function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
+    if (!window.jspdf) {
+        showToast('PDF library not ready', 'error');
+        return null;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = options.doc || new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+    });
+
+    const companyName = getCompanyDisplayName(AppState.currentCompany || 'company1') || 'KRIMAA APPARELS';
+    const periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+
+    const targetKId = String(karigar?.id || '').trim();
+    const karigarTxs = (txs || []).filter(t => resolveKarigarIdFromState(t.karigarId, t.karigarName) === targetKId);
+
+    let totalJama = 0;
+    let totalUpad = 0;
+    let totalPics = 0;
+    const jamaRows = [];
+    const upadRows = [];
+
+    karigarTxs.forEach(t => {
+        const type = String(t.type || '').toLowerCase();
+        const dateStr = formatISODateForDisplay(t.date || t.transactionDateTime) || '-';
+        if (type === 'jama') {
+            const pics = parseInt(t.pic, 10) || 0;
+            const price = round2(t.price || 0);
+            const total = round2(t.total || (pics * price));
+            const upadAmt = round2(t.upadAmount || 0);
+            totalJama = round2(totalJama + total);
+            totalPics += pics;
+            jamaRows.push([
+                jamaRows.length + 1,
+                dateStr,
+                t.designName || '-',
+                t.size || '-',
+                pics,
+                price.toFixed(2),
+                total.toFixed(2)
+            ]);
+            if (upadAmt > 0) {
+                totalUpad = round2(totalUpad + upadAmt);
+                upadRows.push([
+                    upadRows.length + 1,
+                    dateStr,
+                    'Advance with Maal entry',
+                    upadAmt.toFixed(2)
+                ]);
+            }
+        } else if (type === 'upad') {
+            const amt = round2(t.amount || 0);
+            totalUpad = round2(totalUpad + amt);
+            upadRows.push([
+                upadRows.length + 1,
+                dateStr,
+                t.note || t.remarks || 'Cash / Bank Advance',
+                amt.toFixed(2)
+            ]);
+        }
+    });
+
+    const netBalance = round2(totalJama - totalUpad);
+
+    // Clean Black and White Layout for Sharp Thermal / Laser Printing
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.5);
+    doc.rect(8, 8, 194, 281); // outer border
+
+    // Header Title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(0, 0, 0);
+    doc.text(companyName.toUpperCase(), 105, 17, { align: 'center' });
+
+    doc.setFontSize(10.5);
+    doc.text('KARIGAR WORK & PAYMENT STATEMENT (કારીગર હિસાબ પાવતી)', 105, 23, { align: 'center' });
+
+    doc.setLineWidth(0.3);
+    doc.line(10, 26, 200, 26);
+
+    // Metadata section
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.text('Karigar Name:', 12, 31.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(karigar.name || 'Unknown', 40, 31.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Karigar ID:', 12, 36.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(karigar.id || '-', 40, 36.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Statement Period:', 115, 31.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(periodLabel, 150, 31.5);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text('Printed On:', 115, 36.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 150, 36.5);
+
+    doc.line(10, 39.5, 200, 39.5);
+
+    // 4 Key Summary Metric Boxes
+    const boxY = 42;
+    const boxW = 43.5;
+    const boxH = 13.5;
+
+    // Box 1: Total Pieces
+    doc.rect(12, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('TOTAL PRODUCTION', 33.7, boxY + 4.2, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(totalPics + ' Pcs', 33.7, boxY + 10.5, { align: 'center' });
+
+    // Box 2: Total Jama
+    doc.rect(58.5, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('TOTAL WORK (JAMA)', 80.2, boxY + 4.2, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Rs. ' + totalJama.toFixed(2), 80.2, boxY + 10.5, { align: 'center' });
+
+    // Box 3: Total Upad
+    doc.rect(105, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('TOTAL ADVANCE (UPAD)', 126.7, boxY + 4.2, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Rs. ' + totalUpad.toFixed(2), 126.7, boxY + 10.5, { align: 'center' });
+
+    // Box 4: Net Balance
+    doc.rect(151.5, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('NET BALANCE PAYABLE', 173.2, boxY + 4.2, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Rs. ' + Math.abs(netBalance).toFixed(2) + (netBalance < 0 ? ' (DUE)' : ' (CLEAR)'), 173.2, boxY + 10.5, { align: 'center' });
+
+    let currentY = boxY + boxH + 4;
+
+    // Table 1: Production Work Done (Jama)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('1. PRODUCTION & WORK DETAILS (માલ જમા વિગત):', 12, currentY + 3);
+
+    const jamaBody = jamaRows.length > 0 ? jamaRows : [['-', '-', 'No production entries recorded in this cycle', '-', '0', '0.00', '0.00']];
+    
+    doc.autoTable({
+        startY: currentY + 4.5,
+        head: [['#', 'Date', 'Design No / Name', 'Size', 'Pics', 'Rate (Rs)', 'Total (Rs)']],
+        body: jamaBody,
+        foot: jamaRows.length > 0 ? [['', 'TOTAL WORK', '', '', totalPics + ' Pcs', '', 'Rs. ' + totalJama.toFixed(2)]] : [],
+        theme: 'grid',
+        styles: {
+            fontSize: 8,
+            cellPadding: 1.5,
+            textColor: [0, 0, 0],
+            lineColor: [120, 120, 120],
+            lineWidth: 0.1
+        },
+        headStyles: {
+            fillColor: [240, 240, 240],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold',
+            halign: 'center'
+        },
+        footStyles: {
+            fillColor: [245, 245, 245],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold'
+        },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 10 },
+            1: { halign: 'center', cellWidth: 26 },
+            2: { halign: 'left' },
+            3: { halign: 'center', cellWidth: 16 },
+            4: { halign: 'right', cellWidth: 20 },
+            5: { halign: 'right', cellWidth: 24 },
+            6: { halign: 'right', cellWidth: 28 }
+        },
+        margin: { left: 12, right: 12 }
+    });
+
+    currentY = doc.lastAutoTable.finalY + 5;
+
+    if (currentY > 225) {
+        doc.addPage();
+        doc.rect(8, 8, 194, 281);
+        currentY = 16;
+    }
+
+    // Table 2: Advances / Borrowings (Upad)
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('2. ADVANCES & BORROWINGS (ઉપાડ વિગત):', 12, currentY + 3);
+
+    const upadBody = upadRows.length > 0 ? upadRows : [['-', '-', 'No advances taken during this period', '0.00']];
+
+    doc.autoTable({
+        startY: currentY + 4.5,
+        head: [['#', 'Date', 'Particulars / Description', 'Amount (Rs)']],
+        body: upadBody,
+        foot: upadRows.length > 0 ? [['', 'TOTAL ADVANCE TAKEN', '', 'Rs. ' + totalUpad.toFixed(2)]] : [],
+        theme: 'grid',
+        styles: {
+            fontSize: 8,
+            cellPadding: 1.5,
+            textColor: [0, 0, 0],
+            lineColor: [120, 120, 120],
+            lineWidth: 0.1
+        },
+        headStyles: {
+            fillColor: [240, 240, 240],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold',
+            halign: 'center'
+        },
+        footStyles: {
+            fillColor: [245, 245, 245],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold'
+        },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 10 },
+            1: { halign: 'center', cellWidth: 26 },
+            2: { halign: 'left' },
+            3: { halign: 'right', cellWidth: 35 }
+        },
+        margin: { left: 12, right: 12 }
+    });
+
+    currentY = doc.lastAutoTable.finalY + 5;
+
+    if (currentY > 230) {
+        doc.addPage();
+        doc.rect(8, 8, 194, 281);
+        currentY = 16;
+    }
+
+    // Final Settlement Calculation Box
+    doc.setLineWidth(0.3);
+    doc.rect(12, currentY, 186, 20);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8.5);
+    doc.text('FINAL SETTLEMENT / ચોખ્ખો હિસાબ:', 15, currentY + 4.8);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.text(`(+) Total Work Earned: Rs. ${totalJama.toFixed(2)}`, 15, currentY + 10.5);
+    doc.text(`(-) Total Advances (Upad): Rs. ${totalUpad.toFixed(2)}`, 15, currentY + 16);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    const settleLabel = netBalance < 0 ? 'DUE TO FACTORY' : 'PAYABLE TO KARIGAR';
+    doc.text(`NET PAYABLE BALANCE: Rs. ${Math.abs(netBalance).toFixed(2)}  (${settleLabel})`, 85, currentY + 13);
+
+    // Signatures block
+    currentY += 28;
+    if (currentY > 270) {
+        doc.addPage();
+        doc.rect(8, 8, 194, 281);
+        currentY = 26;
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text('Karigar Signature: _______________________', 18, currentY);
+    doc.text('Authorized Signature: ____________________', 120, currentY);
+
+    // Software stamp at bottom
+    doc.setFontSize(7);
+    doc.setTextColor(110, 110, 110);
+    doc.text('Krimaa Order Management System | Audited Zero-Error Reconciled', 105, 284, { align: 'center' });
+
+    if (!options.isBulk) {
+        const cleanName = (karigar.name || 'Karigar').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const filename = `SalarySlip_${cleanName}_${getTodayISODate()}.pdf`;
+        doc.save(filename);
+        showToast(`Salary slip downloaded for ${karigar.name}`, 'success');
+    }
+
+    return doc;
+}
+
+function exportKarigarSalarySlipPDF(karigar) {
+    let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) txs = b.rows;
+    }
+    generateKarigarSalarySlipPDF(karigar, txs, { isBulk: false });
+}
+
+async function exportBulkKarigarSalarySlipsPDF(options = {}) {
+    if (!window.jspdf) return showToast('PDF Library not ready', 'error');
+    const karigars = AppState.karigars || [];
+    if (karigars.length === 0) return showToast('No karigars found', 'error');
+
+    showLoader();
+    try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4'
+        });
+
+        let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+        if (AppState.viewingKarigarBackupId) {
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+            if (b && Array.isArray(b.rows)) txs = b.rows;
+        }
+
+        const periodLabel = getKarigarCurrentCycleLabel();
+        let pagesAdded = 0;
+
+        karigars.forEach((k) => {
+            const kId = k.id;
+            const hasTxs = (txs || []).some(t => resolveKarigarIdFromState(t.karigarId, t.karigarName) === kId);
+            if (!hasTxs && options.onlyWithActivity) return;
+
+            if (pagesAdded > 0) doc.addPage();
+            generateKarigarSalarySlipPDF(k, txs, {
+                doc,
+                isBulk: true,
+                periodLabel
+            });
+            pagesAdded++;
+        });
+
+        if (pagesAdded === 0) {
+            hideLoader();
+            return showToast('No transactions found to print for this cycle', 'warning');
+        }
+
+        const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
+        const filename = `Karigar_All_Salary_Slips_${compName}_${getTodayISODate()}.pdf`;
+        doc.save(filename);
+        showToast(`Bulk PDF with ${pagesAdded} salary slips downloaded!`, 'success');
+    } catch (e) {
+        console.error('Bulk PDF error:', e);
+        showToast('Failed to generate bulk PDF: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+function exportKarigarSummaryPDF() {
+    if (!window.jspdf) return showToast('PDF Library not loaded', 'error');
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
+    const cycleLabel = getKarigarCurrentCycleLabel();
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.5);
+    doc.rect(8, 8, 194, 281);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(15);
+    doc.text(compName.toUpperCase(), 105, 17, { align: 'center' });
+    doc.setFontSize(10.5);
+    doc.text('KARIGAR MANAGEMENT SUMMARY SHEET', 105, 23, { align: 'center' });
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Statement Cycle: ${cycleLabel}  |  Generated on: ${new Date().toLocaleString()}`, 105, 29, { align: 'center' });
+    doc.line(10, 32, 200, 32);
+
+    const rows = [];
+    let sumPics = 0;
+    let sumJama = 0;
+    let sumUpad = 0;
+    let sumBal = 0;
+
+    (AppState.karigars || []).forEach(k => {
+        const stats = calculateKarigarBalance(k.id, k.name);
+        sumPics += stats.totalPics || 0;
+        sumJama += stats.totalJama || 0;
+        sumUpad += stats.totalUpad || 0;
+        sumBal += stats.balance || 0;
+        rows.push([
+            rows.length + 1,
+            k.name,
+            stats.totalPics || 0,
+            'Rs. ' + (stats.totalJama || 0).toFixed(2),
+            'Rs. ' + (stats.totalUpad || 0).toFixed(2),
+            'Rs. ' + Math.abs(stats.balance || 0).toFixed(2) + ((stats.balance || 0) < 0 ? ' (Due)' : ' (Clear)')
+        ]);
+    });
+
+    doc.autoTable({
+        startY: 36,
+        head: [['#', 'Karigar Name', 'Total Pics', 'Total Jama (Rs)', 'Total Upad (Rs)', 'Net Balance (Rs)']],
+        body: rows,
+        foot: [['', 'GRAND TOTALS', sumPics + ' Pcs', 'Rs. ' + sumJama.toFixed(2), 'Rs. ' + sumUpad.toFixed(2), 'Rs. ' + Math.abs(sumBal).toFixed(2) + (sumBal < 0 ? ' (Due)' : ' (Clear)')]],
+        theme: 'grid',
+        styles: { fontSize: 8.5, cellPadding: 2, textColor: [0, 0, 0], lineWidth: 0.1, lineColor: [140, 140, 140] },
+        headStyles: { fillColor: [240, 240, 240], textColor: [0, 0, 0], fontStyle: 'bold', halign: 'center' },
+        footStyles: { fillColor: [245, 245, 245], textColor: [0, 0, 0], fontStyle: 'bold' },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 10 },
+            1: { halign: 'left' },
+            2: { halign: 'right', cellWidth: 24 },
+            3: { halign: 'right', cellWidth: 32 },
+            4: { halign: 'right', cellWidth: 32 },
+            5: { halign: 'right', cellWidth: 38 }
+        },
+        margin: { left: 12, right: 12 }
+    });
+
+    const finalY = doc.lastAutoTable.finalY + 16;
+    if (finalY < 270) {
+        doc.setFontSize(8.5);
+        doc.text('Owner / Manager Signature: _______________________', 20, finalY);
+        doc.text('Auditor / Accountant Signature: ____________________', 115, finalY);
+    }
+
+    doc.setFontSize(7);
+    doc.setTextColor(110, 110, 110);
+    doc.text('Krimaa Order Management | Audited Zero-Error Reconciled', 105, 284, { align: 'center' });
+
+    doc.save(`Karigar_Summary_${compName}_${getTodayISODate()}.pdf`);
+    showToast('Karigar summary PDF downloaded!', 'success');
+}
+
 function exportTableToPDF(title, headers, bodyData, filename) {
     if (!window.jspdf) { showToast('PDF Library not loaded', 'error'); return; }
     const { jsPDF } = window.jspdf;

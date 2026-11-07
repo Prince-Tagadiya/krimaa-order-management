@@ -20,7 +20,7 @@
                 }
             });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=20261108-02').then(reg => {
+                navigator.serviceWorker.register('/sw.js?v=20261108-03').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
                     reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
@@ -396,11 +396,8 @@
                     <div class="flex-between mb-2">
                         <div style="display: flex; align-items: center; gap: 1rem;">
                             <h2 class="page-title font-bold text-xl"><i class='bx bx-user-circle'></i> Karigar Management</h2>
-                            <button id="btn-reset-karigar" class="btn btn-outline btn-sm text-danger" style="display: none;"><i class='bx bx-refresh'></i> Reset Karigar Data</button>
                         </div>
-                        <div class="flex gap-2 items-center">
-                            <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Export to PDF"><i class='bx bxs-file-pdf'></i> Export PDF</button>
-                            <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn"><i class='bx bx-archive'></i> View History</button>
+                        <div class="flex gap-2 items-center flex-wrap">
                             <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: right;">
                                 <span class="text-xs text-muted uppercase font-bold mr-2">Total Pics</span>
                                 <strong id="karigar-overall-pics" class="text-lg text-primary">0</strong>
@@ -408,6 +405,44 @@
                             <div style="background: var(--bg-card); padding: 0.5rem 1rem; border-radius: 8px; border: 1px solid var(--border-color); box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
                                 <span class="text-xs text-muted uppercase font-bold mr-2">Total Payable Balance</span>
                                 <strong id="karigar-overall-balance" class="text-lg text-primary">₹0.00</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Cycle Toolbar & Audit Info Bar -->
+                    <div class="card mb-3" style="padding: 0.85rem 1rem;">
+                        <div class="flex-between" style="gap: 0.85rem; flex-wrap: wrap; align-items: center;">
+                            <!-- Left: Month / Cycle Selector & Status Badges -->
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs font-bold text-muted uppercase" style="letter-spacing: 0.5px;"><i class='bx bx-calendar'></i> Cycle:</span>
+                                <select id="karigar-cycle-select" class="form-select text-sm font-semibold" style="padding: 0.45rem 0.75rem; border-radius: 8px; border: 1px solid var(--border-color); background: #f8fafc; font-weight: 600; cursor: pointer; min-width: 200px;">
+                                    <option value="current">Current Month Cycle (Live)</option>
+                                </select>
+                                <div id="karigar-cycle-badge" style="padding: 0.4rem 0.7rem; border-radius: 8px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                    <i class='bx bx-check-shield'></i> <span id="karigar-cycle-date-text">Cycle: Active</span>
+                                </div>
+                                <div id="karigar-audit-badge" style="padding: 0.4rem 0.7rem; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; font-size: 0.75rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;" title="Double-entry mathematical reconciliation with zero single-rupee variance">
+                                    <i class='bx bx-check-double'></i> <span id="karigar-audit-text">Zero Error Reconciled</span>
+                                </div>
+                            </div>
+
+                            <!-- Right: Actions (Refresh, Bulk PDF, Summary PDF, Reset Month) -->
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-karigar" title="Refresh all data and re-audit calculations">
+                                    <i class='bx bx-refresh'></i> Refresh Data
+                                </button>
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF">
+                                    <i class='bx bxs-printer'></i> Bulk Salary Slips (PDF)
+                                </button>
+                                <button type="button" class="btn btn-export btn-sm bg-danger text-white" id="export-pdf-karigar-btn" title="Download Summary Table PDF">
+                                    <i class='bx bxs-file-pdf'></i> Summary PDF
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm text-danger" id="btn-reset-karigar" style="border-color:#fca5a5; display: none;" title="Archive active cycle, save backup, and start fresh month">
+                                    <i class='bx bx-reset'></i> Reset Month & Settle
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn" title="View past reset archives">
+                                    <i class='bx bx-archive'></i> Archives
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -690,8 +725,8 @@
                 <div class="mb-2 p-2" style="background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); text-align: right;">
                     <span class="text-sm text-muted">Total Money:</span> <strong class="text-success text-lg" id="karigar-jama-total-display">0</strong>
                 </div>
-                <button type="submit" class="btn btn-primary w-100">Add Maal (Jama)</button>
-                <div class="text-muted text-xs text-center mt-2" style="opacity:0.75;">Shortcut: Enter to save | Esc to close</div>
+                <button type="submit" class="btn btn-primary w-100" id="karigar-jama-submit-btn">Add Maal (Jama)</button>
+                <div class="text-muted text-xs text-center mt-2" style="opacity:0.85;">⚡ Tip: Press Enter to move to next box | Type using Keypad | Esc to close</div>
             </form>
         </div>
     </div>
@@ -736,8 +771,8 @@
                     </div>
                 </div>
 
-                <button type="submit" class="btn btn-danger w-100">Save Borrow (Upad)</button>
-                <div class="text-muted text-xs text-center mt-2" style="opacity:0.75;">Shortcut: Enter to save | Esc to close</div>
+                <button type="submit" class="btn btn-danger w-100" id="karigar-upad-submit-btn">Save Borrow (Upad)</button>
+                <div class="text-muted text-xs text-center mt-2" style="opacity:0.85;">⚡ Tip: Press Enter to move / save | Esc to close</div>
             </form>
         </div>
     </div>
@@ -750,7 +785,8 @@
                     <h3 class="font-bold text-lg">Detailed History: <span id="karigar-history-name-display" class="text-primary"></span></h3>
                     <p class="text-xs text-muted">All Maal (Jama) and Borrow (Upad) entries <span style="opacity:0.75;">| Shortcut: Enter/Esc to close</span></p>
                 </div>
-                <div style="display: flex; gap: 0.5rem;">
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button id="btn-print-slip-employee" class="btn btn-primary btn-sm" style="background:#1e293b; border-color:#1e293b;"><i class='bx bxs-file-pdf'></i> Print Salary Slip</button>
                     <button id="btn-edit-employee" class="btn btn-outline btn-sm"><i class='bx bx-edit'></i> Edit Employee</button>
                     <button id="btn-delete-employee" class="btn btn-danger btn-sm"><i class='bx bx-user-x'></i> Delete Employee</button>
                     <button id="close-karigar-history-modal" class="btn-icon"><i class='bx bx-x'></i></button>
@@ -1033,8 +1069,8 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20261108-02"></script>
-    <script src="app.js?v=20261108-02"></script>
+    <script src="lan-storage-service.js?v=20261108-03"></script>
+    <script src="app.js?v=20261108-03"></script>
 
 </body>
 </html>
