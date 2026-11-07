@@ -7057,10 +7057,11 @@ function renderKarigarGrid() {
         } else {
             const targetCompanyId = String(AppState.currentCompany || 'company1').trim() || 'company1';
             const targetCompanyName = getCompanyDisplayName(targetCompanyId);
-            resetBtn.style.display = 'block';
+            resetBtn.style.display = 'inline-flex';
             resetBtn.classList.remove('btn-danger', 'text-white');
             resetBtn.classList.add('btn-outline', 'text-danger');
-            resetBtn.innerHTML = `<i class='bx bx-refresh'></i> Reset ${targetCompanyName} Karigar Data`;
+            resetBtn.innerHTML = `<i class='bx bx-reset'></i> Reset Month`;
+            resetBtn.title = `Archive and reset month for ${targetCompanyName}`;
 
             const newResetBtn = resetBtn.cloneNode(true);
             resetBtn.parentNode.replaceChild(newResetBtn, resetBtn);

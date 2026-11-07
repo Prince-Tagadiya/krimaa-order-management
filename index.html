@@ -7,7 +7,7 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <link rel="stylesheet" href="style.css?v=20261108-04">
+    <link rel="stylesheet" href="style.css?v=20261108-05">
     <link rel="manifest" href="manifest.json">
     <script>
         // Register Service Worker for full offline support
@@ -20,7 +20,7 @@
                 }
             });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=20261108-04').then(reg => {
+                navigator.serviceWorker.register('/sw.js?v=20261108-05').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
                     reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
@@ -424,32 +424,25 @@
 
                         <!-- Toolbar Row: Search, Cycle Dropdown & Actions in one clean line -->
                         <div class="karigar-toolbar-row">
-                            <div class="karigar-search-box">
-                                <i class='bx bx-search'></i>
-                                <input type="text" id="karigar-search-input" placeholder="Search by Karigar name...">
-                            </div>
-
-                            <div class="flex items-center gap-2">
-                                <select id="karigar-cycle-select" class="form-select text-sm font-semibold" style="padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-weight: 600; cursor: pointer; min-width: 180px;">
+                            <div class="karigar-toolbar-left">
+                                <div class="karigar-search-box">
+                                    <i class='bx bx-search'></i>
+                                    <input type="text" id="karigar-search-input" placeholder="Search by Karigar name...">
+                                </div>
+                                <select id="karigar-cycle-select" class="form-select text-sm font-semibold" style="padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; font-weight: 600; cursor: pointer; min-width: 170px;">
                                     <option value="current">Current Active Cycle (Live)</option>
                                 </select>
                             </div>
 
-                            <div class="flex items-center gap-2 flex-wrap">
+                            <div class="karigar-toolbar-actions">
                                 <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-karigar" title="Refresh all data and re-audit calculations">
                                     <i class='bx bx-refresh'></i> Refresh
                                 </button>
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF">
                                     <i class='bx bxs-printer'></i> All Slips (PDF)
                                 </button>
-                                <button type="button" class="btn btn-outline btn-sm" id="export-pdf-karigar-btn" title="Download Summary Sheet PDF">
-                                    <i class='bx bxs-file-pdf text-danger'></i> Summary PDF
-                                </button>
-                                <button type="button" class="btn btn-outline btn-sm text-danger" id="btn-reset-karigar" style="border-color:#fca5a5; display: none;" title="Archive active cycle, save backup, and start fresh month">
+                                <button type="button" class="btn btn-outline btn-sm text-danger" id="btn-reset-karigar" style="border-color:#fca5a5; display: none;" title="Archive active cycle and start fresh month">
                                     <i class='bx bx-reset'></i> Reset Month
-                                </button>
-                                <button type="button" class="btn btn-outline btn-sm" id="karigar-backup-open-btn" title="View past reset archives">
-                                    <i class='bx bx-archive'></i> Archives
                                 </button>
                                 <button class="btn btn-primary btn-sm" id="btn-create-karigar" style="display: none; white-space: nowrap;">
                                     <i class='bx bx-plus'></i> Add Karigar
@@ -1092,8 +1085,8 @@
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
     
-    <script src="lan-storage-service.js?v=20261108-04"></script>
-    <script src="app.js?v=20261108-04"></script>
+    <script src="lan-storage-service.js?v=20261108-05"></script>
+    <script src="app.js?v=20261108-05"></script>
 
 </body>
 </html>

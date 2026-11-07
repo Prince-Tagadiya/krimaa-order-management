@@ -1636,11 +1636,33 @@ body.lan-read-only .sheet-cell-input {
     border-top: 1px solid #f1f5f9;
 }
 
+.karigar-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 1;
+    min-width: 260px;
+}
+
+.karigar-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+}
+
+.karigar-toolbar-actions .btn {
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
 .karigar-search-box {
     position: relative;
     flex: 1;
-    min-width: 220px;
-    max-width: 360px;
+    min-width: 180px;
+    max-width: 320px;
 }
 
 .karigar-search-box i {
