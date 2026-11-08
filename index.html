@@ -422,6 +422,17 @@
                             </div>
                         </div>
 
+                        <!-- Archive Alert Banner (visible when viewing past historical month) -->
+                        <div id="karigar-archive-banner" style="display: none; background: #fff1f2; border: 2px dashed #f43f5e; border-radius: 10px; padding: 10px 16px; margin-bottom: 0.85rem; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(244,63,94,0.1);">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="background: #e11d48; color: #fff; font-size: 0.72rem; font-weight: 800; padding: 3px 8px; border-radius: 4px; letter-spacing: 0.5px;">ARCHIVE MODE</span>
+                                <span id="karigar-archive-banner-text" style="color: #9f1239; font-size: 0.88rem; font-weight: 600;"></span>
+                            </div>
+                            <button type="button" class="btn btn-outline btn-sm" id="btn-exit-karigar-archive" style="color: #e11d48; border-color: #fda4af; background: #fff; font-weight: 700; white-space: nowrap;">
+                                <i class='bx bx-log-out'></i> Exit Archive (Return to Current Month)
+                            </button>
+                        </div>
+
                         <!-- Toolbar Row: Search, Cycle Dropdown & Actions in one clean line -->
                         <div class="karigar-toolbar-row">
                             <div class="karigar-toolbar-left">
@@ -456,13 +467,31 @@
                             </div>
                         </div>
 
-                        <!-- Keyboard Shortcut Helpers Strip -->
-                        <div class="karigar-shortcut-hints" style="display: flex; gap: 0.85rem; align-items: center; margin-top: 0.65rem; font-size: 0.73rem; color: #64748b; flex-wrap: wrap; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
+                        <!-- Top Status Filter Strip & Keyboard Shortcut Helpers Strip -->
+                        <div class="karigar-filter-strip" style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 0.65rem; flex-wrap: wrap;">
+                            <div class="karigar-status-filters" style="display: flex; gap: 6px; align-items: center;">
+                                <button type="button" class="karigar-filter-btn active" data-filter="all" id="filter-btn-all" style="padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; border: 1px solid #cbd5e1; background: #0f172a; color: #fff; cursor: pointer; transition: all 0.15s;">
+                                    All (<span id="filter-count-all">0</span>)
+                                </button>
+                                <button type="button" class="karigar-filter-btn" data-filter="pending" id="filter-btn-pending" style="padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #475569; cursor: pointer; transition: all 0.15s;">
+                                    Pending / Due (<span id="filter-count-pending">0</span>)
+                                </button>
+                                <button type="button" class="karigar-filter-btn" data-filter="paid" id="filter-btn-paid" style="padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #16a34a; cursor: pointer; transition: all 0.15s;">
+                                    ✓ Paid / Clear (<span id="filter-count-paid">0</span>)
+                                </button>
+                            </div>
+                            <div class="karigar-quick-stats-hint" style="font-size: 0.75rem; color: #64748b; font-weight: 500;">
+                                <span id="karigar-visible-count-text"></span>
+                            </div>
+                        </div>
+
+                        <div class="karigar-shortcut-hints" style="display: flex; gap: 0.85rem; align-items: center; margin-top: 0.45rem; font-size: 0.73rem; color: #64748b; flex-wrap: wrap; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0;">
                             <span style="font-weight: 700; color: #1e293b;"><i class='bx bx-command'></i> Shortcuts:</span>
                             <span><kbd class="kbd-shortcut">/</kbd> Search / Type Name</span>
                             <span><kbd class="kbd-shortcut">Enter</kbd> Open / Create Karigar</span>
                             <span><kbd class="kbd-shortcut">J</kbd> Maal (Jama)</span>
                             <span><kbd class="kbd-shortcut">U</kbd> Borrow (Upad)</span>
+                            <span><kbd class="kbd-shortcut">C</kbd> Mark Paid / Clear</span>
                             <span><kbd class="kbd-shortcut">P</kbd> Direct Print Slip</span>
                             <span><kbd class="kbd-shortcut">H</kbd> History</span>
                             <span><kbd class="kbd-shortcut">↑ / ↓</kbd> Select Card</span>
@@ -619,6 +648,67 @@
     <style>
         .modal.show { opacity:1 !important; pointer-events:auto !important; }
         .modal.show .modal-content { transform:translateY(0) !important; }
+
+        /* Industrial Paid Rubber Stamp */
+        .karigar-card {
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+        }
+        .karigar-card.is-paid-cleared {
+            background: linear-gradient(to bottom right, #ffffff, #f0fdf4);
+            border-color: #86efac !important;
+        }
+        .karigar-paid-stamp {
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            border: 2px dashed #16a34a;
+            color: #16a34a;
+            background: rgba(240, 253, 244, 0.95);
+            padding: 3px 8px;
+            border-radius: 5px;
+            font-weight: 800;
+            font-size: 0.68rem;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            transform: rotate(-3deg);
+            pointer-events: none;
+            box-shadow: 0 1px 4px rgba(22, 163, 74, 0.15);
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Archive View Mode: Red/Rose border and indicators */
+        .archive-active-mode #karigar-grid .karigar-card {
+            border: 2px solid #f43f5e !important;
+            box-shadow: 0 4px 14px rgba(244, 63, 94, 0.14) !important;
+        }
+        .archive-active-mode .karigar-card-header {
+            background: #fff1f2;
+            border-bottom: 1px solid #fecdd3 !important;
+        }
+        .archive-badge-tag {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: 800;
+            padding: 1px 6px;
+        }
+
+        /* Top Filter Buttons */
+        .karigar-filter-btn:hover {
+            border-color: #94a3b8 !important;
+        }
+        .karigar-filter-btn.active {
+            background: #0f172a !important;
+            color: #ffffff !important;
+            border-color: #0f172a !important;
+        }
     </style>
 
     <!-- Edit Account Modal -->

@@ -1114,6 +1114,23 @@ const FirebaseService = (() => {
         return { success: true, id: docRef.id, snapshotAt };
     }
 
+    async function updateKarigarResetBackup(backupId, payload = {}) {
+        init();
+        if (!backupId) return { success: false, message: 'Missing backupId' };
+        const safeData = {};
+        if (Array.isArray(payload.rows)) safeData.rows = payload.rows;
+        if (payload.summary) safeData.summary = payload.summary;
+        if (payload.paidKarigarMap) safeData.paidKarigarMap = payload.paidKarigarMap;
+        safeData.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+        try {
+            await db.collection('karigar_reset_backups').doc(backupId).set(safeData, { merge: true });
+            return { success: true };
+        } catch (e) {
+            console.error('Error updating karigar reset backup:', e);
+            return { success: false, error: e.message };
+        }
+    }
+
     async function getKarigarResetBackups(companyId = 'company1', limitCount = 60) {
         init();
         const safeCompanyId = String(companyId || 'company1').trim();
@@ -1146,6 +1163,7 @@ const FirebaseService = (() => {
                 periodEndAt: d.periodEndAt || '',
                 dataStartAt: d.dataStartAt || '',
                 dataEndAt: d.dataEndAt || '',
+                paidKarigarMap: d.paidKarigarMap || {},
                 createdAt: d.createdAt || null,
                 createdFrom: String(d.createdFrom || d.source || '').trim()
             });
@@ -3326,7 +3344,7 @@ const FirebaseService = (() => {
         init, getDb,
         // Accounts
         getAccounts, addAccount, editAccount, deleteAccount, updateAccountOrder, updateMoney, resetAllMoney, createMoneyBackup, getMoneyBackups, deleteMoneyBackup,
-        createKarigarResetBackup, getKarigarResetBackups,
+        createKarigarResetBackup, getKarigarResetBackups, updateKarigarResetBackup,
         // Orders
         getOrders, submitOrders, updateOrder, getOrderRowsForDate,
         // Remarks

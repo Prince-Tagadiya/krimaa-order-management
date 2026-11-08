@@ -2578,6 +2578,9 @@ function navigateTo(sectionId) {
     }
     
     AppState.currentSection = sectionId;
+    try {
+        localStorage.setItem('krimaa_active_section', sectionId);
+    } catch (e) {}
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const activeBtn = document.querySelector(`[data-target="${sectionId}"]`);
     if(activeBtn) activeBtn.classList.add('active');
@@ -2844,7 +2847,8 @@ async function loadInitialData() {
             window.updateFirebasePendingBadge(0, 'connected');
 
             console.log("🚀 [INIT] LAN data ready. Booting UI.");
-            navigateTo('data-sheet');
+            const savedSec = localStorage.getItem('krimaa_active_section') || 'data-sheet';
+            navigateTo(savedSec);
             return;
         }
 
@@ -2861,7 +2865,8 @@ async function loadInitialData() {
                     await loadAvailableSheetMonths(true).catch(() => {});
                     window.updateFirebasePendingBadge(0, 'connected');
                     console.log("🚀 [INIT] LAN reconnected. Booting UI.");
-                    navigateTo('data-sheet');
+                    const savedSec = localStorage.getItem('krimaa_active_section') || 'data-sheet';
+                    navigateTo(savedSec);
                     return;
                 }
             } catch (reconErr) {
@@ -5872,10 +5877,24 @@ function formatKarigarBackupPoint(rawValue, fallback = '-') {
 }
 
 function getKarigarBackupRangeLabel(backup, withPrefix = false) {
-    const startLabel = formatKarigarBackupPoint(backup?.periodStartAt || backup?.snapshotAt || backup?.createdAt, '-');
-    const endRaw = backup?.periodEndAt || '';
-    const endLabel = endRaw ? formatKarigarBackupPoint(endRaw, '-') : 'Present';
-    const rangeText = `${startLabel} → ${endLabel}`;
+    if (!backup) return '-';
+    let startRaw = backup?.dataStartAt || backup?.periodStartAt || backup?.snapshotAt || backup?.createdAt;
+    let endRaw = backup?.periodEndAt || backup?.snapshotAt || backup?.dataEndAt || backup?.createdAt;
+
+    if (Array.isArray(backup.rows) && backup.rows.length > 0) {
+        const rowDates = backup.rows
+            .map(r => normalizeToISODateTime(r.transactionDateTime || r.dateTime || r.date))
+            .filter(Boolean)
+            .sort();
+        if (rowDates.length > 0) {
+            if (!backup.dataStartAt && rowDates[0]) startRaw = rowDates[0];
+            if (!backup.periodEndAt && backup.snapshotAt) endRaw = backup.snapshotAt;
+            else if (!backup.periodEndAt && rowDates[rowDates.length - 1]) endRaw = rowDates[rowDates.length - 1];
+        }
+    }
+    const startLabel = formatKarigarBackupPoint(startRaw, '-');
+    const endLabel = formatKarigarBackupPoint(endRaw, startLabel);
+    const rangeText = (startLabel === endLabel) ? startLabel : `${startLabel} to ${endLabel}`;
     return withPrefix ? `Range: ${rangeText}` : rangeText;
 }
 
@@ -6871,7 +6890,177 @@ async function renderKarigarPage(forceReload = false) {
 function resolveKarigarIdFromState(karigarId, karigarName) {
     const rawId = String(karigarId || '').trim();
     if (rawId.startsWith('kar_')) return rawId;
+    if (rawId) return rawId;
+    if (karigarName) {
+        const k = (getEffectiveKarigarList() || []).find(x => (x.name || '').toLowerCase() === String(karigarName).toLowerCase().trim());
+        if (k && k.id) return k.id;
+        return 'kar_' + encodeURIComponent(String(karigarName).toLowerCase().trim());
+    }
     return '';
+}
+
+function getEffectiveKarigarList() {
+    if (AppState.viewingKarigarBackupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows) && b.rows.length > 0) {
+            const map = new Map();
+            (AppState.karigars || []).forEach(k => {
+                if (k && k.name) map.set(k.name.trim().toLowerCase(), { ...k });
+            });
+            b.rows.forEach(r => {
+                const name = String(r.karigarName || '').trim();
+                const id = String(r.karigarId || '').trim();
+                if (name) {
+                    const key = name.toLowerCase();
+                    if (!map.has(key)) {
+                        map.set(key, {
+                            id: id || `kar_arch_${encodeURIComponent(key)}`,
+                            name: name,
+                            companyId: r.companyId || b.companyId || AppState.currentCompany
+                        });
+                    } else if (id && !map.get(key).id) {
+                        map.get(key).id = id;
+                    }
+                }
+            });
+            return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+        }
+    }
+    return (AppState.karigars || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+// ── Karigar Archive Summary Recompute & Storage ──
+function recomputeBackupSummary(backup) {
+    if (!backup) return;
+    const rows = Array.isArray(backup.rows) ? backup.rows : [];
+    let totalJama = 0;
+    let totalUpad = 0;
+    rows.forEach(tx => {
+        const type = String(tx?.type || '').toLowerCase();
+        if (type === 'jama') {
+            totalJama += parseFloat(tx.total) || 0;
+            totalUpad += parseFloat(tx.upadAmount) || 0;
+        } else if (type === 'upad') {
+            totalUpad += parseFloat(tx.amount) || 0;
+        }
+    });
+    backup.summary = {
+        totalJama: Math.round((totalJama + Number.EPSILON) * 100) / 100,
+        totalUpad: Math.round((totalUpad + Number.EPSILON) * 100) / 100,
+        netBalance: Math.round(((totalJama - totalUpad) + Number.EPSILON) * 100) / 100,
+        count: rows.length
+    };
+}
+
+async function saveArchiveBackupChanges(backup) {
+    if (!backup || !backup.id) return;
+    try {
+        if (typeof FirebaseService !== 'undefined' && FirebaseService.updateKarigarResetBackup) {
+            await FirebaseService.updateKarigarResetBackup(backup.id, {
+                rows: backup.rows,
+                summary: backup.summary,
+                paidKarigarMap: backup.paidKarigarMap || {}
+            });
+        }
+    } catch (e) {
+        console.warn('[Archive] Cloud backup sync error:', e);
+    }
+    try {
+        if (typeof LanStorageService !== 'undefined' && LanStorageService.isConnected()) {
+            const backups = await LanStorageService.readFile('karigar_reset_backups', []);
+            const idx = backups.findIndex(b => b && b.id === backup.id);
+            if (idx >= 0) {
+                backups[idx] = { ...backups[idx], ...backup };
+            } else {
+                backups.push(backup);
+            }
+            await LanStorageService.writeFile('karigar_reset_backups', backups);
+        }
+    } catch (e) {
+        console.warn('[Archive] LAN backup sync error:', e);
+    }
+}
+
+// ── Karigar Mark as Paid / Clear Helpers ──
+function getKarigarPaidStorageKey(companyId, backupId = null) {
+    const comp = String(companyId || AppState.currentCompany || 'company1').trim();
+    if (backupId) {
+        return `karigar_paid_${comp}_backup_${backupId}`;
+    }
+    const cycleStart = localStorage.getItem(`karigar_cycle_start_${comp}`) || `${getTodayISODate().substring(0, 7)}-01`;
+    return `karigar_paid_${comp}_${cycleStart}`;
+}
+
+function getPaidKarigarsMap() {
+    const backupId = AppState.viewingKarigarBackupId;
+    const key = getKarigarPaidStorageKey(AppState.currentCompany, backupId);
+    let map = {};
+    try {
+        const raw = localStorage.getItem(key);
+        if (raw) map = JSON.parse(raw);
+    } catch (e) {}
+
+    if (backupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === backupId);
+        if (b && b.paidKarigarMap && typeof b.paidKarigarMap === 'object') {
+            map = { ...b.paidKarigarMap, ...map };
+        }
+    }
+    return map;
+}
+
+function isKarigarPaid(karigarId, karigarName) {
+    const map = getPaidKarigarsMap();
+    const idKey = String(karigarId || '').trim();
+    const nameKey = String(karigarName || '').trim().toLowerCase();
+    if (idKey && map[idKey]) return true;
+    if (nameKey && map[nameKey]) return true;
+    return false;
+}
+
+async function toggleKarigarPaid(karigarId, karigarName, forceValue = null) {
+    const backupId = AppState.viewingKarigarBackupId;
+    const key = getKarigarPaidStorageKey(AppState.currentCompany, backupId);
+    const map = getPaidKarigarsMap();
+    const idKey = String(karigarId || '').trim();
+    const nameKey = String(karigarName || '').trim().toLowerCase();
+
+    const currentlyPaid = isKarigarPaid(karigarId, karigarName);
+    const nextVal = (forceValue !== null) ? Boolean(forceValue) : !currentlyPaid;
+
+    if (idKey) {
+        if (nextVal) map[idKey] = { paid: true, date: new Date().toISOString() };
+        else delete map[idKey];
+    }
+    if (nameKey) {
+        if (nextVal) map[nameKey] = { paid: true, date: new Date().toISOString() };
+        else delete map[nameKey];
+    }
+
+    try {
+        localStorage.setItem(key, JSON.stringify(map));
+    } catch (e) {}
+
+    if (backupId) {
+        const b = (AppState.karigarResetBackups || []).find(x => x.id === backupId);
+        if (b) {
+            b.paidKarigarMap = map;
+            await saveArchiveBackupChanges(b);
+        }
+    }
+
+    showToast(`${karigarName || 'Karigar'} marked as ${nextVal ? 'PAID / CLEAR ✓' : 'UNPAID / PENDING'}`, nextVal ? 'success' : 'info');
+    renderKarigarGrid();
+}
+
+function toggleKarigarPaidWithConfirm(karigarId, karigarName) {
+    const isPaid = isKarigarPaid(karigarId, karigarName);
+    const promptMsg = isPaid 
+        ? `Unmark "${karigarName}" as Paid / Clear?` 
+        : `Mark "${karigarName}" as PAID / SETTLED? (Press Enter / OK to confirm)`;
+    if (confirm(promptMsg)) {
+        toggleKarigarPaid(karigarId, karigarName, !isPaid);
+    }
 }
 
 function getKarigarCurrentCycleLabel() {
@@ -6942,6 +7131,9 @@ async function updateKarigarCycleToolbar() {
     const badgeText = document.getElementById('karigar-cycle-date-text');
     const badgeEl = document.getElementById('karigar-cycle-badge');
     const resetBtn = document.getElementById('btn-reset-karigar');
+    const karigarContainer = document.getElementById('karigar');
+    const archiveBanner = document.getElementById('karigar-archive-banner');
+    const archiveBannerText = document.getElementById('karigar-archive-banner-text');
 
     if (resetBtn) {
         resetBtn.style.display = isAdminUser() ? 'inline-flex' : 'none';
@@ -6950,19 +7142,47 @@ async function updateKarigarCycleToolbar() {
     const cycleStart = localStorage.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
     const isViewingArchive = Boolean(AppState.viewingKarigarBackupId);
 
+    if (karigarContainer) {
+        if (isViewingArchive) karigarContainer.classList.add('archive-active-mode');
+        else karigarContainer.classList.remove('archive-active-mode');
+    }
+
     if (badgeText && badgeEl) {
         if (isViewingArchive) {
             const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
-            badgeText.textContent = `Archived Cycle: ${b ? getKarigarBackupRangeLabel(b) : 'Past Cycle'} (Read-Only)`;
-            badgeEl.style.background = '#fef3c7';
-            badgeEl.style.borderColor = '#fde68a';
-            badgeEl.style.color = '#92400e';
+            const rangeStr = b ? getKarigarBackupRangeLabel(b) : 'Past Cycle';
+            badgeText.textContent = `Archived Cycle: ${rangeStr} (Bounded Archive)`;
+            badgeEl.style.background = '#fff1f2';
+            badgeEl.style.borderColor = '#fca5a5';
+            badgeEl.style.color = '#9f1239';
+
+            if (archiveBanner && archiveBannerText) {
+                const count = Array.isArray(b?.rows) ? b.rows.length : (b?.summary?.count || 0);
+                archiveBannerText.innerHTML = `Viewing & Editing Archived Month: <strong>${rangeStr}</strong> (${count} entries). Additions and edits are <strong>strictly bounded</strong> to this archive backup.`;
+                archiveBanner.style.display = 'flex';
+            }
         } else {
             badgeText.textContent = `Active Cycle: From ${formatISODateForDisplay(cycleStart)} to Present`;
             badgeEl.style.background = '#ecfdf5';
             badgeEl.style.borderColor = '#a7f3d0';
             badgeEl.style.color = '#047857';
+
+            if (archiveBanner) archiveBanner.style.display = 'none';
         }
+    }
+
+    const exitArchiveBtn = document.getElementById('btn-exit-karigar-archive');
+    if (exitArchiveBtn && !exitArchiveBtn.dataset.bound) {
+        exitArchiveBtn.dataset.bound = 'true';
+        exitArchiveBtn.addEventListener('click', () => {
+            AppState.viewingKarigarBackupId = null;
+            if (select) select.value = 'current';
+            rebuildKarigarComputedCache();
+            auditKarigarFinancials();
+            renderKarigarGrid();
+            updateKarigarCycleToolbar();
+            showToast('Returned to Current Active Month', 'info');
+        });
     }
 
     if (!select) return;
@@ -6980,7 +7200,7 @@ async function updateKarigarCycleToolbar() {
 
     const backups = Array.isArray(AppState.karigarResetBackups) ? AppState.karigarResetBackups : [];
     
-    let html = `<option value="current">Current Active Cycle (From ${formatISODateForDisplay(cycleStart)})</option>`;
+    let html = `<option value="current">Current Active Cycle (From ${formatISODateForDisplay(cycleStart)} to Present)</option>`;
     backups.forEach((b) => {
         const label = getKarigarBackupRangeLabel(b);
         const count = Array.isArray(b.rows) ? b.rows.length : (b.summary?.count || 0);
@@ -7172,12 +7392,44 @@ function renderKarigarGrid() {
     if (!grid) return;
     grid.innerHTML = '';
     
-    let filtered = AppState.karigars || [];
+    const allKarigars = getEffectiveKarigarList();
+    let paidCount = 0;
+    let pendingCount = 0;
+    allKarigars.forEach(k => {
+        if (isKarigarPaid(k.id, k.name)) paidCount++;
+        else pendingCount++;
+    });
+
+    const elAll = document.getElementById('filter-count-all');
+    const elPending = document.getElementById('filter-count-pending');
+    const elPaid = document.getElementById('filter-count-paid');
+    if (elAll) elAll.textContent = String(allKarigars.length);
+    if (elPending) elPending.textContent = String(pendingCount);
+    if (elPaid) elPaid.textContent = String(paidCount);
+
+    const currentFilter = AppState.karigarPaidFilter || 'all';
+    document.querySelectorAll('.karigar-filter-btn').forEach(btn => {
+        if (btn.dataset.filter === currentFilter) btn.classList.add('active');
+        else btn.classList.remove('active');
+    });
+
+    let filtered = allKarigars;
+    if (currentFilter === 'paid') {
+        filtered = filtered.filter(k => isKarigarPaid(k.id, k.name));
+    } else if (currentFilter === 'pending') {
+        filtered = filtered.filter(k => !isKarigarPaid(k.id, k.name));
+    }
+
     if (query) {
-        filtered = (AppState.karigars || []).filter(k => (k.name || '').toLowerCase().includes(query));
+        filtered = filtered.filter(k => (k.name || '').toLowerCase().includes(query));
+    }
+
+    const hintEl = document.getElementById('karigar-visible-count-text');
+    if (hintEl) {
+        hintEl.textContent = `Showing ${filtered.length} of ${allKarigars.length} workers`;
     }
     
-    const exactMatch = (AppState.karigars || []).some(k => (k.name || '').toLowerCase() === query);
+    const exactMatch = allKarigars.some(k => (k.name || '').toLowerCase() === query);
     if (query && !exactMatch && isAdmin) {
         btnCreate.style.display = 'block';
     } else {
@@ -7187,7 +7439,7 @@ function renderKarigarGrid() {
     if (filtered.length === 0) {
         const escQuery = rawSearch.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         const safeJsQuery = rawSearch.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        const createBtnHtml = (rawSearch && isAdmin) ? `
+        const createBtnHtml = (rawSearch && isAdmin && !AppState.viewingKarigarBackupId) ? `
             <div style="margin-top: 1rem;">
                 <button type="button" class="btn btn-primary" onclick="autoCreateKarigarFromSearch('${safeJsQuery}')" style="box-shadow: 0 4px 12px rgba(37,99,235,0.25); font-weight:600;">
                     <i class='bx bx-user-plus'></i> Press <kbd class="kbd-shortcut" style="margin:0 4px;">Enter</kbd> to Create Karigar "${escQuery}"
@@ -7197,8 +7449,8 @@ function renderKarigarGrid() {
         grid.innerHTML = `
             <div class="card p-4 text-center text-muted" style="grid-column: 1 / -1; padding: 2.5rem 1rem;">
                 <i class="bx bx-user-x text-4xl mb-2" style="font-size: 2.5rem; opacity: 0.6;"></i>
-                <h4 style="font-weight: 700; color: #1e293b; margin: 0.5rem 0 0.25rem 0;">${rawSearch ? `No Karigar found matching "${escQuery}"` : 'No karigars found.'}</h4>
-                <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 0;">${rawSearch ? 'Press <strong>Enter</strong> to automatically create this Karigar and open Maal (Jama).' : ''}</p>
+                <h4 style="font-weight: 700; color: #1e293b; margin: 0.5rem 0 0.25rem 0;">${rawSearch ? `No Karigar found matching "${escQuery}"` : (currentFilter !== 'all' ? `No ${currentFilter} karigars in this cycle.` : 'No karigars found.')}</h4>
+                <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 0;">${rawSearch && !AppState.viewingKarigarBackupId ? 'Press <strong>Enter</strong> to automatically create this Karigar and open Maal (Jama).' : ''}</p>
                 ${createBtnHtml}
             </div>
         `;
@@ -7208,7 +7460,7 @@ function renderKarigarGrid() {
     const resetBtn = document.getElementById('btn-reset-karigar');
     
     if (resetBtn) {
-        if (!isAdmin) {
+        if (!isAdmin || AppState.viewingKarigarBackupId) {
             resetBtn.style.display = 'none';
         } else {
             const targetCompanyId = String(AppState.currentCompany || 'company1').trim() || 'company1';
@@ -7240,8 +7492,16 @@ function renderKarigarGrid() {
         const balColor = isNegative ? '#dc2626' : '#16a34a';
         
         const entId = getEnterpriseKarigarId(k, AppState.currentCompany);
+        const isPaid = isKarigarPaid(k.id, k.name);
+        const paidStampHtml = isPaid ? `
+            <div class="karigar-paid-stamp">
+                <i class='bx bx-check-circle'></i> PAID / CLEAR
+            </div>
+        ` : '';
+
         html += `
-            <div class="karigar-card" data-id="${k.id}" data-idx="${idx}">
+            <div class="karigar-card ${isPaid ? 'is-paid-cleared' : ''}" data-id="${k.id}" data-idx="${idx}">
+                ${paidStampHtml}
                 <div class="karigar-card-header">
                     <div>
                         <div class="flex items-center gap-2" style="margin-bottom: 2px;">
@@ -7280,10 +7540,15 @@ function renderKarigarGrid() {
                     </button>
                 </div>
 
-                <div class="karigar-actions-secondary" style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:0.5rem;">
-                    <button class="btn-subtle btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="View detailed history [H]">
-                        <kbd class="kbd-shortcut">H</kbd> History
-                    </button>
+                <div class="karigar-actions-secondary" style="display:flex; align-items:center; justify-content:space-between; gap:4px; margin-top:0.5rem; flex-wrap:wrap;">
+                    <div style="display:flex; gap:4px; align-items:center;">
+                        <button class="btn-subtle btn-karigar-history" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="View detailed history [H]">
+                            <kbd class="kbd-shortcut">H</kbd> History
+                        </button>
+                        <button class="btn-subtle btn-karigar-toggle-paid" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="Mark/Unmark as Paid & Settled [C]" style="color:${isPaid ? '#16a34a' : '#64748b'}; font-weight:700;">
+                            <kbd class="kbd-shortcut">C</kbd> ${isPaid ? '✓ Paid' : 'Mark Clear'}
+                        </button>
+                    </div>
                     <div style="display:flex; gap:4px; align-items:center;">
                         <button class="btn-subtle btn-karigar-slip-print" data-id="${k.id}" data-name="${k.name.replace(/"/g, '&quot;')}" title="Direct Print Salary Slip (No download) [P]" style="color:#0f172a; font-weight:700;">
                             <kbd class="kbd-shortcut">P</kbd> <i class='bx bx-printer'></i> Print
@@ -7331,12 +7596,19 @@ function renderKarigarGrid() {
             openKarigarHistoryModal(el.dataset.id, el.dataset.name);
         });
     });
+    grid.querySelectorAll('.btn-karigar-toggle-paid').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const el = e.currentTarget;
+            toggleKarigarPaidWithConfirm(el.dataset.id, el.dataset.name);
+        });
+    });
     grid.querySelectorAll('.btn-karigar-slip-print').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const el = e.currentTarget;
             const karigarId = el.dataset.id;
             const karigarName = el.dataset.name;
-            const k = (AppState.karigars || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
+            const k = (getEffectiveKarigarList() || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
             openSalarySlipOptionsModal({ karigar: k, defaultAction: 'print' });
         });
     });
@@ -7345,9 +7617,22 @@ function renderKarigarGrid() {
             const el = e.currentTarget;
             const karigarId = el.dataset.id;
             const karigarName = el.dataset.name;
-            const k = (AppState.karigars || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
+            const k = (getEffectiveKarigarList() || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
             openSalarySlipOptionsModal({ karigar: k, defaultAction: 'download' });
         });
+    });
+
+    // Wire up filter button clicks
+    document.querySelectorAll('.karigar-filter-btn').forEach(btn => {
+        if (!btn.dataset.bound) {
+            btn.dataset.bound = 'true';
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.karigar-filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                AppState.karigarPaidFilter = btn.dataset.filter || 'all';
+                renderKarigarGrid();
+            });
+        }
     });
 
     // Make clicking any card select it for keyboard shortcuts
@@ -7693,15 +7978,52 @@ function setupKarigarListeners() {
             
             showLoader();
             try {
-                await FirebaseService.addKarigarJama({ 
-                    karigarId, karigarName, date, transactionDateTime, designName, size, pic, price, upadAmount, 
-                    companyId: AppState.currentCompany,
-                    addedBy: AppState.currentUser?.role || 'admin',
-                    actor: buildAuditActor()
-                });
-                _pendingDataChangesForBackup = true;
-                scheduleBackgroundSheetBackup('addKarigarJama');
-                showToast("Maal (Jama) saved!", "success");
+                if (AppState.viewingKarigarBackupId) {
+                    const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+                    if (!b) throw new Error('Archive backup not found');
+                    if (!Array.isArray(b.rows)) b.rows = [];
+
+                    const numPic = parseInt(pic, 10) || 0;
+                    const numPrice = parseFloat(price) || 0;
+                    const numTotal = Math.round(((numPic * numPrice) + Number.EPSILON) * 100) / 100;
+                    const numUpad = Math.round(((parseFloat(upadAmount) || 0) + Number.EPSILON) * 100) / 100;
+                    const txId = 'tx_arch_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+                    const newRow = {
+                        id: txId,
+                        companyId: b.companyId || AppState.currentCompany,
+                        karigarId,
+                        karigarName,
+                        type: 'jama',
+                        date,
+                        transactionDateTime,
+                        designName,
+                        size,
+                        pic: numPic,
+                        price: numPrice,
+                        total: numTotal,
+                        upadAmount: numUpad,
+                        amount: 0,
+                        addedBy: AppState.currentUser?.role || 'admin',
+                        source: 'archive_edit'
+                    };
+                    b.rows.push(newRow);
+                    recomputeBackupSummary(b);
+                    await saveArchiveBackupChanges(b);
+                    rebuildKarigarComputedCache();
+                    auditKarigarFinancials();
+                    showToast("Maal (Jama) saved to archive!", "success");
+                } else {
+                    await FirebaseService.addKarigarJama({ 
+                        karigarId, karigarName, date, transactionDateTime, designName, size, pic, price, upadAmount, 
+                        companyId: AppState.currentCompany,
+                        addedBy: AppState.currentUser?.role || 'admin',
+                        actor: buildAuditActor()
+                    });
+                    _pendingDataChangesForBackup = true;
+                    scheduleBackgroundSheetBackup('addKarigarJama');
+                    showToast("Maal (Jama) saved!", "success");
+                }
 
                 if (bulkMode) {
                     // Prepare next entry without closing popup.
@@ -7783,18 +8105,50 @@ function setupKarigarListeners() {
             
             showLoader();
             try {
-                await FirebaseService.addKarigarUpad({ 
-                    karigarId, karigarName, date, transactionDateTime, amount, 
-                    companyId: AppState.currentCompany,
-                    addedBy: AppState.currentUser?.role || 'admin',
-                    actor: buildAuditActor()
-                });
-                _pendingDataChangesForBackup = true;
-                scheduleBackgroundSheetBackup('addKarigarUpad');
-                document.getElementById('karigar-upad-modal').classList.remove('show');
-                showToast("Borrow (Upad) added successfully!", "success");
-                invalidateKarigarCache();
-                await renderKarigarPage(true);
+                if (AppState.viewingKarigarBackupId) {
+                    const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+                    if (!b) throw new Error('Archive backup not found');
+                    if (!Array.isArray(b.rows)) b.rows = [];
+
+                    const numAmount = Math.round(((parseFloat(amount) || 0) + Number.EPSILON) * 100) / 100;
+                    const txId = 'tx_arch_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+
+                    const newRow = {
+                        id: txId,
+                        companyId: b.companyId || AppState.currentCompany,
+                        karigarId,
+                        karigarName,
+                        type: 'upad',
+                        date,
+                        transactionDateTime,
+                        amount: numAmount,
+                        upadAmount: 0,
+                        total: 0,
+                        addedBy: AppState.currentUser?.role || 'admin',
+                        source: 'archive_edit'
+                    };
+                    b.rows.push(newRow);
+                    recomputeBackupSummary(b);
+                    await saveArchiveBackupChanges(b);
+                    rebuildKarigarComputedCache();
+                    auditKarigarFinancials();
+                    document.getElementById('karigar-upad-modal').classList.remove('show');
+                    showToast("Borrow (Upad) saved to archive!", "success");
+                    renderKarigarGrid();
+                } else {
+                    await FirebaseService.addKarigarUpad({ 
+                        karigarId, karigarName, date, transactionDateTime, amount, 
+                        companyId: AppState.currentCompany,
+                        addedBy: AppState.currentUser?.role || 'admin',
+                        actor: buildAuditActor()
+                    });
+                    _pendingDataChangesForBackup = true;
+                    scheduleBackgroundSheetBackup('addKarigarUpad');
+                    document.getElementById('karigar-upad-modal').classList.remove('show');
+                    showToast("Borrow (Upad) added successfully!", "success");
+                    invalidateKarigarCache();
+                    await renderKarigarPage(true);
+                }
             } catch (err) { showToast("Failed to add", "error"); }
             finally {
                 hideLoader();
@@ -8131,6 +8485,14 @@ function setupKarigarGlobalShortcuts() {
             return;
         }
 
+        // C: Mark as Paid / Clear with confirmation
+        if (key === 'c') {
+            e.preventDefault();
+            const k = getSelectedOrFirstKarigar();
+            if (k) toggleKarigarPaidWithConfirm(k.id, k.name);
+            return;
+        }
+
         // P: Direct Print Slip (No download)
         if (key === 'p') {
             e.preventDefault();
@@ -8204,7 +8566,7 @@ function openKarigarJamaModal(id, name) {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
-        const karigars = Array.isArray(AppState.karigars) ? [...AppState.karigars] : [];
+        const karigars = getEffectiveKarigarList();
         karigars.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' }));
         const safeId = String(id || '').trim();
         const currentVal = safeId || String(select.value || '').trim();
@@ -8284,7 +8646,7 @@ function openKarigarUpadModal(id, name) {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
-        const karigars = Array.isArray(AppState.karigars) ? [...AppState.karigars] : [];
+        const karigars = getEffectiveKarigarList();
         karigars.sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' }));
         const safeId = String(id || '').trim();
         const currentVal = safeId || String(sel.value || '').trim();
@@ -8615,6 +8977,20 @@ async function deleteKarigarHistory(txId, karigarId, karigarName) {
     
     showLoader();
     try {
+        if (AppState.viewingKarigarBackupId) {
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+            if (b && Array.isArray(b.rows)) {
+                b.rows = b.rows.filter(t => t.id !== txId);
+                recomputeBackupSummary(b);
+                await saveArchiveBackupChanges(b);
+                rebuildKarigarComputedCache();
+                auditKarigarFinancials();
+                showToast('Record deleted from archive', 'success');
+                openKarigarHistoryModal(karigarId, karigarName);
+                renderKarigarGrid();
+                return;
+            }
+        }
         await FirebaseService.deleteKarigarTransaction(txId, AppState.currentCompany, buildAuditActor());
         _pendingDataChangesForBackup = true;
         scheduleBackgroundSheetBackup('deleteKarigarTransaction');
@@ -8664,7 +9040,17 @@ async function editKarigarName(karigarId, currentName) {
 
 async function editKarigarHistory(txId, karigarId, karigarName) {
     if (!isAdminUser()) return showToast('Only admin can edit transaction', 'error');
-    const tx = (AppState.karigarTransactions || []).find(t => t.id === txId);
+    let tx = null;
+    let isArchive = false;
+    let b = null;
+    if (AppState.viewingKarigarBackupId) {
+        b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+        if (b && Array.isArray(b.rows)) {
+            tx = b.rows.find(t => t.id === txId);
+            isArchive = true;
+        }
+    }
+    if (!tx) tx = (AppState.karigarTransactions || []).find(t => t.id === txId);
     if (!tx) return showToast('Transaction not found', 'error');
 
     const updates = {};
@@ -8700,6 +9086,20 @@ async function editKarigarHistory(txId, karigarId, karigarName) {
 
     showLoader();
     try {
+        if (isArchive && b) {
+            const rIdx = b.rows.findIndex(t => t.id === txId);
+            if (rIdx >= 0) {
+                b.rows[rIdx] = { ...b.rows[rIdx], ...updates };
+                recomputeBackupSummary(b);
+                await saveArchiveBackupChanges(b);
+                rebuildKarigarComputedCache();
+                auditKarigarFinancials();
+                showToast('Transaction updated in archive', 'success');
+                renderKarigarGrid();
+                openKarigarHistoryModal(karigarId, karigarName);
+                return;
+            }
+        }
         const res = await FirebaseService.updateKarigarTransaction(txId, updates, buildAuditActor(), AppState.currentCompany);
         if (res?.success === false) throw new Error(res.message || 'Failed to edit transaction');
         _pendingDataChangesForBackup = true;
@@ -8982,7 +9382,12 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
     const enterpriseId = getEnterpriseKarigarId(karigar, AppState.currentCompany);
     const voucherNo = `VCH-${enterpriseId.replace(/[^a-zA-Z0-9]/g, '')}-${getTodayISODate().replace(/-/g, '').slice(0, 6)}`;
 
-    const karigarTxs = (txs || []).filter(t => resolveKarigarIdFromState(t.karigarId, t.karigarName) === targetKId || String(t.karigarId || '').trim() === targetKId);
+    const karigarTxs = (txs || []).filter(t => {
+        const tid = String(t.karigarId || '').trim();
+        const tname = String(t.karigarName || '').trim().toLowerCase();
+        const targetLower = targetKName.toLowerCase();
+        return tid === targetKId || resolveKarigarIdFromState(t.karigarId, t.karigarName) === targetKId || (tname && targetLower && tname === targetLower);
+    });
 
     // Sort chronologically ascending for clean printable statement
     karigarTxs.sort((a, b) => getKarigarTxTimestampMs(a) - getKarigarTxTimestampMs(b));
@@ -9509,7 +9914,7 @@ function printKarigarSalarySlip(karigar, customOptions = {}) {
 
 async function exportBulkKarigarSalarySlipsPDF(options = {}) {
     if (!window.jspdf) return showToast('PDF Library not ready', 'error');
-    const karigars = AppState.karigars || [];
+    const karigars = getEffectiveKarigarList();
     if (karigars.length === 0) return showToast('No karigars found', 'error');
 
     showLoader();
@@ -9534,7 +9939,12 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
 
         karigars.forEach((k) => {
             const kId = k.id;
-            const hasTxs = (txs || []).some(t => resolveKarigarIdFromState(t.karigarId, t.karigarName) === kId);
+            const kName = String(k.name || '').trim().toLowerCase();
+            const hasTxs = (txs || []).some(t => {
+                const tid = String(t.karigarId || '').trim();
+                const tname = String(t.karigarName || '').trim().toLowerCase();
+                return tid === kId || (tname && kName && tname === kName);
+            });
             if (!hasTxs && options.onlyWithActivity) return;
 
             if (pagesAdded > 0) doc.addPage();
