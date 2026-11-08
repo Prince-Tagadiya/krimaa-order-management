@@ -452,10 +452,7 @@
                                 <button type="button" class="btn btn-outline btn-sm" id="btn-company-report-karigar" style="color:#0f172a; border-color:#94a3b8; font-weight:700;" title="Print or Download Monthly Company Production & Financial Audit Statement">
                                     <i class='bx bx-bar-chart-alt-2 text-primary'></i> Company Report
                                 </button>
-                                <button type="button" class="btn btn-outline btn-sm" id="btn-master-summary-pdf" style="color:#065f46; border-color:#6ee7b7; background:#ecfdf5; font-weight:700;" title="Download Master Table for Owner: All Karigars, Upad, Jama, Net Payable, Paid status & Tickmarks">
-                                    <i class='bx bx-table text-success'></i> Summary Table (PDF)
-                                </button>
-                                <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF">
+                                <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF (with Master Summary Table on Page 1)">
                                     <i class='bx bxs-printer'></i> All Slips (PDF)
                                 </button>
                                 <button type="button" class="btn btn-outline btn-sm text-danger" id="btn-reset-karigar" style="border-color:#fca5a5; display: none;" title="Archive active cycle and start fresh month">
@@ -1030,28 +1027,6 @@
                     <p class="text-xs text-muted mb-0" id="slip-options-modal-subtitle">Select copies to include</p>
                 </div>
                 <button id="close-karigar-slip-options-modal" class="btn-icon"><i class='bx bx-x'></i></button>
-            </div>
-
-            <!-- Master Summary Table Option (Fast 1-page table for Owner) -->
-            <div id="slip-opt-master-summary-box" style="background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:12px; margin-bottom:14px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-                    <div>
-                        <div style="font-weight:700; color:#065f46; font-size:13px; display:flex; align-items:center; gap:6px;">
-                            <i class='bx bx-table text-success'></i> Master Summary Table (With Tickmarks)
-                        </div>
-                        <div style="font-size:11px; color:#047857; margin-top:2px;">
-                            Quick view of all Karigars, Jama, Upad, Net Payable, Paid status &amp; Checkboxes.
-                        </div>
-                    </div>
-                    <div style="display:flex; gap:6px;">
-                        <button type="button" class="btn btn-sm btn-outline" id="btn-slip-opt-print-summary" style="color:#065f46; border-color:#a7f3d0; background:#fff; font-weight:700;">
-                            <i class='bx bx-printer'></i> Print
-                        </button>
-                        <button type="button" class="btn btn-sm btn-primary" id="btn-slip-opt-download-summary" style="background:#059669; border-color:#059669; white-space:nowrap; font-weight:700;">
-                            <i class='bx bxs-download'></i> Download Table
-                        </button>
-                    </div>
-                </div>
             </div>
 
             <div id="slip-opt-individual-copies-box" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; margin-bottom:16px;">

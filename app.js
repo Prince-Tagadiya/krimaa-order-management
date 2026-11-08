@@ -8217,18 +8217,6 @@ function setupKarigarListeners() {
         bulkPdfBtn.addEventListener('click', () => openSalarySlipOptionsModal({ isBulk: true, defaultAction: 'download' }));
     }
 
-    const masterSummaryBtn = document.getElementById('btn-master-summary-pdf');
-    if (masterSummaryBtn && !masterSummaryBtn.dataset.bound) {
-        masterSummaryBtn.dataset.bound = 'true';
-        masterSummaryBtn.addEventListener('click', (e) => {
-            if (e.shiftKey) {
-                exportKarigarMasterSummaryPayrollPDF({ autoPrint: true });
-            } else {
-                exportKarigarMasterSummaryPayrollPDF({ autoPrint: false });
-            }
-        });
-    }
-
     const summaryPdfBtn = document.getElementById('export-pdf-karigar-btn');
     if (summaryPdfBtn && !summaryPdfBtn.dataset.bound) {
         summaryPdfBtn.dataset.bound = 'true';
@@ -9803,22 +9791,266 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
     return doc;
 }
 
-// ===== MASTER KARIGAR PAYROLL & SETTLEMENT SUMMARY TABLE (PDF) =====
+// ===== MASTER KARIGAR PAYROLL & SETTLEMENT SUMMARY TABLE SHEET (PORTRAIT A4) =====
+function renderMasterSummaryPayrollSheet(doc, karigars, txs, options = {}) {
+    const currentCompany = AppState.currentCompany || 'company1';
+    const companyName = getCompanyDisplayName(currentCompany);
+    let periodLabel = options.periodLabel;
+    if (!periodLabel) {
+        if (AppState.viewingKarigarBackupId) {
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+            periodLabel = b ? getKarigarBackupRangeLabel(b) : 'Archived Cycle';
+        } else {
+            periodLabel = getKarigarCurrentCycleLabel();
+        }
+    }
+
+    let grandPieces = 0;
+    let grandJama = 0;
+    let grandUpad = 0;
+    let grandNet = 0;
+    let totalPaidCount = 0;
+    let totalPendingCount = 0;
+
+    const tableRows = [];
+
+    karigars.forEach((k, idx) => {
+        const kId = String(k.id || '').trim();
+        const kName = String(k.name || '').trim();
+        const enterpriseId = getEnterpriseKarigarId(k, currentCompany);
+
+        const kLower = kName.toLowerCase();
+        const kTxs = (txs || []).filter(t => {
+            const tid = String(t.karigarId || '').trim();
+            const tname = String(t.karigarName || '').trim().toLowerCase();
+            return tid === kId || resolveKarigarIdFromState(t.karigarId, t.karigarName) === kId || (tname && kLower && tname === kLower);
+        });
+
+        let pieces = 0;
+        let jama = 0;
+        let upad = 0;
+
+        kTxs.forEach(t => {
+            const type = String(t.type || '').toLowerCase();
+            if (type === 'jama') {
+                const p = parseInt(t.pic, 10) || 0;
+                const pr = round2(t.price || 0);
+                const tot = round2(t.total || (p * pr));
+                const u = round2(parseFloat(String(t.upadAmount || 0).replace(/[^0-9.-]/g, '')) || 0);
+                pieces += p;
+                jama = round2(jama + tot);
+                upad = round2(upad + u);
+            } else if (type === 'upad') {
+                const u = round2(parseFloat(String(t.amount || t.upadAmount || 0).replace(/[^0-9.-]/g, '')) || 0);
+                upad = round2(upad + u);
+            }
+        });
+
+        const net = round2(jama - upad);
+        grandPieces += pieces;
+        grandJama = round2(grandJama + jama);
+        grandUpad = round2(grandUpad + upad);
+        grandNet = round2(grandNet + net);
+
+        const isPaid = isKarigarPaid(k.id, k.name);
+        let statusText = 'PENDING';
+        let tickMark = '[   ]';
+        if (isPaid) {
+            statusText = 'PAID / CLEAR';
+            tickMark = '[ X ] PAID';
+            totalPaidCount++;
+        } else if (net === 0 && pieces === 0 && upad === 0) {
+            statusText = 'NO DUES (0.00)';
+            tickMark = '[ - ] NIL';
+        } else if (net < 0) {
+            statusText = 'DUE TO FACTORY';
+            tickMark = '[ ! ] DUE';
+            totalPendingCount++;
+        } else {
+            statusText = 'PAYABLE';
+            tickMark = '[   ] CASH';
+            totalPendingCount++;
+        }
+
+        tableRows.push([
+            idx + 1,
+            enterpriseId,
+            kName,
+            pieces > 0 ? pieces : '0',
+            jama.toFixed(2),
+            upad.toFixed(2),
+            net >= 0 ? net.toFixed(2) : `(${Math.abs(net).toFixed(2)})`,
+            statusText,
+            tickMark
+        ]);
+    });
+
+    // Crisp 0.4pt Laser Outer Border
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.rect(10, 10, 190, 277);
+
+    // Header Title
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(16);
+    doc.setTextColor(0, 0, 0);
+    doc.text(companyName, 105, 17.5, { align: 'center' });
+
+    doc.setFontSize(10);
+    doc.text('MASTER KARIGAR PAYROLL & SETTLEMENT DISBURSEMENT STATEMENT', 105, 22.5, { align: 'center' });
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    const printDateStr = new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    doc.text(`Statement Period: ${periodLabel}   |   Printed: ${printDateStr}   |   Total Workers: ${karigars.length} (Paid: ${totalPaidCount}, Pending: ${totalPendingCount})`, 105, 27, { align: 'center' });
+
+    doc.setLineWidth(0.3);
+    doc.line(10, 29.5, 200, 29.5);
+
+    // 4 Key Metric Summary Boxes (White background, Crisp border, bold black text)
+    const boxY = 32;
+    const boxW = 41.5;
+    const boxH = 12.5;
+    const boxGap = 4.6;
+    const startX = 14;
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+
+    // Box 1: Total Pieces
+    doc.rect(startX, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(0, 0, 0);
+    doc.text('TOTAL PRODUCTION', startX + boxW / 2, boxY + 4, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(grandPieces + ' Pcs', startX + boxW / 2, boxY + 9.5, { align: 'center' });
+
+    // Box 2: Total Jama
+    const box2X = startX + boxW + boxGap;
+    doc.rect(box2X, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('TOTAL WORK (JAMA)', box2X + boxW / 2, boxY + 4, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Rs. ' + grandJama.toFixed(2), box2X + boxW / 2, boxY + 9.5, { align: 'center' });
+
+    // Box 3: Total Advances (Upad)
+    const box3X = startX + (boxW + boxGap) * 2;
+    doc.rect(box3X, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('TOTAL ADVANCES (UPAD)', box3X + boxW / 2, boxY + 4, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Rs. ' + grandUpad.toFixed(2), box3X + boxW / 2, boxY + 9.5, { align: 'center' });
+
+    // Box 4: Net Balance Payable
+    const box4X = startX + (boxW + boxGap) * 3;
+    doc.rect(box4X, boxY, boxW, boxH);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.text('NET PAYABLE BALANCE', box4X + boxW / 2, boxY + 4, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text('Rs. ' + grandNet.toFixed(2), box4X + boxW / 2, boxY + 9.5, { align: 'center' });
+
+    doc.setLineWidth(0.25);
+    doc.line(10, 47, 200, 47);
+
+    // AutoTable for Master Karigar List
+    doc.autoTable({
+        startY: 49,
+        margin: { left: 10, right: 10, top: 49, bottom: 25 },
+        head: [[
+            '#',
+            'Worker ID',
+            'Karigar Name',
+            'Total Pcs',
+            'Total Work (Rs)',
+            'Advances (Rs)',
+            'Net Payable (Rs)',
+            'Status',
+            'Paid Tick'
+        ]],
+        body: tableRows,
+        foot: [[
+            '',
+            'TOTALS',
+            `${karigars.length} Workers`,
+            grandPieces + ' Pcs',
+            'Rs. ' + grandJama.toFixed(2),
+            'Rs. ' + grandUpad.toFixed(2),
+            'Rs. ' + grandNet.toFixed(2),
+            `${totalPaidCount} Paid / ${totalPendingCount} Pend.`,
+            ''
+        ]],
+        theme: 'grid',
+        styles: {
+            fontSize: 7.8,
+            cellPadding: 1.6,
+            textColor: [0, 0, 0],
+            lineColor: [0, 0, 0],
+            lineWidth: 0.1
+        },
+        headStyles: {
+            fillColor: [240, 240, 240],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold',
+            halign: 'center'
+        },
+        footStyles: {
+            fillColor: [245, 245, 245],
+            textColor: [0, 0, 0],
+            fontStyle: 'bold'
+        },
+        columnStyles: {
+            0: { halign: 'center', cellWidth: 7 },
+            1: { halign: 'center', cellWidth: 23 },
+            2: { halign: 'left', cellWidth: 35, fontStyle: 'bold' },
+            3: { halign: 'right', cellWidth: 14 },
+            4: { halign: 'right', cellWidth: 24 },
+            5: { halign: 'right', cellWidth: 24 },
+            6: { halign: 'right', cellWidth: 25, fontStyle: 'bold' },
+            7: { halign: 'center', cellWidth: 22 },
+            8: { halign: 'center', cellWidth: 16, fontStyle: 'bold' }
+        },
+        didDrawPage: function(data) {
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.4);
+            doc.rect(10, 10, 190, 277);
+        }
+    });
+
+    // Bottom Signatures
+    let finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 6 : 255;
+    if (finalY > 265) {
+        doc.addPage();
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        doc.rect(10, 10, 190, 277);
+        finalY = 25;
+    }
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.text('Prepared & Reconciled By: ___________________________', 16, finalY + 8);
+    doc.text('Nareshbhai Tagadiya Signature: ___________________________', 110, finalY + 8);
+}
+
+// Standalone Master Karigar Summary Table PDF (wrapper)
 async function exportKarigarMasterSummaryPayrollPDF(options = {}) {
-    if (!window.jspdf) {
-        showToast('PDF library not ready', 'error');
-        return;
-    }
+    if (!window.jspdf) return showToast('PDF Library not ready', 'error');
     const karigars = getEffectiveKarigarList();
-    if (!karigars || karigars.length === 0) {
-        return showToast('No karigars found', 'error');
-    }
+    if (!karigars || karigars.length === 0) return showToast('No karigars found', 'error');
 
     showLoader();
     try {
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF({
-            orientation: 'landscape',
+            orientation: 'portrait',
             unit: 'mm',
             format: 'a4'
         });
@@ -9831,205 +10063,17 @@ async function exportKarigarMasterSummaryPayrollPDF(options = {}) {
             if (b && Array.isArray(b.rows)) txs = b.rows;
         }
 
-        const currentCompany = AppState.currentCompany || 'company1';
-        const companyName = getCompanyDisplayName(currentCompany);
-        let periodLabel = options.periodLabel;
-        if (!periodLabel) {
-            if (AppState.viewingKarigarBackupId) {
-                const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
-                periodLabel = b ? getKarigarBackupRangeLabel(b) : 'Archived Cycle';
-            } else {
-                periodLabel = getKarigarCurrentCycleLabel();
-            }
-        }
+        const periodLabel = options.periodLabel || (AppState.viewingKarigarBackupId
+            ? getKarigarBackupRangeLabel((AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId))
+            : getKarigarCurrentCycleLabel());
 
-        let grandPieces = 0;
-        let grandJama = 0;
-        let grandUpad = 0;
-        let grandNet = 0;
-        let totalPaidCount = 0;
-        let totalPendingCount = 0;
-
-        const tableRows = [];
-
-        karigars.forEach((k, idx) => {
-            const kId = String(k.id || '').trim();
-            const kName = String(k.name || '').trim();
-            const enterpriseId = getEnterpriseKarigarId(k, currentCompany);
-
-            const kLower = kName.toLowerCase();
-            const kTxs = (txs || []).filter(t => {
-                const tid = String(t.karigarId || '').trim();
-                const tname = String(t.karigarName || '').trim().toLowerCase();
-                return tid === kId || resolveKarigarIdFromState(t.karigarId, t.karigarName) === kId || (tname && kLower && tname === kLower);
-            });
-
-            let pieces = 0;
-            let jama = 0;
-            let upad = 0;
-
-            kTxs.forEach(t => {
-                const type = String(t.type || '').toLowerCase();
-                if (type === 'jama') {
-                    const p = parseInt(t.pic, 10) || 0;
-                    const pr = round2(t.price || 0);
-                    const tot = round2(t.total || (p * pr));
-                    const u = round2(parseFloat(String(t.upadAmount || 0).replace(/[^0-9.-]/g, '')) || 0);
-                    pieces += p;
-                    jama = round2(jama + tot);
-                    upad = round2(upad + u);
-                } else if (type === 'upad') {
-                    const u = round2(parseFloat(String(t.amount || t.upadAmount || 0).replace(/[^0-9.-]/g, '')) || 0);
-                    upad = round2(upad + u);
-                }
-            });
-
-            const net = round2(jama - upad);
-            grandPieces += pieces;
-            grandJama = round2(grandJama + jama);
-            grandUpad = round2(grandUpad + upad);
-            grandNet = round2(grandNet + net);
-
-            const isPaid = isKarigarPaid(k.id, k.name);
-            let statusText = 'PENDING';
-            let tickMark = '[   ]';
-            if (isPaid) {
-                statusText = 'PAID / CLEAR';
-                tickMark = '[ X ] PAID';
-                totalPaidCount++;
-            } else if (net === 0 && pieces === 0 && upad === 0) {
-                statusText = 'NO DUES (0.00)';
-                tickMark = '[ - ] NIL';
-            } else if (net < 0) {
-                statusText = 'DUE TO FACTORY';
-                tickMark = '[ ! ] DUE';
-                totalPendingCount++;
-            } else {
-                statusText = 'PAYABLE';
-                tickMark = '[   ] CASH';
-                totalPendingCount++;
-            }
-
-            tableRows.push([
-                idx + 1,
-                enterpriseId,
-                kName,
-                pieces > 0 ? pieces : '0',
-                jama.toFixed(2),
-                upad.toFixed(2),
-                net >= 0 ? net.toFixed(2) : `(${Math.abs(net).toFixed(2)})`,
-                statusText,
-                tickMark,
-                '' // Blank space for signature / thumb impression
-            ]);
-        });
-
-        // Crisp 0.4pt Laser Outer Border on page 1
-        doc.setDrawColor(0, 0, 0);
-        doc.setLineWidth(0.4);
-        doc.rect(10, 8, 277, 194);
-
-        // Header Title
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(15);
-        doc.setTextColor(0, 0, 0);
-        doc.text(companyName, 148.5, 15, { align: 'center' });
-
-        doc.setFontSize(10.5);
-        doc.text('MASTER KARIGAR PAYROLL & SETTLEMENT DISBURSEMENT STATEMENT', 148.5, 20.5, { align: 'center' });
-
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        const printDateStr = new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        doc.text(`Statement Period: ${periodLabel}    |    Printed Date: ${printDateStr}    |    Total Workers: ${karigars.length} (Paid: ${totalPaidCount}, Pending: ${totalPendingCount})`, 148.5, 25, { align: 'center' });
-
-        doc.setLineWidth(0.3);
-        doc.line(10, 27, 287, 27);
-
-        doc.autoTable({
-            startY: 29,
-            margin: { left: 12, right: 12, top: 29, bottom: 25 },
-            head: [[
-                '#',
-                'Worker ID',
-                'Karigar Name',
-                'Total Pcs',
-                'Total Work (Rs)',
-                'Advances (Rs)',
-                'Net Payable (Rs)',
-                'Status',
-                'Paid Tick',
-                'Receiver Signature / Thumb'
-            ]],
-            body: tableRows,
-            foot: [[
-                '',
-                'TOTALS',
-                `${karigars.length} Karigars`,
-                grandPieces + ' Pcs',
-                'Rs. ' + grandJama.toFixed(2),
-                'Rs. ' + grandUpad.toFixed(2),
-                'Rs. ' + grandNet.toFixed(2),
-                `${totalPaidCount} Paid / ${totalPendingCount} Pend.`,
-                '',
-                ''
-            ]],
-            theme: 'grid',
-            styles: {
-                fontSize: 8,
-                cellPadding: 1.8,
-                textColor: [0, 0, 0],
-                lineColor: [0, 0, 0],
-                lineWidth: 0.1
-            },
-            headStyles: {
-                fillColor: [240, 240, 240],
-                textColor: [0, 0, 0],
-                fontStyle: 'bold',
-                halign: 'center'
-            },
-            footStyles: {
-                fillColor: [245, 245, 245],
-                textColor: [0, 0, 0],
-                fontStyle: 'bold'
-            },
-            columnStyles: {
-                0: { halign: 'center', cellWidth: 8 },
-                1: { halign: 'center', cellWidth: 26 },
-                2: { halign: 'left', cellWidth: 42, fontStyle: 'bold' },
-                3: { halign: 'right', cellWidth: 18 },
-                4: { halign: 'right', cellWidth: 28 },
-                5: { halign: 'right', cellWidth: 28 },
-                6: { halign: 'right', cellWidth: 30, fontStyle: 'bold' },
-                7: { halign: 'center', cellWidth: 28 },
-                8: { halign: 'center', cellWidth: 24, fontStyle: 'bold' },
-                9: { halign: 'left', cellWidth: 41 }
-            },
-            didDrawPage: function(data) {
-                doc.setDrawColor(0, 0, 0);
-                doc.setLineWidth(0.4);
-                doc.rect(10, 8, 277, 194);
-            }
-        });
-
-        // Signatures at bottom
-        let finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 6 : 180;
-        if (finalY > 185) {
-            doc.addPage();
-            doc.setDrawColor(0, 0, 0);
-            doc.setLineWidth(0.4);
-            doc.rect(10, 8, 277, 194);
-            finalY = 25;
-        }
-
-        doc.setFont('helvetica', 'normal');
-        doc.setFontSize(8.5);
-        doc.text('Prepared & Reconciled By: ________________________________', 16, finalY + 8);
-        doc.text('Authorized & Disbursed By (Nareshbhai Tagadiya): ________________________________', 150, finalY + 8);
+        renderMasterSummaryPayrollSheet(doc, karigars, txs, { periodLabel });
 
         if (options.autoPrint) {
             printPDFViaHiddenIframe(doc, 'Master Karigar Payroll Summary');
         } else {
+            const currentCompany = AppState.currentCompany || 'company1';
+            const companyName = getCompanyDisplayName(currentCompany);
             const periodSafe = (periodLabel || 'Current_Month').replace(/[^a-zA-Z0-9_-]/g, '_');
             const cleanComp = companyName.replace(/[^a-zA-Z0-9_-]/g, '_');
             const filename = `Master_Karigar_Payroll_Summary_${cleanComp}_${periodSafe}_${getTodayISODate()}.pdf`;
@@ -10064,9 +10108,6 @@ function openSalarySlipOptionsModal(config = {}) {
     const subEl = document.getElementById('slip-options-modal-subtitle');
     const workerCheck = document.getElementById('slip-opt-worker-check');
     const factoryCheck = document.getElementById('slip-opt-factory-check');
-    const masterBox = document.getElementById('slip-opt-master-summary-box');
-    const masterDownloadBtn = document.getElementById('btn-slip-opt-download-summary');
-    const masterPrintBtn = document.getElementById('btn-slip-opt-print-summary');
     const copiesTitleEl = document.getElementById('slip-opt-copies-title');
     const dlBtn = document.getElementById('btn-slip-opt-download');
     const printBtn = document.getElementById('btn-slip-opt-print');
@@ -10078,34 +10119,19 @@ function openSalarySlipOptionsModal(config = {}) {
     if (factoryCheck) factoryCheck.checked = true;
 
     if (isBulk) {
-        if (titleEl) titleEl.innerHTML = "<i class='bx bxs-file-pdf text-danger'></i> Salary Slips & Master Table";
-        if (subEl) subEl.textContent = "Download Master Table or bulk individual salary slips";
-        if (masterBox) masterBox.style.display = 'block';
-        if (copiesTitleEl) copiesTitleEl.textContent = "Detailed Salary Slips (All Karigars)";
+        if (titleEl) titleEl.innerHTML = "<i class='bx bxs-file-pdf text-danger'></i> All Karigar Salary Slips";
+        if (subEl) subEl.textContent = "Includes Master Summary Table on Page 1 + Karigar Slips";
+        if (copiesTitleEl) copiesTitleEl.textContent = "Include Slips";
     } else {
         const kName = karigar?.name || 'Karigar';
         if (titleEl) titleEl.innerHTML = `<i class='bx bxs-file-pdf text-danger'></i> Salary Slip: ${escapeHtml(kName)}`;
         if (subEl) subEl.textContent = "Select copies to include for this Karigar";
-        if (masterBox) masterBox.style.display = 'none';
         if (copiesTitleEl) copiesTitleEl.textContent = "Detailed Salary Slip Copies";
     }
 
     const closeModal = () => modal.classList.remove('show');
     if (cancelBtn) cancelBtn.onclick = closeModal;
     if (closeBtn) closeBtn.onclick = closeModal;
-
-    if (masterDownloadBtn) {
-        masterDownloadBtn.onclick = () => {
-            closeModal();
-            exportKarigarMasterSummaryPayrollPDF({ ...bulkOptions, autoPrint: false });
-        };
-    }
-    if (masterPrintBtn) {
-        masterPrintBtn.onclick = () => {
-            closeModal();
-            exportKarigarMasterSummaryPayrollPDF({ ...bulkOptions, autoPrint: true });
-        };
-    }
 
     const getSelection = () => {
         const incWorker = !!workerCheck?.checked;
@@ -10215,7 +10241,7 @@ function printKarigarSalarySlip(karigar, customOptions = {}) {
 async function exportBulkKarigarSalarySlipsPDF(options = {}) {
     if (!window.jspdf) return showToast('PDF Library not ready', 'error');
     const karigars = getEffectiveKarigarList();
-    if (karigars.length === 0) return showToast('No karigars found', 'error');
+    if (!karigars || karigars.length === 0) return showToast('No karigars found', 'error');
 
     showLoader();
     try {
@@ -10235,8 +10261,12 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
         }
 
         const periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
-        let pagesAdded = 0;
 
+        // 1. AUTOMATICALLY ATTACH MASTER SUMMARY TABLE ON PAGE 1 (TOP OF PDF)
+        renderMasterSummaryPayrollSheet(doc, karigars, txs, { periodLabel });
+
+        // 2. ATTACH ALL DETAILED KARIGAR SLIPS IMMEDIATELY ON SUBSEQUENT PAGES
+        let slipCount = 0;
         karigars.forEach((k) => {
             const kId = k.id;
             const kName = String(k.name || '').trim().toLowerCase();
@@ -10247,7 +10277,7 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             });
             if (!hasTxs && options.onlyWithActivity) return;
 
-            if (pagesAdded > 0) doc.addPage();
+            doc.addPage();
             generateKarigarSalarySlipPDF(k, txs, {
                 doc,
                 isBulk: true,
@@ -10255,21 +10285,17 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
                 includeWorker: options.includeWorker !== false,
                 includeFactory: options.includeFactory !== false
             });
-            pagesAdded++;
+            slipCount++;
         });
-
-        if (pagesAdded === 0) {
-            hideLoader();
-            return showToast('No transactions found to print for this cycle', 'warning');
-        }
 
         if (options.autoPrint) {
             printPDFViaHiddenIframe(doc, `All Karigar Slips`);
         } else {
             const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
-            const filename = `Karigar_All_Salary_Slips_${compName}_${getTodayISODate()}.pdf`;
+            const cleanComp = compName.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const filename = `Karigar_All_Salary_Slips_${cleanComp}_${getTodayISODate()}.pdf`;
             doc.save(filename);
-            showToast(`Bulk PDF with ${pagesAdded} Karigar slip sets downloaded!`, 'success');
+            showToast(`All Slips PDF downloaded with Master Summary on Page 1 (${slipCount} workers)!`, 'success');
         }
     } catch (e) {
         console.error('Bulk PDF error:', e);
