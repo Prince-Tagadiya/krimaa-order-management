@@ -8280,13 +8280,7 @@ function setupKarigarListeners() {
         });
     }
 
-    const tempDeleteBtn = document.getElementById('btn-temp-delete-all-karigar');
-    if (tempDeleteBtn && !tempDeleteBtn.dataset.bound) {
-        tempDeleteBtn.dataset.bound = 'true';
-        tempDeleteBtn.addEventListener('click', () => {
-            tempDeleteAllKarigarData();
-        });
-    }
+
 }
 
 function setupKarigarFastEnterNavigation() {
@@ -9031,109 +9025,7 @@ async function clearAllKarigars() {
     }
 }
 
-// ===== TEMPORARY REMOVE ALL DATA (Purges all Karigars, Transactions & Reset Backups) =====
-async function tempDeleteAllKarigarData() {
-    if (!isAdminUser() || !canAccessKarigar()) return showToast('Only Krimaa admin can delete all Karigar data', 'error');
 
-    const karigars = AppState.karigars || [];
-    const txCount = (AppState.karigarTransactions || []).length;
-    const backupCount = (AppState.karigarResetBackups || []).length;
-
-    const confirmMsg = [
-        '⚠️ TEMPORARY WIPE: DELETE ALL KARIGAR INFORMATION ⚠️',
-        '',
-        `You are about to permanently delete:`,
-        `• ${karigars.length} Karigar worker profiles`,
-        `• ${txCount} Work (Jama) & Borrow (Upad) entries`,
-        `• ${backupCount} Archived Reset Backups`,
-        '',
-        'Local JSON files, cloud records, and memory will be wiped completely.',
-        '',
-        'Type "DELETE ALL" (without quotes) to confirm:'
-    ].join('\n');
-
-    const userInput = window.prompt(confirmMsg, '');
-    if (String(userInput || '').trim() !== 'DELETE ALL') {
-        showToast('Operation cancelled', 'info');
-        return;
-    }
-
-    showLoader('Purging all Karigar data & backups...');
-    let deletedKarigars = 0;
-    const actor = buildAuditActor();
-    const companyId = AppState.currentCompany || 'company1';
-
-    try {
-        // 1. Delete all individual karigars from Firebase
-        for (const k of karigars) {
-            try {
-                await FirebaseService.deleteKarigar(k.id, companyId, actor);
-                deletedKarigars++;
-            } catch (e) {
-                console.warn('Failed to delete karigar:', k.id, e.message);
-            }
-        }
-
-        // 2. Clear all karigar transactions from Firebase
-        try {
-            await FirebaseService.clearKarigarMonthlyData(companyId, actor);
-        } catch (e) {
-            console.warn('Bulk tx clear failed:', e.message);
-        }
-
-        // 3. Clear all reset backups from Firebase
-        try {
-            const db = window.db || (window.firebase?.firestore ? window.firebase.firestore() : null);
-            if (db) {
-                const snap = await db.collection('karigar_reset_backups').get();
-                for (const doc of snap.docs) {
-                    await doc.ref.delete().catch(() => {});
-                }
-            }
-        } catch (e) {
-            console.warn('Backup delete failed:', e.message);
-        }
-
-        // 4. Overwrite LAN JSON files with empty arrays
-        if (window.LanStorageService && LanStorageService.isConnected()) {
-            try {
-                await LanStorageService.writeFile('karigars', []);
-                await LanStorageService.writeFile('karigar_transactions', []);
-                await LanStorageService.writeFile('karigar_reset_backups', []);
-            } catch (lanErr) {
-                console.warn('[LAN] Write error:', lanErr.message);
-            }
-        }
-
-        // 5. Flush writes to Firebase
-        await FirebaseService.flushWrites();
-
-        // 6. Reset all AppState and localStorage caches
-        AppState.karigars = [];
-        AppState.karigarTransactions = [];
-        AppState.karigarResetBackups = [];
-        AppState.karigarResetBackupsByCompany = {};
-        AppState.viewingKarigarBackupId = null;
-        AppState.karigarPaidStatus = {};
-        AppState.karigarStatsById = {};
-        AppState.karigarTransactionsById = {};
-        localStorage.removeItem('karigar_paid_status');
-        localStorage.removeItem('karigar_reset_backups');
-        invalidateAllKarigarCaches();
-
-        // 7. Re-render UI
-        await renderKarigarPage(true);
-        _pendingDataChangesForBackup = true;
-        scheduleBackgroundSheetBackup('tempDeleteAllKarigarData');
-
-        showToast('✅ All Karigar data and backups have been completely wiped!', 'success');
-    } catch (e) {
-        console.error('tempDeleteAllKarigarData failed:', e);
-        showToast('Failed to delete all Karigar data: ' + (e.message || 'Unknown error'), 'error');
-    } finally {
-        hideLoader();
-    }
-}
 
 async function deleteKarigarHistory(txId, karigarId, karigarName) {
     if (!isAdminUser()) return showToast('Only admin can delete transaction', 'error');

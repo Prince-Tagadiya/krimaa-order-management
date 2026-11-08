@@ -46,7 +46,24 @@ exports.handler = async function () {
   const sheetsApiUrl = process.env.SHEETS_API_URL || "";
   const clientMode = process.env.CLIENT_MODE || "multi_company";
   const clientCompanyName = process.env.CLIENT_COMPANY_NAME || "";
-  const authUsers = parseUsers(process.env.AUTH_USERS_JSON);
+  let authUsers = parseUsers(process.env.AUTH_USERS_JSON);
+
+  const defaultUsers = [
+    {"username":"Krimaa","password":"Krimaa4484","role":"admin","displayName":"Krimaa Admin","allowedCompanies":["company1","company2"]},
+    {"username":"order","password":"order123","role":"order","displayName":"Order","allowedCompanies":["company1","company2"]},
+    {"username":"Krimaa_Users","password":"Krimaa123","role":"order","displayName":"Order Entry","allowedCompanies":["company1","company2"]},
+    {"username":"Dhyan_Order","password":"Dhyan123","role":"order_c2","displayName":"Dhyan Order","allowedCompanies":["company2"]},
+    {"username":"dev","password":"dev123","role":"dev","displayName":"Developer","allowedCompanies":["company1","company2"]}
+  ];
+
+  if (!authUsers || authUsers.length === 0) {
+    authUsers = defaultUsers;
+  } else {
+    const hasOrder = authUsers.some(u => String(u.username || '').toLowerCase() === 'order');
+    if (!hasOrder) {
+      authUsers.push({"username":"order","password":"order123","role":"order","displayName":"Order","allowedCompanies":["company1","company2"]});
+    }
+  }
 
   const appConfig = {
     writeBufferMs: parseIntSafe(process.env.APP_WRITE_BUFFER_MS, 600000),
