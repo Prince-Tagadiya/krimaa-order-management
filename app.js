@@ -346,13 +346,20 @@ function isOrderUser() {
     return role === 'order' || role === 'order_c2';
 }
 
+function canAccessKarigar() {
+    const role = String(AppState.currentUser?.role || localStorage.getItem('userRole') || '').trim().toLowerCase();
+    const username = String(AppState.currentUser?.username || localStorage.getItem('userUsername') || '').trim().toLowerCase();
+    // Strictly allowed only for krimaa username (or dev)
+    return username === 'krimaa' || role === 'dev';
+}
+
 function canManageAccounts() {
     const role = String(AppState.currentUser?.role || localStorage.getItem('userRole') || '').trim().toLowerCase();
     const username = String(AppState.currentUser?.username || localStorage.getItem('userUsername') || '').trim().toLowerCase();
     const displayName = String(AppState.currentUser?.displayName || localStorage.getItem('userName') || '').trim().toLowerCase();
     
     if (role === 'admin' || role === 'dev' || role === 'order_c2') return true;
-    if (username === 'dhyan_order' || username === 'dhyan') return true;
+    if (username === 'order' || username === 'krimaa_users' || username === 'dhyan_order' || username === 'dhyan') return true;
     if (displayName.includes('dhyan')) return true;
     if (window.location.hash.toLowerCase().includes('dhyan')) return true;
     return false;
@@ -2195,13 +2202,15 @@ function applyRolePermissions() {
     const navKarigar = document.getElementById('nav-karigar');
     const navSizePrices = document.getElementById('nav-size-prices');
 
-    if (role === 'order' || role === 'order_c2') {
-        // Order role: allow Data Sheet, Manage Accounts if permitted (e.g. Dhyan Order), and Karigar Management
+    const allowKarigar = canAccessKarigar();
+
+    if (role === 'order' || role === 'order_c2' || !allowKarigar) {
+        // Order role or non-krimaa: allow Data Sheet, Manage Accounts; hide Karigar & Size Prices
         if (navDash) navDash.style.display = 'none';
         if (navSheet) navSheet.style.display = '';
         if (navAccounts) navAccounts.style.display = canManageAccounts() ? '' : 'none';
-        if (navKarigar) navKarigar.style.display = '';
-        if (navSizePrices) navSizePrices.style.display = '';
+        if (navKarigar) navKarigar.style.display = allowKarigar ? '' : 'none';
+        if (navSizePrices) navSizePrices.style.display = allowKarigar ? '' : 'none';
     } else {
         if (navDash) navDash.style.display = '';
         if (navSheet) navSheet.style.display = '';
@@ -2300,10 +2309,10 @@ function attachEventListeners() {
             showToast("No dashboard users configured. Set AUTH_USERS_JSON in hosting environment variables.", "error");
             return;
         }
-        const user = document.getElementById('username').value;
-        const pass = document.getElementById('password').value;
+        const user = String(document.getElementById('username')?.value || '').trim();
+        const pass = String(document.getElementById('password')?.value || '');
         
-        const foundUser = USERS.find(u => u.username === user && u.password === pass);
+        const foundUser = USERS.find(u => u.username.toLowerCase() === user.toLowerCase() && u.password === pass);
         if (foundUser) {
             // ── Activate per-profile LAN folder before session is set ──
             LanStorageService.setActiveProfile(foundUser.username);
@@ -2581,6 +2590,11 @@ function navigateTo(sectionId) {
     // Permission check for order / restricted roles
     if (sectionId === 'add-account' && !canManageAccounts()) {
         showToast("Access denied", "error"); return;
+    }
+    if ((sectionId === 'karigar' || sectionId === 'size-prices') && !canAccessKarigar()) {
+        showToast("Access denied: Karigar Management is only available for Krimaa admin", "error");
+        navigateTo('data-sheet');
+        return;
     }
     if ((AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') && (sectionId === 'dashboard' || sectionId === 'money-management' || sectionId === 'money-backup')) {
         showToast("Access denied", "error"); return;
@@ -8265,6 +8279,14 @@ function setupKarigarListeners() {
             });
         });
     }
+
+    const tempDeleteBtn = document.getElementById('btn-temp-delete-all-karigar');
+    if (tempDeleteBtn && !tempDeleteBtn.dataset.bound) {
+        tempDeleteBtn.dataset.bound = 'true';
+        tempDeleteBtn.addEventListener('click', () => {
+            tempDeleteAllKarigarData();
+        });
+    }
 }
 
 function setupKarigarFastEnterNavigation() {
@@ -9004,6 +9026,110 @@ async function clearAllKarigars() {
     } catch (e) {
         console.error('clearAllKarigars failed:', e);
         showToast('Failed to clear all karigars: ' + (e.message || 'Unknown error'), 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ===== TEMPORARY REMOVE ALL DATA (Purges all Karigars, Transactions & Reset Backups) =====
+async function tempDeleteAllKarigarData() {
+    if (!isAdminUser() || !canAccessKarigar()) return showToast('Only Krimaa admin can delete all Karigar data', 'error');
+
+    const karigars = AppState.karigars || [];
+    const txCount = (AppState.karigarTransactions || []).length;
+    const backupCount = (AppState.karigarResetBackups || []).length;
+
+    const confirmMsg = [
+        '⚠️ TEMPORARY WIPE: DELETE ALL KARIGAR INFORMATION ⚠️',
+        '',
+        `You are about to permanently delete:`,
+        `• ${karigars.length} Karigar worker profiles`,
+        `• ${txCount} Work (Jama) & Borrow (Upad) entries`,
+        `• ${backupCount} Archived Reset Backups`,
+        '',
+        'Local JSON files, cloud records, and memory will be wiped completely.',
+        '',
+        'Type "DELETE ALL" (without quotes) to confirm:'
+    ].join('\n');
+
+    const userInput = window.prompt(confirmMsg, '');
+    if (String(userInput || '').trim() !== 'DELETE ALL') {
+        showToast('Operation cancelled', 'info');
+        return;
+    }
+
+    showLoader('Purging all Karigar data & backups...');
+    let deletedKarigars = 0;
+    const actor = buildAuditActor();
+    const companyId = AppState.currentCompany || 'company1';
+
+    try {
+        // 1. Delete all individual karigars from Firebase
+        for (const k of karigars) {
+            try {
+                await FirebaseService.deleteKarigar(k.id, companyId, actor);
+                deletedKarigars++;
+            } catch (e) {
+                console.warn('Failed to delete karigar:', k.id, e.message);
+            }
+        }
+
+        // 2. Clear all karigar transactions from Firebase
+        try {
+            await FirebaseService.clearKarigarMonthlyData(companyId, actor);
+        } catch (e) {
+            console.warn('Bulk tx clear failed:', e.message);
+        }
+
+        // 3. Clear all reset backups from Firebase
+        try {
+            const db = window.db || (window.firebase?.firestore ? window.firebase.firestore() : null);
+            if (db) {
+                const snap = await db.collection('karigar_reset_backups').get();
+                for (const doc of snap.docs) {
+                    await doc.ref.delete().catch(() => {});
+                }
+            }
+        } catch (e) {
+            console.warn('Backup delete failed:', e.message);
+        }
+
+        // 4. Overwrite LAN JSON files with empty arrays
+        if (window.LanStorageService && LanStorageService.isConnected()) {
+            try {
+                await LanStorageService.writeFile('karigars', []);
+                await LanStorageService.writeFile('karigar_transactions', []);
+                await LanStorageService.writeFile('karigar_reset_backups', []);
+            } catch (lanErr) {
+                console.warn('[LAN] Write error:', lanErr.message);
+            }
+        }
+
+        // 5. Flush writes to Firebase
+        await FirebaseService.flushWrites();
+
+        // 6. Reset all AppState and localStorage caches
+        AppState.karigars = [];
+        AppState.karigarTransactions = [];
+        AppState.karigarResetBackups = [];
+        AppState.karigarResetBackupsByCompany = {};
+        AppState.viewingKarigarBackupId = null;
+        AppState.karigarPaidStatus = {};
+        AppState.karigarStatsById = {};
+        AppState.karigarTransactionsById = {};
+        localStorage.removeItem('karigar_paid_status');
+        localStorage.removeItem('karigar_reset_backups');
+        invalidateAllKarigarCaches();
+
+        // 7. Re-render UI
+        await renderKarigarPage(true);
+        _pendingDataChangesForBackup = true;
+        scheduleBackgroundSheetBackup('tempDeleteAllKarigarData');
+
+        showToast('✅ All Karigar data and backups have been completely wiped!', 'success');
+    } catch (e) {
+        console.error('tempDeleteAllKarigarData failed:', e);
+        showToast('Failed to delete all Karigar data: ' + (e.message || 'Unknown error'), 'error');
     } finally {
         hideLoader();
     }
