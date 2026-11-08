@@ -393,8 +393,28 @@
 
                 <!-- ========== KARIGAR MANAGEMENT ========== -->
                 <section id="karigar" class="content-section">
-                    <!-- Unified Modern Header -->
-                    <div class="karigar-header-bar">
+                    <!-- One-Time Database Reorganize Gate -->
+                    <div id="karigar-db-reorganize-gate" class="db-reorganize-gate" style="display:none;">
+                        <div class="db-reorganize-card" style="background:#fff; border:2px dashed #dc2626; border-radius:16px; padding:40px 24px; text-align:center; max-width:680px; margin:30px auto; box-shadow:0 20px 40px rgba(220,38,38,0.08);">
+                            <div style="width:72px; height:72px; line-height:72px; font-size:36px; background:#fef2f2; border:1px solid #fee2e2; border-radius:50%; margin:0 auto 16px auto;">
+                                🧹
+                            </div>
+                            <h2 style="font-size:22px; font-weight:800; color:#0f172a; margin-bottom:8px;">Reorganize Database &amp; Start Fresh</h2>
+                            <p style="color:#64748b; font-size:14px; line-height:1.6; max-width:520px; margin:0 auto 24px auto;">
+                                Click the button below to reorganize your local storage and wipe all previous test Karigar worker profiles, work/borrow entries, monthly backups, and size charts.
+                            </p>
+                            <button type="button" class="btn btn-danger btn-execute-local-reorganize" style="background:#dc2626; border-color:#dc2626; color:#fff; font-size:17px; font-weight:800; padding:14px 36px; border-radius:12px; cursor:pointer; box-shadow:0 6px 18px rgba(220,38,38,0.35); display:inline-flex; align-items:center; gap:8px;">
+                                <i class='bx bx-trash' style="font-size:20px;"></i> Reorganize &amp; Wipe Old Database
+                            </button>
+                            <div style="font-size:12px; color:#94a3b8; margin-top:14px;">
+                                ⚡ One-time operation. Once clicked, this will never be shown again and both sections will be unlocked.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="karigar-main-content">
+                        <!-- Unified Modern Header -->
+                        <div class="karigar-header-bar">
                         <!-- Top Row: Title, Cycle & Audit Badges, Summary Stats -->
                         <div class="karigar-top-row">
                             <div class="flex items-center gap-2 flex-wrap">
@@ -500,11 +520,32 @@
                     <div id="karigar-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem;">
                         <!-- JS injected cards -->
                     </div>
+                    </div> <!-- /#karigar-main-content -->
                 </section>
 
                 <!-- ========== SIZE PRICES / RATE CHART ========== -->
                 <section id="size-prices" class="content-section">
-                    <div class="size-chart-header">
+                    <!-- One-Time Database Reorganize Gate -->
+                    <div id="size-prices-db-reorganize-gate" class="db-reorganize-gate" style="display:none;">
+                        <div class="db-reorganize-card" style="background:#fff; border:2px dashed #dc2626; border-radius:16px; padding:40px 24px; text-align:center; max-width:680px; margin:30px auto; box-shadow:0 20px 40px rgba(220,38,38,0.08);">
+                            <div style="width:72px; height:72px; line-height:72px; font-size:36px; background:#fef2f2; border:1px solid #fee2e2; border-radius:50%; margin:0 auto 16px auto;">
+                                🧹
+                            </div>
+                            <h2 style="font-size:22px; font-weight:800; color:#0f172a; margin-bottom:8px;">Reorganize Database &amp; Start Fresh</h2>
+                            <p style="color:#64748b; font-size:14px; line-height:1.6; max-width:520px; margin:0 auto 24px auto;">
+                                Click the button below to reorganize your local storage and wipe all previous test Karigar worker profiles, work/borrow entries, monthly backups, and size charts.
+                            </p>
+                            <button type="button" class="btn btn-danger btn-execute-local-reorganize" style="background:#dc2626; border-color:#dc2626; color:#fff; font-size:17px; font-weight:800; padding:14px 36px; border-radius:12px; cursor:pointer; box-shadow:0 6px 18px rgba(220,38,38,0.35); display:inline-flex; align-items:center; gap:8px;">
+                                <i class='bx bx-trash' style="font-size:20px;"></i> Reorganize &amp; Wipe Old Database
+                            </button>
+                            <div style="font-size:12px; color:#94a3b8; margin-top:14px;">
+                                ⚡ One-time operation. Once clicked, this will never be shown again and both sections will be unlocked.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="size-prices-main-content">
+                        <div class="size-chart-header">
                         <div class="flex-between flex-wrap gap-2">
                             <div>
                                 <h2 class="page-title font-bold text-xl mb-1" style="display:flex;align-items:center;gap:8px;">
@@ -572,6 +613,7 @@
                             </table>
                         </div>
                     </div>
+                    </div> <!-- /#size-prices-main-content -->
                 </section>
 
                 <!-- ========== DATA SHEET ========== -->

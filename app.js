@@ -2190,6 +2190,98 @@ function checkAuth() {
 }
 
 
+function isLocalDatabaseReorganized() {
+    return localStorage.getItem('krimaa_local_wipe_completed') === 'true';
+}
+
+function updateReorganizeGates() {
+    const isClean = isLocalDatabaseReorganized();
+    const karigarGate = document.getElementById('karigar-db-reorganize-gate');
+    const karigarContent = document.getElementById('karigar-main-content');
+    const sizePricesGate = document.getElementById('size-prices-db-reorganize-gate');
+    const sizePricesContent = document.getElementById('size-prices-main-content');
+
+    if (karigarGate && karigarContent) {
+        if (!isClean) {
+            karigarGate.style.display = 'block';
+            karigarContent.style.display = 'none';
+        } else {
+            karigarGate.style.display = 'none';
+            karigarContent.style.display = 'block';
+        }
+    }
+
+    if (sizePricesGate && sizePricesContent) {
+        if (!isClean) {
+            sizePricesGate.style.display = 'block';
+            sizePricesContent.style.display = 'none';
+        } else {
+            sizePricesGate.style.display = 'none';
+            sizePricesContent.style.display = 'block';
+        }
+    }
+}
+
+async function executeLocalDatabaseReorganize() {
+    showLoader('Reorganizing local database & clearing previous data...');
+    try {
+        // 1. Wipe local LAN files
+        if (window.LanStorageService && LanStorageService.isConnected()) {
+            try {
+                await LanStorageService.writeFile('karigars', []);
+                await LanStorageService.writeFile('karigar_transactions', []);
+                await LanStorageService.writeFile('karigar_reset_backups', []);
+                await LanStorageService.writeFile('design_prices', []);
+                await LanStorageService.writeFile('design_price_history', []);
+                await LanStorageService.writeFile('clean_wipe_v1', {
+                    completedAt: new Date().toISOString(),
+                    user: AppState.currentUser?.username || 'admin'
+                });
+            } catch (lanErr) {
+                console.warn('[LAN] Write error during reorganize:', lanErr);
+            }
+        }
+
+        // 2. Clear browser LocalStorage caches
+        try {
+            localStorage.removeItem('krimaa_size_prices_backup');
+            localStorage.removeItem('krimaa_size_price_history_backup');
+            localStorage.removeItem('karigar_paid_status');
+            localStorage.removeItem('karigar_reset_backups');
+            localStorage.setItem('krimaa_local_wipe_completed', 'true');
+        } catch (e) {}
+
+        // 3. Reset in-memory AppState
+        AppState.karigars = [];
+        AppState.karigarTransactions = [];
+        AppState.karigarResetBackups = [];
+        AppState.karigarResetBackupsByCompany = {};
+        AppState.viewingKarigarBackupId = null;
+        AppState.karigarPaidStatus = {};
+        AppState.karigarStatsById = {};
+        AppState.karigarTransactionsById = {};
+        AppState.designPrices = {};
+        AppState.designPricesByCompany = {};
+        AppState.designPriceHistoryByCompany = {};
+
+        if (typeof invalidateAllKarigarCaches === 'function') invalidateAllKarigarCaches();
+
+        // 4. Update UI gates (unlocks both sections and hides the button permanently!)
+        updateReorganizeGates();
+
+        // 5. Re-render both sections to fresh clean states
+        if (typeof renderKarigarPage === 'function') await renderKarigarPage(true);
+        if (typeof loadSizePrices === 'function') await loadSizePrices();
+
+        showToast('✅ Local database reorganized! Previous records removed. You can now start fresh.', 'success');
+    } catch (err) {
+        console.error('executeLocalDatabaseReorganize failed:', err);
+        showToast('Failed to reorganize database: ' + (err.message || 'Unknown error'), 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
 function applyRolePermissions() {
     const role = AppState.currentUser?.role;
     const userInfo = document.getElementById('sidebar-user-info');
@@ -2239,9 +2331,17 @@ function applyRolePermissions() {
 
     // Show/hide profile switch button based on role
     updateProfileSwitchBtn();
+
+    // Reorganize gate for Karigar & Size Prices
+    updateReorganizeGates();
 }
 
 function attachEventListeners() {
+    // Reorganize database action button (accessible from either section)
+    document.querySelectorAll('.btn-execute-local-reorganize').forEach(btn => {
+        btn.addEventListener('click', executeLocalDatabaseReorganize);
+    });
+
     // ──── Folder Setup Screen ────
     const folderSetupLinkBtn = document.getElementById('folder-setup-link-btn');
     const folderSetupContinueBtn = document.getElementById('folder-setup-continue-btn');
@@ -2595,6 +2695,9 @@ function navigateTo(sectionId) {
         showToast("Access denied: Karigar Management is only available for Krimaa admin", "error");
         navigateTo('data-sheet');
         return;
+    }
+    if (sectionId === 'karigar' || sectionId === 'size-prices') {
+        updateReorganizeGates();
     }
     if ((AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') && (sectionId === 'dashboard' || sectionId === 'money-management' || sectionId === 'money-backup')) {
         showToast("Access denied", "error"); return;
