@@ -6102,7 +6102,10 @@ function openKarigarResetEmployeeDetailsModal(empKey) {
             totalUpad += upadVal;
 
             const dateTimeLabel = formatISODateTimeForDisplay(t.transactionDateTime || t.dateTime || t.createdAt || t.date) || '-';
-            const designLabel = isJama ? (t.designName || '-') : '<span class="text-danger font-bold">Direct Borrow (Upad)</span>';
+            const upadReason = String(t.reason || t.note || t.remarks || t.particulars || (!isJama ? 'Cash Advance' : '')).trim();
+            const designLabel = isJama 
+                ? (escapeHtml(t.designName) || '-') 
+                : `<span class="text-danger font-bold">Direct Borrow (Upad)</span>${upadReason ? `<div class="text-xs mt-1" style="color:#475569; font-weight:600;"><i class='bx bx-notepad text-danger'></i> Reason: <span style="color:#0f172a; font-weight:700;">${escapeHtml(upadReason)}</span></div>` : ''}`;
             let createdFrom = String(t.createdFrom || t.source || t.dashboard || t.addedBy || '').trim();
             if (!createdFrom || createdFrom.toLowerCase() === 'web_app') createdFrom = String(t.addedBy || 'unknown').trim();
 
@@ -8779,12 +8782,24 @@ function openKarigarHistoryModal(id, name) {
             const timeTag = txDateObj
                 ? `<div class="text-xs text-muted mt-1"><i class='bx bx-time-five'></i> ${txDateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>`
                 : '';
+
+            const upadReason = String(t.reason || t.note || t.remarks || t.particulars || (!isJama ? 'Cash Advance' : '')).trim();
+            let upadReasonTag = '';
+            if (!isJama && upadReason) {
+                upadReasonTag = `<div class="text-xs mt-1" style="color: #475569; font-weight: 600;"><i class='bx bx-notepad text-danger'></i> Reason: <span style="color: #0f172a; font-weight: 700;">${escapeHtml(upadReason)}</span></div>`;
+            } else if (isJama && upadVal > 0 && upadReason) {
+                upadReasonTag = `<div class="text-xs mt-1" style="color: #475569; font-weight: 600;"><i class='bx bx-notepad text-danger'></i> Upad Reason: <span style="color: #0f172a; font-weight: 700;">${escapeHtml(upadReason)}</span></div>`;
+            }
             
             const row = `
                 <tr style="border-bottom: 1px solid var(--border-light); ${!isJama ? 'background: #fffcfc;' : ''}">
                     <td class="p-2 text-sm">${displayDate} ${timeTag} <div class="mt-1">${companyTag}</div></td>
-                    <td class="p-2 text-sm font-medium">${isJama ? (t.designName || 'Maal') : '<span class="text-danger font-bold">Direct Borrow (Upad)</span>'} ${addedByTag}</td>
-                    <td class="p-2 text-sm text-center">${t.size || '-'}</td>
+                    <td class="p-2 text-sm font-medium">
+                        ${isJama ? (escapeHtml(t.designName) || 'Maal') : '<span class="text-danger font-bold">Direct Borrow (Upad)</span>'}
+                        ${upadReasonTag}
+                        ${addedByTag}
+                    </td>
+                    <td class="p-2 text-sm text-center">${escapeHtml(t.size) || '-'}</td>
                     <td class="p-2 text-sm text-right font-bold">${t.pic || '-'}</td>
                     <td class="p-2 text-sm text-right font-mono">${t.price ? '₹'+parseFloat(t.price).toFixed(2) : '-'}</td>
                     <td class="p-2 text-sm text-right text-success font-bold">${isJama ? '₹'+jamaVal.toFixed(2) : '-'}</td>
@@ -9103,7 +9118,14 @@ async function editKarigarHistory(txId, karigarId, karigarName) {
     } else {
         const newAmount = prompt('Borrow Amount:', String(tx.amount || 0));
         if (newAmount === null) return;
+        const currentReason = String(tx.reason || tx.note || tx.remarks || 'Cash Advance').trim();
+        const newReason = prompt('Reason / Particulars (Shows on Salary Slip & History):', currentReason);
+        if (newReason === null) return;
         updates.amount = Math.round(((parseFloat(newAmount) || 0) + Number.EPSILON) * 100) / 100;
+        const cleanReason = String(newReason || '').trim() || 'Cash Advance';
+        updates.note = cleanReason;
+        updates.remarks = cleanReason;
+        updates.reason = cleanReason;
         updates.type = 'upad';
     }
 
