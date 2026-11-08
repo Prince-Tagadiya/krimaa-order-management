@@ -6265,12 +6265,27 @@ async function renderSizePricesPage() {
         const res = await FirebaseService.getDesignPrices(companyId, nowDateTimeInput);
         map = (res && res.success && res.data) ? res.data : {};
         rawHistoryMap = (res && res.success && res.history) ? res.history : {};
+        if (map && Object.keys(map).length > 0) {
+            try {
+                localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(map));
+                if (rawHistoryMap && Object.keys(rawHistoryMap).length > 0) {
+                    localStorage.setItem('krimaa_size_price_history_backup', JSON.stringify(rawHistoryMap));
+                }
+            } catch (err) {}
+        }
         AppState.designPricesByCompany[companyId] = map;
         AppState.designPrices = map;
     } catch (e) {
         console.warn('Size prices fallback: using cached/empty state', e);
-        map = AppState.designPricesByCompany[companyId] || AppState.designPrices || {};
-        rawHistoryMap = {};
+        try {
+            const cachedPrices = localStorage.getItem('krimaa_size_prices_backup');
+            if (cachedPrices) map = JSON.parse(cachedPrices);
+            const cachedHist = localStorage.getItem('krimaa_size_price_history_backup');
+            if (cachedHist) rawHistoryMap = JSON.parse(cachedHist);
+        } catch (err) {}
+        if (!map || Object.keys(map).length === 0) {
+            map = AppState.designPricesByCompany[companyId] || AppState.designPrices || {};
+        }
     }
 
     const tbody = document.getElementById('size-price-tbody');
@@ -6550,8 +6565,27 @@ async function renderSizePricesPage() {
                 if (!r || r.success === false) throw new Error(r?.message || 'Failed');
                 _pendingDataChangesForBackup = true;
                 scheduleBackgroundSheetBackup('upsertDesignPrice');
+
+                // Auto-sync into local backup (localStorage + connected LAN folder)
+                try {
+                    AppState.designPrices = AppState.designPrices || {};
+                    AppState.designPrices[k] = p;
+                    localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(AppState.designPrices));
+                    if (window.LanStorageService && LanStorageService.isConnected()) {
+                        await LanStorageService.writeToLocal({
+                            action: 'upsertDesignPrice',
+                            key: k,
+                            price: p,
+                            companyId,
+                            effectiveFrom
+                        });
+                    }
+                } catch (bErr) {
+                    console.warn('Auto local size price backup notice:', bErr);
+                }
+
                 invalidateAllKarigarCaches();
-                showToast('Price saved', 'success');
+                showToast('Price saved & backed up locally', 'success');
                 form.dataset.editMode = '';
                 form.dataset.editFromEffective = '';
                 form.dataset.editFromKey = '';
@@ -6637,8 +6671,25 @@ async function renderSizePricesPage() {
                 if (!r || r.success === false) throw new Error(r?.message || 'Failed to delete');
                 _pendingDataChangesForBackup = true;
                 scheduleBackgroundSheetBackup('deleteDesignPrice');
+
+                // Auto-sync into local backup
+                try {
+                    if (AppState.designPrices) delete AppState.designPrices[key];
+                    localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(AppState.designPrices || {}));
+                    if (window.LanStorageService && LanStorageService.isConnected()) {
+                        await LanStorageService.writeToLocal({
+                            action: 'deleteDesignPrice',
+                            key,
+                            companyId,
+                            hideFrom
+                        });
+                    }
+                } catch (bErr) {
+                    console.warn('Auto local size price delete notice:', bErr);
+                }
+
                 invalidateAllKarigarCaches();
-                showToast('Price deleted from active list', 'success');
+                showToast('Price deleted from active list & local backup updated', 'success');
                 await renderSizePricesPage();
             } catch (err) {
                 console.error(err);
@@ -6677,8 +6728,27 @@ async function renderSizePricesPage() {
                 if (!r || r.success === false) throw new Error(r?.message || 'Failed to restore');
                 _pendingDataChangesForBackup = true;
                 scheduleBackgroundSheetBackup('restoreDesignPrice');
+
+                // Auto-sync into local backup
+                try {
+                    AppState.designPrices = AppState.designPrices || {};
+                    AppState.designPrices[key] = restorePrice;
+                    localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(AppState.designPrices));
+                    if (window.LanStorageService && LanStorageService.isConnected()) {
+                        await LanStorageService.writeToLocal({
+                            action: 'upsertDesignPrice',
+                            key,
+                            price: restorePrice,
+                            companyId,
+                            effectiveFrom
+                        });
+                    }
+                } catch (bErr) {
+                    console.warn('Auto local size price restore notice:', bErr);
+                }
+
                 invalidateAllKarigarCaches();
-                showToast('Size price restored', 'success');
+                showToast('Size price restored & local backup updated', 'success');
                 recycleModal.classList.remove('show');
                 await renderSizePricesPage();
             } catch (err) {
@@ -7781,6 +7851,15 @@ function setupKarigarListeners() {
         resetCycleBtn.addEventListener('click', () => confirmKarigarMonthlyReset(AppState.currentCompany));
     }
 
+    // Clear All Karigars button (admin only)
+    const clearAllKarigarsBtn = document.getElementById('btn-clear-all-karigars');
+    if (clearAllKarigarsBtn && !clearAllKarigarsBtn.dataset.bound) {
+        clearAllKarigarsBtn.dataset.bound = 'true';
+        // Show only for admin
+        if (isAdminUser()) clearAllKarigarsBtn.style.display = '';
+        clearAllKarigarsBtn.addEventListener('click', () => clearAllKarigars());
+    }
+
     const arcReportBtn = document.getElementById('btn-archive-company-report');
     if (arcReportBtn && !arcReportBtn.dataset.bound) {
         arcReportBtn.dataset.bound = 'true';
@@ -8387,6 +8466,139 @@ async function deleteCompleteKarigar(id, name) {
     } catch (e) {
         console.error('Failed to delete karigar:', e);
         showToast('Failed to delete employee', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ===== AUTO LAN BACKUP HELPERS =====
+// Writes the latest Karigar + design price data back to the LAN folder JSON files
+// immediately after any karigar add/edit/delete or size price change.
+// This keeps karigars.json, karigar_transactions.json, and design_prices.json
+// always in sync without requiring the user to manually export anything.
+async function autoSyncKarigarsToLAN() {
+    if (!window.LanStorageService || !LanStorageService.isConnected()) return;
+    try {
+        // Read live data from the LAN store (which is the authoritative source)
+        const karigarsRes = await FirebaseService.getKarigars(AppState.currentCompany || 'company1');
+        if (karigarsRes && karigarsRes.data) {
+            await LanStorageService.writeFile('karigars', karigarsRes.data);
+        }
+        // Also sync karigar_transactions
+        const txRes = await FirebaseService.getKarigarTransactions(AppState.currentCompany || 'company1');
+        if (txRes && Array.isArray(txRes.data)) {
+            await LanStorageService.writeFile('karigar_transactions', txRes.data);
+        }
+    } catch (e) {
+        console.warn('[LAN] autoSyncKarigarsToLAN failed:', e.message);
+    }
+}
+
+async function autoSyncDesignPricesToLAN() {
+    if (!window.LanStorageService || !LanStorageService.isConnected()) return;
+    try {
+        // design_prices are written via the _writeLocalDoc path (writeEncryptedFile → writeFile)
+        // so they're already updated. But we also re-write design_price_history to keep it fresh.
+        const histRes = await FirebaseService.getDesignPriceHistory
+            ? await FirebaseService.getDesignPriceHistory('global')
+            : null;
+        if (histRes && Array.isArray(histRes.data)) {
+            await LanStorageService.writeFile('design_price_history', histRes.data);
+        }
+    } catch (e) {
+        console.warn('[LAN] autoSyncDesignPricesToLAN failed:', e.message);
+    }
+}
+
+// ===== CLEAR ALL KARIGARS (Admin Only) =====
+async function clearAllKarigars() {
+    if (!isAdminUser()) return showToast('Only admin can clear all karigars', 'error');
+
+    const karigars = AppState.karigars || [];
+    const txCount = (AppState.karigarTransactions || []).length;
+
+    // Double-confirm: show detailed warning
+    const confirmMsg = [
+        '⚠️ DANGER: PERMANENT ACTION ⚠️',
+        '',
+        `You are about to permanently delete ALL Karigar data:`,
+        `• ${karigars.length} Karigar employees`,
+        `• ${txCount} transaction records (Jama & Upad)`,
+        '',
+        'This CANNOT be undone.',
+        '',
+        'Type "DELETE ALL" (without quotes) to confirm, or press Cancel to abort.'
+    ].join('\n');
+
+    const userInput = window.prompt(confirmMsg, '');
+    if (String(userInput || '').trim() !== 'DELETE ALL') {
+        showToast('Clear All Karigars cancelled', 'info');
+        return;
+    }
+
+    showLoader();
+    let deletedKarigars = 0;
+    let deletedTxs = 0;
+    const actor = buildAuditActor();
+    const companyId = AppState.currentCompany || 'company1';
+
+    try {
+        showToast('Clearing all karigar employees...', 'info');
+
+        // 1. Delete all karigars one by one (also deletes their transactions per karigar)
+        for (const k of karigars) {
+            try {
+                await FirebaseService.deleteKarigar(k.id, companyId, actor);
+                deletedKarigars++;
+            } catch (e) {
+                console.warn('Failed to delete karigar:', k.id, e.message);
+            }
+        }
+
+        // 2. Run a bulk clear of remaining karigar transactions just in case
+        try {
+            await FirebaseService.clearKarigarMonthlyData(companyId, actor);
+            deletedTxs = txCount;
+        } catch (e) {
+            console.warn('Bulk tx clear failed:', e.message);
+        }
+
+        // 3. If LAN folder is connected, write empty arrays directly to the JSON files
+        //    to ensure the local backup folder is immediately in sync.
+        if (window.LanStorageService && LanStorageService.isConnected()) {
+            try {
+                await LanStorageService.writeFile('karigars', []);
+                await LanStorageService.writeFile('karigar_transactions', []);
+                // Also clear the karigar_reset_backups if the user wants a full fresh start
+                // (Do NOT clear this — keep historical archives safe)
+                console.log('[LAN] Cleared karigars.json and karigar_transactions.json');
+            } catch (lanErr) {
+                console.warn('[LAN] Failed to clear local JSON files:', lanErr.message);
+            }
+        }
+
+        // 4. Flush all pending writes to Firebase
+        await FirebaseService.flushWrites();
+
+        // 5. Reset local AppState caches
+        AppState.karigars = [];
+        AppState.karigarTransactions = [];
+        AppState.karigarStatsById = {};
+        AppState.karigarTransactionsById = {};
+        invalidateAllKarigarCaches();
+
+        // 6. Re-render the page (will show empty state)
+        await renderKarigarPage(true);
+
+        // 7. Trigger a background sheet backup to sync to Google Sheets too
+        _pendingDataChangesForBackup = true;
+        scheduleBackgroundSheetBackup('clearAllKarigars');
+
+        showToast(`✅ All Karigars cleared: ${deletedKarigars} employees + ${deletedTxs} transactions removed. Local backup updated.`, 'success');
+
+    } catch (e) {
+        console.error('clearAllKarigars failed:', e);
+        showToast('Failed to clear all karigars: ' + (e.message || 'Unknown error'), 'error');
     } finally {
         hideLoader();
     }

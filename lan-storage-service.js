@@ -795,6 +795,118 @@ const LanStorageService = (() => {
                 await writeFile('remarks', remarks);
                 return { success: true };
             }
+            if (action === 'upsertDesignPrice' || action === 'saveDesignPrice') {
+                const safeKey = String(payload.designKey || payload.key || '').trim().toUpperCase();
+                const price = Math.round(((parseFloat(payload.price) || 0) + Number.EPSILON) * 100) / 100;
+                const comp = payload.companyId || 'global';
+                const effectiveFrom = payload.effectiveFrom || new Date().toISOString();
+                const isDeleted = !!payload.isDeleted;
+
+                const prices = await readFile('design_prices', []);
+                const docId = `${comp}__${safeKey}`;
+                const idx = prices.findIndex(d => (d && (d.id === docId || (d.key === safeKey && (d.companyId || 'global') === comp))));
+                const entry = {
+                    companyId: comp,
+                    key: safeKey,
+                    price: price,
+                    effectiveFromLatest: effectiveFrom,
+                    isDeletedLatest: isDeleted,
+                    source: payload.actor?.source || 'admin',
+                    dashboard: payload.actor?.dashboard || 'admin',
+                    dashboardId: 'karigar',
+                    updatedFrom: payload.actor?.username || 'admin',
+                    updatedAt: new Date().toISOString(),
+                    id: docId
+                };
+                if (idx >= 0) {
+                    prices[idx] = { ...prices[idx], ...entry };
+                } else {
+                    prices.push(entry);
+                }
+                await writeFile('design_prices', prices);
+
+                const history = await readFile('design_price_history', []);
+                const histId = `${comp}__${safeKey}__${effectiveFrom.replace(/[^a-zA-Z0-9]/g, '_')}`;
+                const hIdx = history.findIndex(h => h && h.id === histId);
+                const histEntry = {
+                    companyId: comp,
+                    key: safeKey,
+                    price: price,
+                    effectiveFrom: effectiveFrom,
+                    isDeleted: isDeleted,
+                    source: payload.actor?.source || 'admin',
+                    dashboard: payload.actor?.dashboard || 'admin',
+                    updatedAt: new Date().toISOString(),
+                    id: histId
+                };
+                if (hIdx >= 0) {
+                    history[hIdx] = histEntry;
+                } else {
+                    history.push(histEntry);
+                }
+                await writeFile('design_price_history', history);
+                return { success: true, key: safeKey, price, effectiveFrom };
+            }
+            if (action === 'deleteDesignPrice' || action === 'hideDesignPrice') {
+                const safeKey = String(payload.designKey || payload.key || '').trim().toUpperCase();
+                const comp = payload.companyId || 'global';
+                const hideFrom = payload.hideFrom || payload.effectiveFrom || new Date().toISOString();
+
+                const prices = await readFile('design_prices', []);
+                const docId = `${comp}__${safeKey}`;
+                const idx = prices.findIndex(d => (d && (d.id === docId || (d.key === safeKey && (d.companyId || 'global') === comp))));
+                if (idx >= 0) {
+                    prices[idx].isDeletedLatest = true;
+                    prices[idx].effectiveFromLatest = hideFrom;
+                    prices[idx].updatedAt = new Date().toISOString();
+                    await writeFile('design_prices', prices);
+                }
+
+                const history = await readFile('design_price_history', []);
+                history.push({
+                    companyId: comp,
+                    key: safeKey,
+                    price: idx >= 0 ? prices[idx].price : 0,
+                    effectiveFrom: hideFrom,
+                    isDeleted: true,
+                    updatedAt: new Date().toISOString(),
+                    id: `${comp}__${safeKey}__${hideFrom.replace(/[^a-zA-Z0-9]/g, '_')}_del`
+                });
+                await writeFile('design_price_history', history);
+                return { success: true, key: safeKey, isDeleted: true };
+            }
+            if (action === 'addKarigar') {
+                const karigars = await readFile('karigars', []);
+                const name = String(payload.name || '').trim();
+                const comp = payload.companyId || companyId;
+                const id = payload.id || ('kar_' + Math.random().toString(36).substr(2, 9));
+                karigars.push({
+                    id,
+                    name,
+                    companyId: comp,
+                    source: payload.actor?.source || 'admin',
+                    dashboard: 'admin',
+                    addedDate: new Date().toISOString()
+                });
+                await writeFile('karigars', karigars);
+                return { success: true, id, name };
+            }
+            if (action === 'deleteKarigar') {
+                const karigars = await readFile('karigars', []);
+                const id = String(payload.id || '').trim();
+                const filtered = karigars.filter(k => k && k.id !== id && k.name !== payload.name);
+                await writeFile('karigars', filtered);
+
+                const txs = await readFile('karigar_transactions', []);
+                const filteredTxs = txs.filter(t => t && t.karigarId !== id);
+                await writeFile('karigar_transactions', filteredTxs);
+                return { success: true };
+            }
+            if (action === 'clearAllKarigars') {
+                await writeFile('karigars', []);
+                await writeFile('karigar_transactions', []);
+                return { success: true };
+            }
         } catch (e) {
             console.error('[LAN] writeToLocal error:', e);
             return { success: false, error: e.message };
