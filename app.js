@@ -6881,7 +6881,8 @@ function getKarigarCurrentCycleLabel() {
         if (b) return getKarigarBackupRangeLabel(b);
     }
     const cycleStart = localStorage.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
-    return `${formatISODateForDisplay(cycleStart)} to Present`;
+    const todayFormatted = formatISODateForDisplay(getTodayISODate());
+    return `${formatISODateForDisplay(cycleStart)} to ${todayFormatted}`;
 }
 
 function auditKarigarFinancials() {
@@ -7336,7 +7337,7 @@ function renderKarigarGrid() {
             const karigarId = el.dataset.id;
             const karigarName = el.dataset.name;
             const k = (AppState.karigars || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
-            printKarigarSalarySlip(k);
+            openSalarySlipOptionsModal({ karigar: k, defaultAction: 'print' });
         });
     });
     grid.querySelectorAll('.btn-karigar-slip-pdf').forEach(btn => {
@@ -7345,7 +7346,7 @@ function renderKarigarGrid() {
             const karigarId = el.dataset.id;
             const karigarName = el.dataset.name;
             const k = (AppState.karigars || []).find(x => x.id === karigarId) || { id: karigarId, name: karigarName };
-            exportKarigarSalarySlipPDF(k);
+            openSalarySlipOptionsModal({ karigar: k, defaultAction: 'download' });
         });
     });
 
@@ -7836,7 +7837,7 @@ function setupKarigarListeners() {
     const bulkPdfBtn = document.getElementById('btn-bulk-pdf-karigar');
     if (bulkPdfBtn && !bulkPdfBtn.dataset.bound) {
         bulkPdfBtn.dataset.bound = 'true';
-        bulkPdfBtn.addEventListener('click', () => exportBulkKarigarSalarySlipsPDF());
+        bulkPdfBtn.addEventListener('click', () => openSalarySlipOptionsModal({ isBulk: true, defaultAction: 'download' }));
     }
 
     const summaryPdfBtn = document.getElementById('export-pdf-karigar-btn');
@@ -7880,7 +7881,11 @@ function setupKarigarListeners() {
             const b = (AppState.karigarResetBackups || []).find(x => x.id === backupId);
             if (!b) return showToast('No backup selected', 'error');
             const safeRows = Array.isArray(b.rows) ? b.rows : [];
-            exportBulkKarigarSalarySlipsPDF({ txsOverride: safeRows, periodLabel: getKarigarBackupRangeLabel(b) });
+            openSalarySlipOptionsModal({
+                isBulk: true,
+                defaultAction: 'download',
+                bulkOptions: { txsOverride: safeRows, periodLabel: getKarigarBackupRangeLabel(b) }
+            });
         });
     }
 }
@@ -8091,7 +8096,7 @@ function setupKarigarGlobalShortcuts() {
         if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')) {
             e.preventDefault();
             const k = getSelectedOrFirstKarigar();
-            if (k) printKarigarSalarySlip(k);
+            if (k) openSalarySlipOptionsModal({ karigar: k, defaultAction: 'print' });
             return;
         }
 
@@ -8130,7 +8135,7 @@ function setupKarigarGlobalShortcuts() {
         if (key === 'p') {
             e.preventDefault();
             const k = getSelectedOrFirstKarigar();
-            if (k) printKarigarSalarySlip(k);
+            if (k) openSalarySlipOptionsModal({ karigar: k, defaultAction: 'print' });
             return;
         }
 
@@ -8427,14 +8432,14 @@ function openKarigarHistoryModal(id, name) {
     if (printSlipBtn) {
         printSlipBtn.onclick = () => {
             const k = (AppState.karigars || []).find(x => x.id === resolvedId) || { id: resolvedId, name: name };
-            printKarigarSalarySlip(k);
+            openSalarySlipOptionsModal({ karigar: k, defaultAction: 'print' });
         };
     }
     const dlSlipBtn = document.getElementById('btn-download-slip-employee');
     if (dlSlipBtn) {
         dlSlipBtn.onclick = () => {
             const k = (AppState.karigars || []).find(x => x.id === resolvedId) || { id: resolvedId, name: name };
-            exportKarigarSalarySlipPDF(k);
+            openSalarySlipOptionsModal({ karigar: k, defaultAction: 'download' });
         };
     }
     const deleteBtn = document.getElementById('btn-delete-employee');
@@ -8788,7 +8793,7 @@ async function confirmKarigarMonthlyReset(targetCompanyId = '') {
 
     const dlSlipsBtn = document.getElementById('btn-reset-modal-dl-slips');
     if (dlSlipsBtn) {
-        dlSlipsBtn.onclick = () => exportBulkKarigarSalarySlipsPDF();
+        dlSlipsBtn.onclick = () => openSalarySlipOptionsModal({ isBulk: true, defaultAction: 'download' });
     }
 
     const cancelBtn = document.getElementById('btn-cancel-reset-modal');
@@ -8961,7 +8966,11 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
 
     const companyRaw = getCompanyDisplayName(AppState.currentCompany || 'company1') || 'SHREE SAI';
     const companyName = companyRaw.toUpperCase();
-    const periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
+    let periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
+    const todayFormatted = formatISODateForDisplay(getTodayISODate());
+    if (periodLabel.includes('to Present')) {
+        periodLabel = periodLabel.replace(/to Present/i, 'to ' + todayFormatted);
+    }
     const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
     const toAmount = (v) => {
         const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
@@ -9029,7 +9038,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
     const netBalance = round2(totalJama - totalUpad);
     const inWords = numberToIndianWords(Math.abs(netBalance));
 
-    // Internal sheet renderer for 2-copy industrial standard
+    // Internal sheet renderer for industrial standard
     function renderSalarySlipSheet(pageDoc, copyLabel, isOfficeVoucher) {
         // Crisp 0.4pt Laser-Ready Outer Border
         pageDoc.setDrawColor(0, 0, 0);
@@ -9079,11 +9088,6 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         pageDoc.text('Printed Date:', 14, 45.5);
         pageDoc.setFont('helvetica', 'normal');
         pageDoc.text(new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }), 44, 45.5);
-
-        pageDoc.setFont('helvetica', 'bold');
-        pageDoc.text('Audit Status:', 128, 45.5);
-        pageDoc.setFont('helvetica', 'normal');
-        pageDoc.text('Zero-Error Reconciled (Rs. 0.00)', 154, 45.5);
 
         pageDoc.setLineWidth(0.25);
         pageDoc.line(10, 48, 200, 48);
@@ -9277,7 +9281,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
 
         currentY += 25;
 
-        // Distinct Industrial Signatures & Voucher Section
+        // Distinct Two-Signature Section (No extra middle lines)
         if (isOfficeVoucher) {
             // FACTORY / OFFICE COPY: Formal Signed Discharge Receipt / Payment Voucher
             pageDoc.setDrawColor(0, 0, 0);
@@ -9313,51 +9317,137 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
 
             pageDoc.setFont('helvetica', 'normal');
             pageDoc.setFontSize(8.5);
-            pageDoc.text('Karigar Signature / Thumb: ___________________', 18, currentY);
-            pageDoc.text('Accountant / Cashier: ____________________', 78, currentY);
-            pageDoc.text('Authorized Signatory & Seal: ____________________', 134, currentY);
+            pageDoc.text(`${targetKName} Signature / Thumb: ___________________`, 18, currentY);
+            pageDoc.text('Nareshbhai Tagadiya Signature: _______________________', 114, currentY);
         } else {
-            // WORKER COPY: Clean signature row
+            // WORKER COPY: Clean two-signature row
             currentY += 4;
             pageDoc.setFont('helvetica', 'normal');
             pageDoc.setFontSize(8.5);
-            pageDoc.text('Karigar Signature: _______________________', 18, currentY);
-            pageDoc.text('Accountant / Checked By: _________________', 78, currentY);
-            pageDoc.text('Authorized Signatory: ____________________', 138, currentY);
+            pageDoc.text(`${targetKName} Signature: _______________________`, 18, currentY);
+            pageDoc.text('Nareshbhai Tagadiya Signature: _______________________', 114, currentY);
         }
-
-        // Software stamp at bottom
-        pageDoc.setFontSize(7);
-        pageDoc.setTextColor(110, 110, 110);
-        pageDoc.text(`Krimaa Enterprise Management System | Audited Zero-Error Reconciled | ${copyLabel}`, 105, 284, { align: 'center' });
     }
 
-    // Render Page 1: WORKER COPY
-    renderSalarySlipSheet(doc, '1. WORKER COPY', false);
+    // Render requested copies
+    const includeWorker = options.includeWorker !== false;
+    const includeFactory = options.includeFactory !== false;
 
-    // Render Page 2: OFFICE / FACTORY COPY - PAYMENT VOUCHER (Unless singleCopy is requested)
-    if (!options.singleCopy) {
-        doc.addPage();
-        renderSalarySlipSheet(doc, '2. FACTORY COPY - PAYMENT VOUCHER', true);
+    let pagesRendered = 0;
+    if (includeWorker) {
+        const copyBadge = includeFactory ? '1. WORKER COPY' : 'WORKER COPY';
+        renderSalarySlipSheet(doc, copyBadge, false);
+        pagesRendered++;
+    }
+
+    if (includeFactory) {
+        if (pagesRendered > 0) {
+            doc.addPage();
+        }
+        const copyBadge = includeWorker ? '2. FACTORY COPY - PAYMENT VOUCHER' : 'FACTORY COPY - PAYMENT VOUCHER';
+        renderSalarySlipSheet(doc, copyBadge, true);
+        pagesRendered++;
     }
 
     if (!options.isBulk && !options.noDownload) {
         const cleanName = (targetKName || 'Karigar').replace(/[^a-zA-Z0-9_-]/g, '_');
-        const filename = `SalarySlip_${enterpriseId}_${cleanName}_2Copies_${getTodayISODate()}.pdf`;
+        const copySuffix = (includeWorker && includeFactory) ? '2Copies' : (includeWorker ? 'WorkerCopy' : 'FactoryVoucher');
+        const filename = `SalarySlip_${enterpriseId}_${cleanName}_${copySuffix}_${getTodayISODate()}.pdf`;
         doc.save(filename);
-        showToast(`Two-copy salary slip (Worker + Factory Voucher) downloaded for ${targetKName} (${enterpriseId})`, 'success');
+        showToast(`Salary slip downloaded for ${targetKName} (${enterpriseId})`, 'success');
     }
 
     return doc;
 }
 
-function exportKarigarSalarySlipPDF(karigar) {
+// ===== POPUP MODAL FOR SALARY SLIP DOWNLOAD / PRINT OPTIONS =====
+function openSalarySlipOptionsModal(config = {}) {
+    const modal = document.getElementById('karigar-slip-options-modal');
+    const karigar = config.karigar || null;
+    const isBulk = !!config.isBulk;
+    const bulkOptions = config.bulkOptions || {};
+
+    if (!modal) {
+        // Fallback: direct download with both copies if modal element missing
+        if (isBulk) {
+            return exportBulkKarigarSalarySlipsPDF(bulkOptions);
+        } else {
+            return exportKarigarSalarySlipPDF(karigar);
+        }
+    }
+
+    const titleEl = document.getElementById('slip-options-modal-title');
+    const subEl = document.getElementById('slip-options-modal-subtitle');
+    const workerCheck = document.getElementById('slip-opt-worker-check');
+    const factoryCheck = document.getElementById('slip-opt-factory-check');
+    const dlBtn = document.getElementById('btn-slip-opt-download');
+    const printBtn = document.getElementById('btn-slip-opt-print');
+    const cancelBtn = document.getElementById('btn-slip-opt-cancel');
+    const closeBtn = document.getElementById('close-karigar-slip-options-modal');
+
+    // Default both copies ticked
+    if (workerCheck) workerCheck.checked = true;
+    if (factoryCheck) factoryCheck.checked = true;
+
+    if (isBulk) {
+        if (titleEl) titleEl.innerHTML = "<i class='bx bxs-file-pdf text-danger'></i> Bulk Salary Slips (All Karigars)";
+        if (subEl) subEl.textContent = "Select which copies to include in bulk PDF";
+    } else {
+        const kName = karigar?.name || 'Karigar';
+        if (titleEl) titleEl.innerHTML = `<i class='bx bxs-file-pdf text-danger'></i> Salary Slip: ${kName}`;
+        if (subEl) subEl.textContent = "Select copies to include";
+    }
+
+    const closeModal = () => modal.classList.remove('show');
+    if (cancelBtn) cancelBtn.onclick = closeModal;
+    if (closeBtn) closeBtn.onclick = closeModal;
+
+    const getSelection = () => {
+        const incWorker = !!workerCheck?.checked;
+        const incFactory = !!factoryCheck?.checked;
+        if (!incWorker && !incFactory) {
+            showToast('Please select at least one copy', 'warning');
+            return null;
+        }
+        return { includeWorker: incWorker, includeFactory: incFactory };
+    };
+
+    if (dlBtn) {
+        dlBtn.onclick = () => {
+            const sel = getSelection();
+            if (!sel) return;
+            closeModal();
+            if (isBulk) {
+                exportBulkKarigarSalarySlipsPDF({ ...bulkOptions, ...sel, autoPrint: false });
+            } else {
+                exportKarigarSalarySlipPDF(karigar, sel);
+            }
+        };
+    }
+
+    if (printBtn) {
+        printBtn.onclick = () => {
+            const sel = getSelection();
+            if (!sel) return;
+            closeModal();
+            if (isBulk) {
+                exportBulkKarigarSalarySlipsPDF({ ...bulkOptions, ...sel, autoPrint: true });
+            } else {
+                printKarigarSalarySlip(karigar, sel);
+            }
+        };
+    }
+
+    modal.classList.add('show');
+}
+
+function exportKarigarSalarySlipPDF(karigar, customOptions = {}) {
     let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
     if (AppState.viewingKarigarBackupId) {
         const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
         if (b && Array.isArray(b.rows)) txs = b.rows;
     }
-    generateKarigarSalarySlipPDF(karigar, txs, { isBulk: false });
+    generateKarigarSalarySlipPDF(karigar, txs, { isBulk: false, ...customOptions });
 }
 
 function printPDFViaHiddenIframe(doc, title = 'Document') {
@@ -9403,7 +9493,7 @@ function printPDFViaHiddenIframe(doc, title = 'Document') {
     setTimeout(triggerPrint, 900);
 }
 
-function printKarigarSalarySlip(karigar) {
+function printKarigarSalarySlip(karigar, customOptions = {}) {
     if (!window.jspdf) return showToast('PDF library not ready', 'error');
     if (!karigar) return;
     let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
@@ -9412,7 +9502,7 @@ function printKarigarSalarySlip(karigar) {
         if (b && Array.isArray(b.rows)) txs = b.rows;
     }
 
-    const doc = generateKarigarSalarySlipPDF(karigar, txs, { isBulk: true, noDownload: true });
+    const doc = generateKarigarSalarySlipPDF(karigar, txs, { isBulk: true, noDownload: true, ...customOptions });
     if (!doc) return;
     printPDFViaHiddenIframe(doc, `${karigar.name} Salary Slip`);
 }
@@ -9431,7 +9521,9 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             format: 'a4'
         });
 
-        let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
+        let txs = Array.isArray(options.txsOverride)
+            ? options.txsOverride
+            : (Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : []);
         if (AppState.viewingKarigarBackupId) {
             const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
             if (b && Array.isArray(b.rows)) txs = b.rows;
@@ -9449,7 +9541,9 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             generateKarigarSalarySlipPDF(k, txs, {
                 doc,
                 isBulk: true,
-                periodLabel
+                periodLabel,
+                includeWorker: options.includeWorker !== false,
+                includeFactory: options.includeFactory !== false
             });
             pagesAdded++;
         });
@@ -9459,10 +9553,14 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             return showToast('No transactions found to print for this cycle', 'warning');
         }
 
-        const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
-        const filename = `Karigar_All_Salary_Slips_${compName}_${getTodayISODate()}.pdf`;
-        doc.save(filename);
-        showToast(`Bulk PDF with ${pagesAdded} Karigar slip sets (Worker + Factory Voucher) downloaded!`, 'success');
+        if (options.autoPrint) {
+            printPDFViaHiddenIframe(doc, `All Karigar Slips`);
+        } else {
+            const compName = getCompanyDisplayName(AppState.currentCompany || 'company1');
+            const filename = `Karigar_All_Salary_Slips_${compName}_${getTodayISODate()}.pdf`;
+            doc.save(filename);
+            showToast(`Bulk PDF with ${pagesAdded} Karigar slip sets downloaded!`, 'success');
+        }
     } catch (e) {
         console.error('Bulk PDF error:', e);
         showToast('Failed to generate bulk PDF: ' + e.message, 'error');

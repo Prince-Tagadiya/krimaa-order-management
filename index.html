@@ -928,6 +928,43 @@
         </div>
     </div>
 
+    <!-- Salary Slip Print & Download Options Modal -->
+    <div id="karigar-slip-options-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10003;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
+        <div class="modal-content" style="background:white;width:95%;max-width:440px;border-radius:12px;padding:22px;box-shadow:0 15px 35px rgba(0,0,0,0.2);">
+            <div class="flex-between mb-3" style="border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+                <div>
+                    <h3 class="font-bold text-base" id="slip-options-modal-title" style="color: #0f172a; margin:0; display:flex; align-items:center; gap:8px;">
+                        <i class='bx bxs-file-pdf text-danger'></i> Salary Slip Options
+                    </h3>
+                    <p class="text-xs text-muted mb-0" id="slip-options-modal-subtitle">Select copies to include</p>
+                </div>
+                <button id="close-karigar-slip-options-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+            </div>
+
+            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; margin-bottom:16px;">
+                <div class="text-xs font-bold text-muted uppercase mb-2" style="letter-spacing:0.5px;">Select Slip Copies</div>
+                <label style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:6px 0; font-size:14px; font-weight:600; color:#1e293b;">
+                    <input type="checkbox" id="slip-opt-worker-check" checked style="width:18px; height:18px; cursor:pointer; accent-color:#0284c7;">
+                    <span>Worker Copy</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:6px 0; font-size:14px; font-weight:600; color:#1e293b;">
+                    <input type="checkbox" id="slip-opt-factory-check" checked style="width:18px; height:18px; cursor:pointer; accent-color:#0284c7;">
+                    <span>Factory Copy (Payment Voucher)</span>
+                </label>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button type="button" class="btn btn-outline btn-sm" id="btn-slip-opt-cancel">Cancel</button>
+                <button type="button" class="btn btn-outline btn-sm" id="btn-slip-opt-print" style="color:#0f172a; font-weight:700;">
+                    <i class='bx bx-printer'></i> Print
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-slip-opt-download" style="background:#1e293b; border-color:#1e293b;">
+                    <i class='bx bxs-download'></i> Download PDF
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div id="karigar-reset-backups-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
         <div class="modal-content" style="background:white;width:95%;max-width:980px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;display:flex;flex-direction:column;">
                 <div class="flex-between mb-2" style="gap: 0.75rem;">
