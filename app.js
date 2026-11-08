@@ -6902,20 +6902,20 @@ function resolveKarigarIdFromState(karigarId, karigarName) {
 function getEffectiveKarigarList() {
     if (AppState.viewingKarigarBackupId) {
         const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
-        if (b && Array.isArray(b.rows) && b.rows.length > 0) {
+        if (b && Array.isArray(b.rows)) {
             const map = new Map();
-            (AppState.karigars || []).forEach(k => {
-                if (k && k.name) map.set(k.name.trim().toLowerCase(), { ...k });
-            });
+            // In archive mode, ONLY extract karigars who actually exist in this backup's transaction rows!
+            // Brand-new karigars created in subsequent months will not leak into this archive.
             b.rows.forEach(r => {
                 const name = String(r.karigarName || '').trim();
                 const id = String(r.karigarId || '').trim();
                 if (name) {
                     const key = name.toLowerCase();
                     if (!map.has(key)) {
+                        const existing = (AppState.karigars || []).find(k => (k.name || '').trim().toLowerCase() === key);
                         map.set(key, {
-                            id: id || `kar_arch_${encodeURIComponent(key)}`,
-                            name: name,
+                            id: id || existing?.id || `kar_arch_${encodeURIComponent(key)}`,
+                            name: existing?.name || name,
                             companyId: r.companyId || b.companyId || AppState.currentCompany
                         });
                     } else if (id && !map.get(key).id) {
@@ -7494,8 +7494,26 @@ function renderKarigarGrid() {
         const entId = getEnterpriseKarigarId(k, AppState.currentCompany);
         const isPaid = isKarigarPaid(k.id, k.name);
         const paidStampHtml = isPaid ? `
-            <div class="karigar-paid-stamp">
-                <i class='bx bx-check-circle'></i> PAID / CLEAR
+            <div class="karigar-paid-stamp-round" title="PAID &amp; SETTLED">
+                <svg viewBox="0 0 100 100" width="86" height="86" style="display:block;">
+                    <circle cx="50" cy="50" r="46" fill="rgba(240, 253, 244, 0.85)" stroke="#15803d" stroke-width="2.6" stroke-dasharray="98 2" />
+                    <circle cx="50" cy="50" r="39" fill="none" stroke="#15803d" stroke-width="1.2" stroke-dasharray="4 2" />
+                    <path id="stamp-arc-top-${idx}" d="M 17,50 A 33,33 0 1,1 83,50" fill="none" />
+                    <text font-size="8" font-weight="900" fill="#15803d" letter-spacing="1.2">
+                        <textPath href="#stamp-arc-top-${idx}" startOffset="50%" text-anchor="middle">
+                            ★ KRIMAA FACTORY ★
+                        </textPath>
+                    </text>
+                    <line x1="20" y1="42" x2="80" y2="42" stroke="#15803d" stroke-width="1.2" />
+                    <text x="50" y="55" font-size="16" font-weight="900" fill="#15803d" text-anchor="middle" font-family="Arial Black, Impact, sans-serif" letter-spacing="1.2">PAID</text>
+                    <line x1="20" y1="59" x2="80" y2="59" stroke="#15803d" stroke-width="1.2" />
+                    <path id="stamp-arc-bottom-${idx}" d="M 83,50 A 33,33 0 0,1 17,50" fill="none" />
+                    <text font-size="7.5" font-weight="800" fill="#15803d" letter-spacing="1.2">
+                        <textPath href="#stamp-arc-bottom-${idx}" startOffset="50%" text-anchor="middle">
+                            ✔ SETTLED &amp; CLEAR
+                        </textPath>
+                    </text>
+                </svg>
             </div>
         ` : '';
 
@@ -8095,6 +8113,7 @@ function setupKarigarListeners() {
             const date = document.getElementById('karigar-upad-date').value;
             const time = document.getElementById('karigar-upad-time').value;
             const amount = document.getElementById('karigar-upad-amount').value;
+            const reason = String(document.getElementById('karigar-upad-reason')?.value || '').trim() || 'Cash Advance';
             const transactionDateTime = combineDateAndTimeToISO(date, time);
             if (!transactionDateTime) {
                 showToast('Invalid date/time', 'error');
@@ -8122,6 +8141,9 @@ function setupKarigarListeners() {
                         date,
                         transactionDateTime,
                         amount: numAmount,
+                        note: reason,
+                        remarks: reason,
+                        reason: reason,
                         upadAmount: 0,
                         total: 0,
                         addedBy: AppState.currentUser?.role || 'admin',
@@ -8138,6 +8160,7 @@ function setupKarigarListeners() {
                 } else {
                     await FirebaseService.addKarigarUpad({ 
                         karigarId, karigarName, date, transactionDateTime, amount, 
+                        note: reason, remarks: reason, reason: reason,
                         companyId: AppState.currentCompany,
                         addedBy: AppState.currentUser?.role || 'admin',
                         actor: buildAuditActor()
@@ -8192,6 +8215,18 @@ function setupKarigarListeners() {
     if (bulkPdfBtn && !bulkPdfBtn.dataset.bound) {
         bulkPdfBtn.dataset.bound = 'true';
         bulkPdfBtn.addEventListener('click', () => openSalarySlipOptionsModal({ isBulk: true, defaultAction: 'download' }));
+    }
+
+    const masterSummaryBtn = document.getElementById('btn-master-summary-pdf');
+    if (masterSummaryBtn && !masterSummaryBtn.dataset.bound) {
+        masterSummaryBtn.dataset.bound = 'true';
+        masterSummaryBtn.addEventListener('click', (e) => {
+            if (e.shiftKey) {
+                exportKarigarMasterSummaryPayrollPDF({ autoPrint: true });
+            } else {
+                exportKarigarMasterSummaryPayrollPDF({ autoPrint: false });
+            }
+        });
     }
 
     const summaryPdfBtn = document.getElementById('export-pdf-karigar-btn');
@@ -8336,7 +8371,8 @@ function setupKarigarFastEnterNavigation() {
         'karigar-upad-select',
         'karigar-upad-date',
         'karigar-upad-time',
-        'karigar-upad-amount'
+        'karigar-upad-amount',
+        'karigar-upad-reason'
     ];
 
     upadFields.forEach((id, index) => {
@@ -8383,7 +8419,7 @@ function setupKarigarFastEnterNavigation() {
                 return;
             }
 
-            if (index >= upadFields.length - 1 || id === 'karigar-upad-amount') {
+            if (index >= upadFields.length - 1) {
                 if (typeof form?.requestSubmit === 'function') {
                     form.requestSubmit();
                 } else {
@@ -8685,6 +8721,8 @@ function openKarigarUpadModal(id, name) {
     document.getElementById('karigar-upad-date').value = getTodayISODate();
     document.getElementById('karigar-upad-time').value = getCurrentLocalTimeInput();
     document.getElementById('karigar-upad-amount').value = '';
+    const reasonInput = document.getElementById('karigar-upad-reason');
+    if (reasonInput) reasonInput.value = '';
     
     // Set summary displays
     document.getElementById('karigar-upad-jama-display').textContent = '₹' + stats.totalJama.toFixed(2);
@@ -9765,6 +9803,247 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
     return doc;
 }
 
+// ===== MASTER KARIGAR PAYROLL & SETTLEMENT SUMMARY TABLE (PDF) =====
+async function exportKarigarMasterSummaryPayrollPDF(options = {}) {
+    if (!window.jspdf) {
+        showToast('PDF library not ready', 'error');
+        return;
+    }
+    const karigars = getEffectiveKarigarList();
+    if (!karigars || karigars.length === 0) {
+        return showToast('No karigars found', 'error');
+    }
+
+    showLoader();
+    try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({
+            orientation: 'landscape',
+            unit: 'mm',
+            format: 'a4'
+        });
+
+        let txs = Array.isArray(options.txsOverride)
+            ? options.txsOverride
+            : (Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : []);
+        if (!options.txsOverride && AppState.viewingKarigarBackupId) {
+            const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+            if (b && Array.isArray(b.rows)) txs = b.rows;
+        }
+
+        const currentCompany = AppState.currentCompany || 'company1';
+        const companyName = getCompanyDisplayName(currentCompany);
+        let periodLabel = options.periodLabel;
+        if (!periodLabel) {
+            if (AppState.viewingKarigarBackupId) {
+                const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
+                periodLabel = b ? getKarigarBackupRangeLabel(b) : 'Archived Cycle';
+            } else {
+                periodLabel = getKarigarCurrentCycleLabel();
+            }
+        }
+
+        let grandPieces = 0;
+        let grandJama = 0;
+        let grandUpad = 0;
+        let grandNet = 0;
+        let totalPaidCount = 0;
+        let totalPendingCount = 0;
+
+        const tableRows = [];
+
+        karigars.forEach((k, idx) => {
+            const kId = String(k.id || '').trim();
+            const kName = String(k.name || '').trim();
+            const enterpriseId = getEnterpriseKarigarId(k, currentCompany);
+
+            const kLower = kName.toLowerCase();
+            const kTxs = (txs || []).filter(t => {
+                const tid = String(t.karigarId || '').trim();
+                const tname = String(t.karigarName || '').trim().toLowerCase();
+                return tid === kId || resolveKarigarIdFromState(t.karigarId, t.karigarName) === kId || (tname && kLower && tname === kLower);
+            });
+
+            let pieces = 0;
+            let jama = 0;
+            let upad = 0;
+
+            kTxs.forEach(t => {
+                const type = String(t.type || '').toLowerCase();
+                if (type === 'jama') {
+                    const p = parseInt(t.pic, 10) || 0;
+                    const pr = round2(t.price || 0);
+                    const tot = round2(t.total || (p * pr));
+                    const u = round2(parseFloat(String(t.upadAmount || 0).replace(/[^0-9.-]/g, '')) || 0);
+                    pieces += p;
+                    jama = round2(jama + tot);
+                    upad = round2(upad + u);
+                } else if (type === 'upad') {
+                    const u = round2(parseFloat(String(t.amount || t.upadAmount || 0).replace(/[^0-9.-]/g, '')) || 0);
+                    upad = round2(upad + u);
+                }
+            });
+
+            const net = round2(jama - upad);
+            grandPieces += pieces;
+            grandJama = round2(grandJama + jama);
+            grandUpad = round2(grandUpad + upad);
+            grandNet = round2(grandNet + net);
+
+            const isPaid = isKarigarPaid(k.id, k.name);
+            let statusText = 'PENDING';
+            let tickMark = '[   ]';
+            if (isPaid) {
+                statusText = 'PAID / CLEAR';
+                tickMark = '[ X ] PAID';
+                totalPaidCount++;
+            } else if (net === 0 && pieces === 0 && upad === 0) {
+                statusText = 'NO DUES (0.00)';
+                tickMark = '[ - ] NIL';
+            } else if (net < 0) {
+                statusText = 'DUE TO FACTORY';
+                tickMark = '[ ! ] DUE';
+                totalPendingCount++;
+            } else {
+                statusText = 'PAYABLE';
+                tickMark = '[   ] CASH';
+                totalPendingCount++;
+            }
+
+            tableRows.push([
+                idx + 1,
+                enterpriseId,
+                kName,
+                pieces > 0 ? pieces : '0',
+                jama.toFixed(2),
+                upad.toFixed(2),
+                net >= 0 ? net.toFixed(2) : `(${Math.abs(net).toFixed(2)})`,
+                statusText,
+                tickMark,
+                '' // Blank space for signature / thumb impression
+            ]);
+        });
+
+        // Crisp 0.4pt Laser Outer Border on page 1
+        doc.setDrawColor(0, 0, 0);
+        doc.setLineWidth(0.4);
+        doc.rect(10, 8, 277, 194);
+
+        // Header Title
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(15);
+        doc.setTextColor(0, 0, 0);
+        doc.text(companyName, 148.5, 15, { align: 'center' });
+
+        doc.setFontSize(10.5);
+        doc.text('MASTER KARIGAR PAYROLL & SETTLEMENT DISBURSEMENT STATEMENT', 148.5, 20.5, { align: 'center' });
+
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        const printDateStr = new Date().toLocaleDateString('en-GB') + ' ' + new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        doc.text(`Statement Period: ${periodLabel}    |    Printed Date: ${printDateStr}    |    Total Workers: ${karigars.length} (Paid: ${totalPaidCount}, Pending: ${totalPendingCount})`, 148.5, 25, { align: 'center' });
+
+        doc.setLineWidth(0.3);
+        doc.line(10, 27, 287, 27);
+
+        doc.autoTable({
+            startY: 29,
+            margin: { left: 12, right: 12, top: 29, bottom: 25 },
+            head: [[
+                '#',
+                'Worker ID',
+                'Karigar Name',
+                'Total Pcs',
+                'Total Work (Rs)',
+                'Advances (Rs)',
+                'Net Payable (Rs)',
+                'Status',
+                'Paid Tick',
+                'Receiver Signature / Thumb'
+            ]],
+            body: tableRows,
+            foot: [[
+                '',
+                'TOTALS',
+                `${karigars.length} Karigars`,
+                grandPieces + ' Pcs',
+                'Rs. ' + grandJama.toFixed(2),
+                'Rs. ' + grandUpad.toFixed(2),
+                'Rs. ' + grandNet.toFixed(2),
+                `${totalPaidCount} Paid / ${totalPendingCount} Pend.`,
+                '',
+                ''
+            ]],
+            theme: 'grid',
+            styles: {
+                fontSize: 8,
+                cellPadding: 1.8,
+                textColor: [0, 0, 0],
+                lineColor: [0, 0, 0],
+                lineWidth: 0.1
+            },
+            headStyles: {
+                fillColor: [240, 240, 240],
+                textColor: [0, 0, 0],
+                fontStyle: 'bold',
+                halign: 'center'
+            },
+            footStyles: {
+                fillColor: [245, 245, 245],
+                textColor: [0, 0, 0],
+                fontStyle: 'bold'
+            },
+            columnStyles: {
+                0: { halign: 'center', cellWidth: 8 },
+                1: { halign: 'center', cellWidth: 26 },
+                2: { halign: 'left', cellWidth: 42, fontStyle: 'bold' },
+                3: { halign: 'right', cellWidth: 18 },
+                4: { halign: 'right', cellWidth: 28 },
+                5: { halign: 'right', cellWidth: 28 },
+                6: { halign: 'right', cellWidth: 30, fontStyle: 'bold' },
+                7: { halign: 'center', cellWidth: 28 },
+                8: { halign: 'center', cellWidth: 24, fontStyle: 'bold' },
+                9: { halign: 'left', cellWidth: 41 }
+            },
+            didDrawPage: function(data) {
+                doc.setDrawColor(0, 0, 0);
+                doc.setLineWidth(0.4);
+                doc.rect(10, 8, 277, 194);
+            }
+        });
+
+        // Signatures at bottom
+        let finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY + 6 : 180;
+        if (finalY > 185) {
+            doc.addPage();
+            doc.setDrawColor(0, 0, 0);
+            doc.setLineWidth(0.4);
+            doc.rect(10, 8, 277, 194);
+            finalY = 25;
+        }
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.text('Prepared & Reconciled By: ________________________________', 16, finalY + 8);
+        doc.text('Authorized & Disbursed By (Nareshbhai Tagadiya): ________________________________', 150, finalY + 8);
+
+        if (options.autoPrint) {
+            printPDFViaHiddenIframe(doc, 'Master Karigar Payroll Summary');
+        } else {
+            const periodSafe = (periodLabel || 'Current_Month').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const cleanComp = companyName.replace(/[^a-zA-Z0-9_-]/g, '_');
+            const filename = `Master_Karigar_Payroll_Summary_${cleanComp}_${periodSafe}_${getTodayISODate()}.pdf`;
+            doc.save(filename);
+            showToast('Master Karigar Payroll Summary downloaded!', 'success');
+        }
+    } catch (err) {
+        console.error('Master Payroll Summary error:', err);
+        showToast('Failed to generate Master Payroll Summary: ' + err.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
 // ===== POPUP MODAL FOR SALARY SLIP DOWNLOAD / PRINT OPTIONS =====
 function openSalarySlipOptionsModal(config = {}) {
     const modal = document.getElementById('karigar-slip-options-modal');
@@ -9785,6 +10064,10 @@ function openSalarySlipOptionsModal(config = {}) {
     const subEl = document.getElementById('slip-options-modal-subtitle');
     const workerCheck = document.getElementById('slip-opt-worker-check');
     const factoryCheck = document.getElementById('slip-opt-factory-check');
+    const masterBox = document.getElementById('slip-opt-master-summary-box');
+    const masterDownloadBtn = document.getElementById('btn-slip-opt-download-summary');
+    const masterPrintBtn = document.getElementById('btn-slip-opt-print-summary');
+    const copiesTitleEl = document.getElementById('slip-opt-copies-title');
     const dlBtn = document.getElementById('btn-slip-opt-download');
     const printBtn = document.getElementById('btn-slip-opt-print');
     const cancelBtn = document.getElementById('btn-slip-opt-cancel');
@@ -9795,17 +10078,34 @@ function openSalarySlipOptionsModal(config = {}) {
     if (factoryCheck) factoryCheck.checked = true;
 
     if (isBulk) {
-        if (titleEl) titleEl.innerHTML = "<i class='bx bxs-file-pdf text-danger'></i> Bulk Salary Slips (All Karigars)";
-        if (subEl) subEl.textContent = "Select which copies to include in bulk PDF";
+        if (titleEl) titleEl.innerHTML = "<i class='bx bxs-file-pdf text-danger'></i> Salary Slips & Master Table";
+        if (subEl) subEl.textContent = "Download Master Table or bulk individual salary slips";
+        if (masterBox) masterBox.style.display = 'block';
+        if (copiesTitleEl) copiesTitleEl.textContent = "Detailed Salary Slips (All Karigars)";
     } else {
         const kName = karigar?.name || 'Karigar';
-        if (titleEl) titleEl.innerHTML = `<i class='bx bxs-file-pdf text-danger'></i> Salary Slip: ${kName}`;
-        if (subEl) subEl.textContent = "Select copies to include";
+        if (titleEl) titleEl.innerHTML = `<i class='bx bxs-file-pdf text-danger'></i> Salary Slip: ${escapeHtml(kName)}`;
+        if (subEl) subEl.textContent = "Select copies to include for this Karigar";
+        if (masterBox) masterBox.style.display = 'none';
+        if (copiesTitleEl) copiesTitleEl.textContent = "Detailed Salary Slip Copies";
     }
 
     const closeModal = () => modal.classList.remove('show');
     if (cancelBtn) cancelBtn.onclick = closeModal;
     if (closeBtn) closeBtn.onclick = closeModal;
+
+    if (masterDownloadBtn) {
+        masterDownloadBtn.onclick = () => {
+            closeModal();
+            exportKarigarMasterSummaryPayrollPDF({ ...bulkOptions, autoPrint: false });
+        };
+    }
+    if (masterPrintBtn) {
+        masterPrintBtn.onclick = () => {
+            closeModal();
+            exportKarigarMasterSummaryPayrollPDF({ ...bulkOptions, autoPrint: true });
+        };
+    }
 
     const getSelection = () => {
         const incWorker = !!workerCheck?.checked;

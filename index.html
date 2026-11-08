@@ -452,6 +452,9 @@
                                 <button type="button" class="btn btn-outline btn-sm" id="btn-company-report-karigar" style="color:#0f172a; border-color:#94a3b8; font-weight:700;" title="Print or Download Monthly Company Production & Financial Audit Statement">
                                     <i class='bx bx-bar-chart-alt-2 text-primary'></i> Company Report
                                 </button>
+                                <button type="button" class="btn btn-outline btn-sm" id="btn-master-summary-pdf" style="color:#065f46; border-color:#6ee7b7; background:#ecfdf5; font-weight:700;" title="Download Master Table for Owner: All Karigars, Upad, Jama, Net Payable, Paid status & Tickmarks">
+                                    <i class='bx bx-table text-success'></i> Summary Table (PDF)
+                                </button>
                                 <button type="button" class="btn btn-primary btn-sm" id="btn-bulk-pdf-karigar" style="background:#1e293b; border-color:#1e293b;" title="Download Printable Salary Slips for ALL Karigars in one PDF">
                                     <i class='bx bxs-printer'></i> All Slips (PDF)
                                 </button>
@@ -649,47 +652,32 @@
         .modal.show { opacity:1 !important; pointer-events:auto !important; }
         .modal.show .modal-content { transform:translateY(0) !important; }
 
-        /* Industrial Paid Rubber Stamp */
+        /* Realistic Big Round Rubber Stamp */
         .karigar-card {
             position: relative;
             overflow: hidden;
             transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
         }
         .karigar-card.is-paid-cleared {
-            background: linear-gradient(to bottom right, #ffffff, #f0fdf4);
+            background: linear-gradient(135deg, #ffffff 65%, #f0fdf4 100%);
             border-color: #86efac !important;
         }
-        .karigar-paid-stamp {
+        .karigar-paid-stamp-round {
             position: absolute;
-            top: 10px;
-            right: 12px;
-            border: 2px dashed #16a34a;
-            color: #16a34a;
-            background: rgba(240, 253, 244, 0.95);
-            padding: 3px 8px;
-            border-radius: 5px;
-            font-weight: 800;
-            font-size: 0.68rem;
-            letter-spacing: 0.8px;
-            text-transform: uppercase;
-            transform: rotate(-3deg);
+            top: 8px;
+            right: 14px;
             pointer-events: none;
-            box-shadow: 0 1px 4px rgba(22, 163, 74, 0.15);
-            z-index: 5;
-            display: flex;
-            align-items: center;
-            gap: 4px;
+            transform: rotate(-13deg);
+            z-index: 6;
+            filter: drop-shadow(0 2px 4px rgba(21, 128, 61, 0.25));
+            opacity: 0.94;
+            transition: transform 0.2s ease;
+        }
+        .karigar-card:hover .karigar-paid-stamp-round {
+            transform: rotate(-10deg) scale(1.04);
         }
 
-        /* Archive View Mode: Red/Rose border and indicators */
-        .archive-active-mode #karigar-grid .karigar-card {
-            border: 2px solid #f43f5e !important;
-            box-shadow: 0 4px 14px rgba(244, 63, 94, 0.14) !important;
-        }
-        .archive-active-mode .karigar-card-header {
-            background: #fff1f2;
-            border-bottom: 1px solid #fecdd3 !important;
-        }
+        /* Archive View Mode: Keep cards clean, highlight only top banner & tags */
         .archive-badge-tag {
             background: #fee2e2;
             color: #991b1b;
@@ -886,6 +874,19 @@
                     <label>Upad Amount</label>
                     <input type="number" min="1" id="karigar-upad-amount" required placeholder="Money borrowed">
                 </div>
+                <div class="input-group" style="margin-top:0.75rem;">
+                    <label>Reason / Particulars (Shows on Salary Slip)</label>
+                    <input type="text" id="karigar-upad-reason" placeholder="e.g. Festival advance, Medical, Cash..." list="upad-reason-suggestions">
+                    <datalist id="upad-reason-suggestions">
+                        <option value="Cash Advance"></option>
+                        <option value="Festival Advance"></option>
+                        <option value="Emergency Loan"></option>
+                        <option value="Medical / Health"></option>
+                        <option value="Weekly Borrow"></option>
+                        <option value="Home Expense"></option>
+                        <option value="Travel / Ticket"></option>
+                    </datalist>
+                </div>
                 
                 <div style="background:var(--bg-main); padding:0.75rem; border-radius:8px; margin-bottom:1rem; border:1px solid var(--border-color); display:flex; flex-direction:column; gap:0.5rem;">
                     <div class="flex-between">
@@ -1031,8 +1032,30 @@
                 <button id="close-karigar-slip-options-modal" class="btn-icon"><i class='bx bx-x'></i></button>
             </div>
 
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; margin-bottom:16px;">
-                <div class="text-xs font-bold text-muted uppercase mb-2" style="letter-spacing:0.5px;">Select Slip Copies</div>
+            <!-- Master Summary Table Option (Fast 1-page table for Owner) -->
+            <div id="slip-opt-master-summary-box" style="background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:12px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+                    <div>
+                        <div style="font-weight:700; color:#065f46; font-size:13px; display:flex; align-items:center; gap:6px;">
+                            <i class='bx bx-table text-success'></i> Master Summary Table (With Tickmarks)
+                        </div>
+                        <div style="font-size:11px; color:#047857; margin-top:2px;">
+                            Quick view of all Karigars, Jama, Upad, Net Payable, Paid status &amp; Checkboxes.
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <button type="button" class="btn btn-sm btn-outline" id="btn-slip-opt-print-summary" style="color:#065f46; border-color:#a7f3d0; background:#fff; font-weight:700;">
+                            <i class='bx bx-printer'></i> Print
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary" id="btn-slip-opt-download-summary" style="background:#059669; border-color:#059669; white-space:nowrap; font-weight:700;">
+                            <i class='bx bxs-download'></i> Download Table
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="slip-opt-individual-copies-box" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; margin-bottom:16px;">
+                <div class="text-xs font-bold text-muted uppercase mb-2" id="slip-opt-copies-title" style="letter-spacing:0.5px;">Detailed Salary Slips (Copies)</div>
                 <label style="display:flex; align-items:center; gap:10px; cursor:pointer; padding:6px 0; font-size:14px; font-weight:600; color:#1e293b;">
                     <input type="checkbox" id="slip-opt-worker-check" checked style="width:18px; height:18px; cursor:pointer; accent-color:#0284c7;">
                     <span>Worker Copy</span>
