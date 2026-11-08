@@ -19,6 +19,15 @@ function refreshUsersFromEnv() {
 
 const DESIGN_PRICE_SCOPE = 'global';
 
+function round2(n) {
+    return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function toAmount(v) {
+    const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+}
+
 const AppState = {
     accounts: [],
     accountDetails: [],
@@ -9793,6 +9802,12 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
 
 // ===== MASTER KARIGAR PAYROLL & SETTLEMENT SUMMARY TABLE SHEET (PORTRAIT A4) =====
 function renderMasterSummaryPayrollSheet(doc, karigars, txs, options = {}) {
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+    const toAmount = (v) => {
+        const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
+        return Number.isFinite(n) ? n : 0;
+    };
+
     const currentCompany = AppState.currentCompany || 'company1';
     const companyName = getCompanyDisplayName(currentCompany);
     let periodLabel = options.periodLabel;
