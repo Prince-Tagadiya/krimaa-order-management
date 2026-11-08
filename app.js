@@ -8211,12 +8211,8 @@ function setupKarigarListeners() {
     const companyReportBtn = document.getElementById('btn-company-report-karigar');
     if (companyReportBtn && !companyReportBtn.dataset.bound) {
         companyReportBtn.dataset.bound = 'true';
-        companyReportBtn.addEventListener('click', (e) => {
-            if (e.shiftKey) {
-                printCompanyMonthlyReport();
-            } else {
-                exportCompanyMonthlyReportPDF();
-            }
+        companyReportBtn.addEventListener('click', () => {
+            openCompanyReportOptionsModal();
         });
     }
 
@@ -8229,7 +8225,7 @@ function setupKarigarListeners() {
     const summaryPdfBtn = document.getElementById('export-pdf-karigar-btn');
     if (summaryPdfBtn && !summaryPdfBtn.dataset.bound) {
         summaryPdfBtn.dataset.bound = 'true';
-        summaryPdfBtn.addEventListener('click', () => exportCompanyMonthlyReportPDF());
+        summaryPdfBtn.addEventListener('click', () => openCompanyReportOptionsModal());
     }
 
     const resetCycleBtn = document.getElementById('btn-reset-karigar');
@@ -8247,7 +8243,7 @@ function setupKarigarListeners() {
             const b = (AppState.karigarResetBackups || []).find(x => x.id === backupId);
             if (!b) return showToast('No backup selected', 'error');
             const safeRows = Array.isArray(b.rows) ? b.rows : [];
-            exportCompanyMonthlyReportPDF(b.companyId, safeRows, { periodLabel: getKarigarBackupRangeLabel(b) });
+            openCompanyReportOptionsModal({ companyId: b.companyId, txs: safeRows, periodLabel: getKarigarBackupRangeLabel(b) });
         });
     }
 
@@ -9781,21 +9777,21 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         pagesRendered++;
     }
 
-    // Stamp footer on individual slip (Karigar Name + Page X/Y)
-    if (!options.isBulk) {
-        const totalPages = doc.internal.getNumberOfPages();
-        for (let p = 1; p <= totalPages; p++) {
-            doc.setPage(p);
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(7.5);
-            doc.setTextColor(110, 110, 110);
-            doc.text('Krimaa Enterprise Management System', 10, 292);
+    // Stamp footer on every page rendered for this karigar (Karigar-wise Page X/pagesRendered)
+    const totalDocPages = doc.internal.getNumberOfPages();
+    const workerFirstPage = totalDocPages - pagesRendered + 1;
+    for (let pIndex = 0; pIndex < pagesRendered; pIndex++) {
+        const targetPage = workerFirstPage + pIndex;
+        doc.setPage(targetPage);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(110, 110, 110);
+        doc.text('Krimaa Enterprise Management System', 10, 292);
 
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(8);
-            doc.setTextColor(20, 20, 20);
-            doc.text(`${targetKName}  |  Page ${p}/${totalPages}`, 200, 292, { align: 'right' });
-        }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(8);
+        doc.setTextColor(20, 20, 20);
+        doc.text(`${targetKName}  |  Page ${pIndex + 1}/${pagesRendered}`, 200, 292, { align: 'right' });
     }
 
     if (!options.isBulk && !options.noDownload) {
@@ -10133,9 +10129,9 @@ function openSalarySlipOptionsModal(config = {}) {
     const cancelBtn = document.getElementById('btn-slip-opt-cancel');
     const closeBtn = document.getElementById('close-karigar-slip-options-modal');
 
-    // Default both copies ticked
+    // Default: ONLY Worker Copy is checked everywhere
     if (workerCheck) workerCheck.checked = true;
-    if (factoryCheck) factoryCheck.checked = true;
+    if (factoryCheck) factoryCheck.checked = false;
 
     if (isBulk) {
         if (titleEl) titleEl.innerHTML = "<i class='bx bxs-file-pdf text-danger'></i> All Karigar Salary Slips";
@@ -10148,7 +10144,11 @@ function openSalarySlipOptionsModal(config = {}) {
         if (copiesTitleEl) copiesTitleEl.textContent = "Detailed Salary Slip Copies";
     }
 
-    const closeModal = () => modal.classList.remove('show');
+    let handleSlipKeyDown;
+    const closeModal = () => {
+        if (handleSlipKeyDown) window.removeEventListener('keydown', handleSlipKeyDown, true);
+        modal.classList.remove('show');
+    };
     if (cancelBtn) cancelBtn.onclick = closeModal;
     if (closeBtn) closeBtn.onclick = closeModal;
 
@@ -10187,6 +10187,98 @@ function openSalarySlipOptionsModal(config = {}) {
             }
         };
     }
+
+    handleSlipKeyDown = (e) => {
+        if (!modal.classList.contains('show')) return;
+        const key = e.key.toLowerCase();
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeModal();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (dlBtn) dlBtn.click();
+        } else if (key === 'p') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (printBtn) printBtn.click();
+        } else if (key === 'w' || e.key === '1') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (workerCheck) workerCheck.checked = !workerCheck.checked;
+        } else if (key === 'f' || e.key === '2') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (factoryCheck) factoryCheck.checked = !factoryCheck.checked;
+        }
+    };
+    window.addEventListener('keydown', handleSlipKeyDown, true);
+
+    modal.classList.add('show');
+}
+
+// ===== POPUP MODAL FOR COMPANY MONTHLY REPORT PRINT / DOWNLOAD OPTIONS =====
+function openCompanyReportOptionsModal(config = {}) {
+    const modal = document.getElementById('company-report-options-modal');
+    if (!modal) {
+        return exportCompanyMonthlyReportPDF(config.companyId, config.txs, config);
+    }
+
+    const subEl = document.getElementById('comp-report-modal-subtitle');
+    const dlBtn = document.getElementById('btn-comp-report-opt-download');
+    const printBtn = document.getElementById('btn-comp-report-opt-print');
+    const cancelBtn = document.getElementById('btn-comp-report-opt-cancel');
+    const closeBtn = document.getElementById('close-company-report-options-modal');
+
+    if (subEl) {
+        const period = config.periodLabel || (AppState.viewingKarigarBackupId
+            ? getKarigarBackupRangeLabel((AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId))
+            : getKarigarCurrentCycleLabel());
+        subEl.textContent = `Period: ${period} | Production leaderboard & audit statement`;
+    }
+
+    let handleReportKeyDown;
+    const closeModal = () => {
+        if (handleReportKeyDown) window.removeEventListener('keydown', handleReportKeyDown, true);
+        modal.classList.remove('show');
+    };
+
+    if (cancelBtn) cancelBtn.onclick = closeModal;
+    if (closeBtn) closeBtn.onclick = closeModal;
+
+    if (dlBtn) {
+        dlBtn.onclick = () => {
+            closeModal();
+            exportCompanyMonthlyReportPDF(config.companyId, config.txs, config);
+        };
+    }
+
+    if (printBtn) {
+        printBtn.onclick = () => {
+            closeModal();
+            printCompanyMonthlyReport(config.companyId, config.txs, config);
+        };
+    }
+
+    handleReportKeyDown = (e) => {
+        if (!modal.classList.contains('show')) return;
+        const key = e.key.toLowerCase();
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeModal();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (dlBtn) dlBtn.click();
+        } else if (key === 'p') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (printBtn) printBtn.click();
+        }
+    };
+    window.addEventListener('keydown', handleReportKeyDown, true);
 
     modal.classList.add('show');
 }
@@ -10286,11 +10378,23 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
         const summaryStartPage = doc.internal.getNumberOfPages();
         renderMasterSummaryPayrollSheet(doc, karigars, txs, { periodLabel });
         const summaryEndPage = doc.internal.getNumberOfPages();
+        const totalSummaryPages = summaryEndPage - summaryStartPage + 1;
         for (let p = summaryStartPage; p <= summaryEndPage; p++) {
-            pageLabels[p] = 'MASTER SUMMARY';
+            doc.setPage(p);
+            const pNum = p - summaryStartPage + 1;
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7.5);
+            doc.setTextColor(110, 110, 110);
+            doc.text('Krimaa Enterprise Management System', 10, 292);
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(8);
+            doc.setTextColor(20, 20, 20);
+            doc.text(`MASTER SUMMARY  |  Page ${pNum}/${totalSummaryPages}`, 200, 292, { align: 'right' });
         }
 
         // 2. ATTACH ALL DETAILED KARIGAR SLIPS IMMEDIATELY ON SUBSEQUENT PAGES
+        // Each karigar slip renders its own independent Karigar-wise page numbering (e.g. Page 1/1)
         let slipCount = 0;
         karigars.forEach((k) => {
             const kId = k.id;
@@ -10303,7 +10407,6 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             if (!hasTxs && options.onlyWithActivity) return;
 
             doc.addPage();
-            const workerStartPage = doc.internal.getNumberOfPages();
             generateKarigarSalarySlipPDF(k, txs, {
                 doc,
                 isBulk: true,
@@ -10311,29 +10414,8 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
                 includeWorker: options.includeWorker !== false,
                 includeFactory: options.includeFactory !== false
             });
-            const workerEndPage = doc.internal.getNumberOfPages();
-            for (let p = workerStartPage; p <= workerEndPage; p++) {
-                pageLabels[p] = k.name || 'Karigar';
-            }
             slipCount++;
         });
-
-        // 3. STAMP FOOTER ON EVERY PAGE: KARIGAR NAME + PAGE NUMBER (Page X/Y)
-        const totalPages = doc.internal.getNumberOfPages();
-        for (let p = 1; p <= totalPages; p++) {
-            doc.setPage(p);
-            const label = pageLabels[p] || (p === 1 ? 'MASTER SUMMARY' : 'KARIGAR SLIP');
-
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(7.5);
-            doc.setTextColor(110, 110, 110);
-            doc.text('Krimaa Enterprise Management System', 10, 292);
-
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(8);
-            doc.setTextColor(20, 20, 20);
-            doc.text(`${label}  |  Page ${p}/${totalPages}`, 200, 292, { align: 'right' });
-        }
 
         if (options.autoPrint) {
             printPDFViaHiddenIframe(doc, `All Karigar Slips`);
@@ -10562,20 +10644,7 @@ function generateCompanyMonthlyReportPDF(companyId, rawTxs, options = {}) {
     doc.setFontSize(11);
     doc.text('Rs. ' + grandNetSettled.toFixed(2), card4X + cardW / 2, cardY + 11, { align: 'center' });
 
-    // Mathematical Audit Proof Verification Box
-    const auditY = cardY + cardH + 3.5;
-    doc.setDrawColor(0, 0, 0);
-    doc.setLineWidth(0.25);
-    doc.rect(14, auditY, 182, 8.5);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(0, 0, 0);
-    const auditStatusText = isZeroErrorVerified
-        ? `[ MATHEMATICAL AUDIT VERIFIED: Gross Wages (Rs. ${grandGrossJama.toFixed(2)}) - Total Advances (Rs. ${grandAdvancesUpad.toFixed(2)}) = Net Settled (Rs. ${grandNetSettled.toFixed(2)}) | Variance: Rs. 0.00 (Zero Error) ]`
-        : `[ AUDIT WARNING: Variance detected: Rs. ${variance.toFixed(2)} ]`;
-    doc.text(auditStatusText, 105, auditY + 5.5, { align: 'center' });
-
-    let currentY = auditY + 12;
+    let currentY = cardY + cardH + 6;
 
     // SECTION 1: PRODUCTION LEADERBOARD (Which Karigar gave the most production)
     doc.setFont('helvetica', 'bold');
