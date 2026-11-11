@@ -7,10 +7,10 @@
     <link rel="icon" href="data:,">
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href='https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css' rel='stylesheet'>
-    <link rel="stylesheet" href="style.css?v=20261108-07">
+    <link rel="stylesheet" href="style.css?v=20261111">
     <link rel="manifest" href="manifest.json">
     <script>
-        // Register Service Worker for full offline support
+        // Replace obsolete offline app caches
         if ('serviceWorker' in navigator) {
             let refreshing = false;
             navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -20,7 +20,7 @@
                 }
             });
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js?v=20261108-07').then(reg => {
+                navigator.serviceWorker.register('/sw.js?v=20261111').then(reg => {
                     console.log('[SW] Registered. Scope:', reg.scope);
                     reg.update();
                 }).catch(e => console.warn('[SW] Registration failed:', e));
@@ -35,38 +35,6 @@
     <div id="magical-flash" class="magical-flash"></div>
 
 
-    <!-- ===== FOLDER SETUP SCREEN (shown before login if no folder linked) ===== -->
-    <div id="folder-setup-screen" class="screen flex-center hidden">
-        <div class="login-card" style="max-width:460px;">
-            <div class="login-header">
-                <div style="font-size:3rem;margin-bottom:0.5rem;">📂</div>
-                <h2>Link Your Data Folder</h2>
-                <p>Krimaa works fully offline. First, link the shared local folder where your data is stored.</p>
-            </div>
-            <div id="folder-setup-status" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:0.85rem;color:#475569;">
-                <i class='bx bx-info-circle'></i> No folder linked yet. Click the button below to select your shared LAN folder.
-            </div>
-            <button type="button" id="folder-setup-link-btn" class="btn btn-primary w-100 btn-lg" style="margin-bottom:12px;">
-                <i class='bx bx-folder-open'></i> Select Shared Folder
-            </button>
-            <button type="button" id="folder-setup-continue-btn" class="btn btn-outline w-100 hidden" style="margin-bottom:12px;">
-                <i class='bx bx-arrow-back'></i> Continue to Login
-            </button>
-            <button type="button" id="folder-setup-install-btn" class="btn btn-primary w-100 hidden" style="margin-bottom:12px; background: #059669; border-color: #059669;">
-                <i class='bx bx-plus-circle'></i> Install Desktop App
-            </button>
-            <button type="button" id="folder-setup-skip-btn" class="btn btn-outline w-100" style="margin-bottom:12px; color: #64748b; border-color: #cbd5e1;">
-                Skip for now (Cloud Mode)
-            </button>
-            <!--
-                <i class='bx bx-arrow-back'></i> Continue to Login
-            -->
-            <div class="text-center" style="margin-top:12px;">
-                <p class="text-xs text-muted">The folder is saved — you only need to do this once per browser.<br>This app works 100% offline after the first setup.</p>
-            </div>
-        </div>
-    </div>
-
     <!-- ===== LOGIN SCREEN ===== -->
     <div id="login-screen" class="screen flex-center hidden">
         <div class="login-card">
@@ -80,9 +48,7 @@
                     <i class='bx bxs-business'></i> <span id="login-profile-badge-text">Dhyan Profile</span>
                 </span>
             </div>
-            <div id="login-lan-status" style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:0.8rem;color:#166534;display:none;">
-                <i class='bx bx-check-circle'></i> <span id="login-lan-status-text">Folder linked</span>
-            </div>
+
             <form id="login-form">
                 <div class="input-group">
                     <label>Username</label>
@@ -95,7 +61,7 @@
                 <button type="submit" class="btn btn-primary w-100 btn-lg">Login</button>
             </form>
             <div class="text-center" style="margin-top:14px;">
-                <a href="#" id="login-change-folder-btn" class="text-xs text-muted" style="text-decoration:underline;">Change data folder</a>
+
             </div>
         </div>
     </div>
@@ -122,9 +88,7 @@
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="backup-btn" title="Refresh latest app data">
                     <i class='bx bx-refresh'></i> Refresh Data
                 </button>
-                <button type="button" class="btn btn-outline btn-sm w-100 mb-1 text-accent" id="lan-settings-btn" title="Configure LAN storage and sync settings">
-                    <i class='bx bx-hdd'></i> LAN Drive
-                </button>
+
                 <button type="button" class="btn btn-outline btn-sm w-100 mb-1" id="profile-switch-btn" title="Switch between Krimaa and Dhyan profile" style="display:none; color:#7c3aed; border-color:#c4b5fd; background:#faf5ff;">
                     <i class='bx bx-transfer'></i> Switch to Dhyan Profile
                 </button>
@@ -156,14 +120,8 @@
                         <i class='bx bx-check-circle'></i>
                         <span>Synced</span>
                     </div>
-                    <div class="sync-indicator sync-idle" id="lan-indicator" title="LAN storage connection status" style="cursor: pointer; background: #e0f2fe; color: #0369a1; border-color: #7dd3fc; font-weight: 600;">
-                        <i class='bx bx-server'></i>
-                        <span>LAN: Off</span>
-                    </div>
-                    <div id="firebase-pending-badge" title="Firebase background sync — data queued to push when online" style="display:none; align-items:center; gap:4px; background:#fef3c7; color:#92400e; border:1px solid #fcd34d; border-radius:20px; padding:3px 10px; font-size:0.75rem; font-weight:700; cursor:default;">
-                        <i class='bx bx-cloud-upload' style="font-size:0.9rem;"></i>
-                        <span id="firebase-pending-count">0</span> pending
-                    </div>
+
+
                     <div class="sidebar-user-info" id="sidebar-user-info"></div>
                 </div>
             </header>
@@ -204,7 +162,7 @@
                     <div class="dashboard-grid">
                         <!-- LEFT COLUMN -->
                         <div class="dash-left">
-                            
+
                             <!-- KPI Cards block -->
                             <div class="card mb-2">
                                 <div class="flex-between mb-2">
@@ -224,7 +182,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                
+
                                 <div class="kpi-3-col">
                                     <!-- Company A -->
                                     <div class="kpi-box box-a">
@@ -329,7 +287,7 @@
                 </section>
 
                 <!-- ========== DAILY ORDER ========== -->
-                
+
 
                 <!-- ========== MANAGE ACCOUNTS ========== -->
                 <section id="add-account" class="content-section">
@@ -340,12 +298,8 @@
                             <p class="text-muted text-sm mb-2">Track their daily orders.</p>
                         </div>
                         <div class="flex gap-2">
-                            <button type="button" class="btn btn-outline btn-sm text-primary" id="fix-integrity-btn" title="Generate missing IDs for legacy spreadsheet data">
-                                <i class='bx bx-shield-check'></i> Fix Integrity
-                            </button>
-                            <button type="button" class="btn btn-outline btn-sm text-accent" id="sync-sheet-btn" title="Replace selected Firebase sections from Google Sheets">
-                                <i class='bx bx-refresh'></i> Replace from Sheet
-                            </button>
+
+
                         </div>
                     </div>
                         <form id="add-account-form">
@@ -386,31 +340,15 @@
                 </section>
 
                 <!-- ========== MONEY MANAGEMENT ========== -->
-                
+
 
                 <!-- ========== MONEY BACKUP ========== -->
-                
+
 
                 <!-- ========== KARIGAR MANAGEMENT ========== -->
                 <section id="karigar" class="content-section">
                     <!-- One-Time Database Reorganize Gate -->
-                    <div id="karigar-db-reorganize-gate" class="db-reorganize-gate" style="display:none;">
-                        <div class="db-reorganize-card" style="background:#fff; border:2px dashed #dc2626; border-radius:16px; padding:40px 24px; text-align:center; max-width:680px; margin:30px auto; box-shadow:0 20px 40px rgba(220,38,38,0.08);">
-                            <div style="width:72px; height:72px; line-height:72px; font-size:36px; background:#fef2f2; border:1px solid #fee2e2; border-radius:50%; margin:0 auto 16px auto;">
-                                🧹
-                            </div>
-                            <h2 style="font-size:22px; font-weight:800; color:#0f172a; margin-bottom:8px;">Reorganize Database &amp; Start Fresh</h2>
-                            <p style="color:#64748b; font-size:14px; line-height:1.6; max-width:520px; margin:0 auto 24px auto;">
-                                Click the button below to reorganize your local storage and wipe all previous test Karigar worker profiles, work/borrow entries, monthly backups, and size charts.
-                            </p>
-                            <button type="button" class="btn btn-danger btn-execute-local-reorganize" style="background:#dc2626; border-color:#dc2626; color:#fff; font-size:17px; font-weight:800; padding:14px 36px; border-radius:12px; cursor:pointer; box-shadow:0 6px 18px rgba(220,38,38,0.35); display:inline-flex; align-items:center; gap:8px;">
-                                <i class='bx bx-trash' style="font-size:20px;"></i> Reorganize &amp; Wipe Old Database
-                            </button>
-                            <div style="font-size:12px; color:#94a3b8; margin-top:14px;">
-                                ⚡ One-time operation. Once clicked, this will never be shown again and both sections will be unlocked.
-                            </div>
-                        </div>
-                    </div>
+
 
                     <div id="karigar-main-content">
                         <!-- Unified Modern Header -->
@@ -526,23 +464,7 @@
                 <!-- ========== SIZE PRICES / RATE CHART ========== -->
                 <section id="size-prices" class="content-section">
                     <!-- One-Time Database Reorganize Gate -->
-                    <div id="size-prices-db-reorganize-gate" class="db-reorganize-gate" style="display:none;">
-                        <div class="db-reorganize-card" style="background:#fff; border:2px dashed #dc2626; border-radius:16px; padding:40px 24px; text-align:center; max-width:680px; margin:30px auto; box-shadow:0 20px 40px rgba(220,38,38,0.08);">
-                            <div style="width:72px; height:72px; line-height:72px; font-size:36px; background:#fef2f2; border:1px solid #fee2e2; border-radius:50%; margin:0 auto 16px auto;">
-                                🧹
-                            </div>
-                            <h2 style="font-size:22px; font-weight:800; color:#0f172a; margin-bottom:8px;">Reorganize Database &amp; Start Fresh</h2>
-                            <p style="color:#64748b; font-size:14px; line-height:1.6; max-width:520px; margin:0 auto 24px auto;">
-                                Click the button below to reorganize your local storage and wipe all previous test Karigar worker profiles, work/borrow entries, monthly backups, and size charts.
-                            </p>
-                            <button type="button" class="btn btn-danger btn-execute-local-reorganize" style="background:#dc2626; border-color:#dc2626; color:#fff; font-size:17px; font-weight:800; padding:14px 36px; border-radius:12px; cursor:pointer; box-shadow:0 6px 18px rgba(220,38,38,0.35); display:inline-flex; align-items:center; gap:8px;">
-                                <i class='bx bx-trash' style="font-size:20px;"></i> Reorganize &amp; Wipe Old Database
-                            </button>
-                            <div style="font-size:12px; color:#94a3b8; margin-top:14px;">
-                                ⚡ One-time operation. Once clicked, this will never be shown again and both sections will be unlocked.
-                            </div>
-                        </div>
-                    </div>
+
 
                     <div id="size-prices-main-content">
                         <div class="size-chart-header">
@@ -683,7 +605,7 @@
             </div>
         </div>
     </div>
-    
+
     <style>
         .modal.show { opacity:1 !important; pointer-events:auto !important; }
         .modal.show .modal-content { transform:translateY(0) !important; }
@@ -923,7 +845,7 @@
                         <option value="Travel / Ticket"></option>
                     </datalist>
                 </div>
-                
+
                 <div style="background:var(--bg-main); padding:0.75rem; border-radius:8px; margin-bottom:1rem; border:1px solid var(--border-color); display:flex; flex-direction:column; gap:0.5rem;">
                     <div class="flex-between">
                         <span class="text-xs text-muted uppercase font-bold">Total Earned (Jama)</span>
@@ -958,7 +880,7 @@
                     <button id="close-karigar-history-modal" class="btn-icon"><i class='bx bx-x'></i></button>
                 </div>
             </div>
-            
+
             <div style="overflow-x:auto; flex:1; margin-bottom: 1rem;" class="custom-scrollbar">
                 <table class="table" style="width:100%; border-collapse: collapse;">
                     <thead style="position: sticky; top:0; background:#f8fafc; z-index:1;">
@@ -1319,66 +1241,21 @@
     </div>
 
     <!-- LAN Drive Settings Modal -->
-    <div id="lan-settings-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
-        <div class="modal-content" style="background:white;width:95%;max-width:450px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.15);">
-            <div class="flex-between mb-2">
-                <h3 class="font-bold text-lg flex items-center gap-2"><i class='bx bx-hdd text-primary'></i> LAN Drive Settings</h3>
-                <button id="close-lan-modal-btn" class="btn-icon"><i class='bx bx-x'></i></button>
-            </div>
-            <p class="text-xs text-muted mb-2">Configure secure local folder storage. Perfect for offline usage across a local area network (LAN).</p>
-            <!-- Profile context label: updated by JS -->
-            <div id="lan-modal-profile-label" style="margin-bottom:10px;display:none;">
-                <span style="display:inline-flex;align-items:center;gap:5px;font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:12px;background:#faf5ff;border:1px solid #c4b5fd;color:#7c3aed;">
-                    <i class='bx bx-transfer'></i> <span id="lan-modal-profile-label-text">Profile: Dhyan</span>
-                </span>
-            </div>
-            
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:12px; margin-bottom:15px;">
-                <div class="flex-between">
-                    <span class="text-xs font-bold uppercase text-muted">LAN Drive Status</span>
-                    <span id="lan-modal-status-badge" class="badge" style="background:#cbd5e1; color:#475569;">Off</span>
-                </div>
-                <p id="lan-modal-status-desc" class="text-xs mt-1 text-muted">Firestore is currently your primary database. LAN offline features are disabled.</p>
-            </div>
-
-            <form id="lan-settings-form">
-                <div class="flex gap-2 mb-2" style="display:flex; gap:8px; margin-top: 15px;">
-                    <button type="button" id="lan-select-folder-btn" class="btn btn-primary w-100"><i class='bx bx-folder-open'></i> Link LAN Folder</button>
-                    <button type="button" id="lan-disconnect-btn" class="btn btn-outline text-danger hidden"><i class='bx bx-log-out'></i> Disconnect</button>
-                </div>
-            </form>
-
-            <hr style="border:0; border-top:1px solid #e2e8f0; margin:15px 0;">
-
-            <div class="flex-between mb-1">
-                <span class="font-bold text-sm">Synchronize & Backups</span>
-            </div>
-            <p class="text-xs text-muted mb-2">Gathers your full Firestore database into a single file to setup other local computer LAN folders.</p>
-            <div style="display:flex; gap:8px;">
-                <button type="button" id="lan-export-payload-btn" class="btn btn-outline btn-sm w-100"><i class='bx bx-download'></i> Export Firestore Data</button>
-                <button type="button" id="lan-import-payload-btn" class="btn btn-outline btn-sm w-100"><i class='bx bx-upload'></i> Import to LAN folder</button>
-                <input type="file" id="lan-import-file-input" class="hidden" accept=".zip,.json">
-            </div>
-        </div>
-    </div>
-
-    <!-- Firebase SDK (compat for vanilla JS) -->
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
     <script src="runtime-env-loader.js"></script>
-    <script src="firebase-service.js?v=20261108-01"></script>
+    <script src="firebase-service.js?v=20261111"></script>
     <div id="background-sheets-loader" class="hidden" style="position: fixed; bottom: 20px; right: 20px; background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: 10px; border-radius: 50%; width: 40px; height: 40px; z-index: 9999; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
         <i class='bx bx-loader-alt bx-spin' style="font-size: 20px;"></i>
     </div>
-    
-    <script src="lan-storage-service.js?v=20261108-07"></script>
-    <script src="app.js?v=20261108-07"></script>
+
+    <script src="cloud-state.js?v=20261111"></script>
+    <script src="app.js?v=20261111"></script>
 
 </body>
 </html>

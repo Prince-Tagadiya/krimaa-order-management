@@ -357,7 +357,7 @@ function canManageAccounts() {
     const role = String(AppState.currentUser?.role || localStorage.getItem('userRole') || '').trim().toLowerCase();
     const username = String(AppState.currentUser?.username || localStorage.getItem('userUsername') || '').trim().toLowerCase();
     const displayName = String(AppState.currentUser?.displayName || localStorage.getItem('userName') || '').trim().toLowerCase();
-    
+
     if (role === 'admin' || role === 'dev' || role === 'order_c2') return true;
     if (username === 'order' || username === 'krimaa_users' || username === 'dhyan_order' || username === 'dhyan') return true;
     if (displayName.includes('dhyan')) return true;
@@ -724,173 +724,25 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function initApp() {
-    refreshUsersFromEnv();
-    applyClientModeUI();
-    restoreFirestoreQuotaCooldown();
-    updateBackendModeBanner();
-
-    // ── PROFILE DETECTION: restore profile from saved session before LAN check ──
-    // This ensures the right per-user LAN folder handle is loaded on page reload.
-    (function restoreProfileFromSession() {
-        const savedUsername = localStorage.getItem('userUsername');
-        if (savedUsername) {
-            LanStorageService.setActiveProfile(savedUsername);
-        } else {
-            // Hash-based profile: if visiting /#dhyan without an active session,
-            // pre-warm the Dhyan profile so the correct folder handle is checked.
-            const hash = window.location.hash.replace('#', '').toLowerCase();
-            if (hash === 'dhyan') {
-                LanStorageService.setActiveProfile('Dhyan_Order');
-            }
-        }
-    })();
-
-    initLanSettingsUI();
-    attachEventListeners();
-    initSyncIndicator();
-
-    const integrityBtn = document.getElementById('fix-integrity-btn');
-    const syncSheetBtn = document.getElementById('sync-sheet-btn');
-    if (integrityBtn) integrityBtn.style.display = isDevUser() ? '' : 'none';
-    if (syncSheetBtn) syncSheetBtn.style.display = isDevUser() ? '' : 'none';
-
-    // Refresh button
-    const backupBtn = document.getElementById('backup-btn');
-    if (backupBtn) backupBtn.addEventListener('click', () => refreshAppDataManually());
-
-    if (integrityBtn) integrityBtn.addEventListener('click', async () => {
-        if (!isDevUser()) return showToast("Only dev can run integrity tools", "error");
-        showToast("Integrity tools are disabled in offline mode.", "info");
-    });
-
-    if (syncSheetBtn) syncSheetBtn.addEventListener('click', async () => {
-        showToast("Google Sheets sync is disabled in offline mode.", "info");
-    });
-
-    const savedCompany = localStorage.getItem('selectedCompany');
-    if (savedCompany) AppState.currentCompany = savedCompany;
-    if (isSingleCompanyMode()) {
-        AppState.currentCompany = 'company1';
-        localStorage.setItem('selectedCompany', 'company1');
-    }
-    if (AppState.currentUser && !isCompanyAllowed(AppState.currentCompany)) {
-        AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
-        localStorage.setItem('selectedCompany', AppState.currentCompany);
-    }
-    document.querySelectorAll('.company-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.company === AppState.currentCompany);
-    });
-    if (typeof updateOrderCompanyLabel === 'function') updateOrderCompanyLabel();
-
-    // ── STEP 1: Check if folder is linked (uses profile-specific handle key) ──
-    if (LanStorageService.hasSavedHandle()) {
-        const reconnected = await LanStorageService.autoReconnect();
-        if (!reconnected) {
-            console.log('[INIT] LAN handle exists but not yet permitted. Showing login screen.');
-        }
-        checkAuth();
-    } else {
-        showFolderSetupScreen();
-    }
-
-    startLanFolderWatcher();
-    updateProfileSwitchBtn();
-    updateFolderSetupScreenForProfile();
-
-    // ── Pull on tab focus: when admin comes back to the tab, refresh from Firebase ──
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && LanStorageService.isConnected() && AppState.currentUser) {
-            const now = Date.now();
-            if ((now - _lastVisibilityPullMs) > 60 * 1000) { // max once per 60s
-                _lastVisibilityPullMs = now;
-                LanStorageService.pullLatestFromFirebase().then(r => {
-                    if (r && r.pulled > 0) {
-                        console.log(`[PULL SYNC] Visibility pull: ${r.pulled} records.`);
-                        window.clearApiReadCache && window.clearApiReadCache();
-                        const sec = AppState.currentSection;
-                        if (sec === 'dashboard') renderDashboard();
-                        else if (sec === 'data-sheet' && !(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) renderDataSheet();
-                    }
-                }).catch(() => {});
-            }
-        }
-    });
-
-    // ── Pull on LAN first-connect: so folder connecting immediately syncs Firebase data ──
-    LanStorageService.onStatusChange((status) => {
-        if (status === 'connected' && AppState.currentUser) {
-            setTimeout(() => {
-                LanStorageService.pullLatestFromFirebase({ force: true }).catch(() => {});
-            }, 1500);
-        }
-    });
-
-    // ── Pull on sync flush: when this profile pushes to Firebase, immediately pull back ──
-    // This ensures cross-profile data (e.g. Dhyan→Firebase→Admin) appears within seconds.
-    window.addEventListener('lan:sync-flushed', () => {
-        if (LanStorageService.isConnected() && AppState.currentUser) {
-            setTimeout(() => {
-                LanStorageService.pullLatestFromFirebase({ force: true }).then(r => {
-                    if (r && r.pulled > 0) {
-                        window.clearApiReadCache && window.clearApiReadCache();
-                    }
-                }).catch(() => {});
-            }, 2000); // 2s delay — let Firebase propagate
-        }
-    });
+ refreshUsersFromEnv(); applyClientModeUI(); restoreFirestoreQuotaCooldown();
+ attachEventListeners(); initSyncIndicator();
+ document.getElementById('backup-btn')?.addEventListener('click', refreshAppDataManually);
+ checkAuth(); updateProfileSwitchBtn();
+ window.addEventListener('beforeunload', event => {
+  document.activeElement?.blur();
+  if (FirebaseService.getPendingCount()) { event.preventDefault(); event.returnValue = ''; }
+ });
+ window.addEventListener('online', () => FirebaseService.flushWrites().catch(() => {}));
+ document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { document.activeElement?.blur(); FirebaseService.flushWrites().catch(() => {}); }
+ });
 }
 
 let _currentFolderHash = '';
-function startLanFolderWatcher() {
-    if (window._lanFolderWatcherStarted) return;
-    window._lanFolderWatcherStarted = true;
-
-    setInterval(async () => {
-        if (!LanStorageService.isConnected()) {
-            _currentFolderHash = '';
-            return;
-        }
-        try {
-            const hash = await LanStorageService.getFolderHash();
-            if (!hash) return;
-            if (!_currentFolderHash) {
-                _currentFolderHash = hash;
-                return;
-            }
-            if (_currentFolderHash !== hash) {
-                console.log('🔄 [LAN] Local folder files changed! Reloading data...');
-                _currentFolderHash = hash;
-                if (typeof _apiReadCache !== 'undefined') {
-                    _apiReadCache.clear();
-                }
-                await fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true });
-                const currentSec = AppState.currentSection || document.querySelector('.nav-btn.active')?.dataset.target || 'data-sheet';
-                if (currentSec === 'karigar') {
-                    await renderKarigarPage(false);
-                } else if (currentSec === 'size-prices') {
-                    await renderSizePricesPage();
-                } else if (currentSec === 'data-sheet') {
-                    if (!(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) {
-                        renderDataSheet();
-                    }
-                } else if (typeof navigateTo === 'function') {
-                    navigateTo(currentSec);
-                }
-                showToast('🔄 LAN folder updated! Data reloaded smoothly.', 'info');
-            }
-        } catch (e) {
-            console.warn('[LAN] Folder watcher error:', e);
-        }
-    }, 4000);
-}
 
 
-function showFolderSetupScreen() {
-    document.getElementById('folder-setup-screen').classList.remove('hidden');
-    document.getElementById('login-screen').classList.add('hidden');
-    document.getElementById('app-screen').classList.add('hidden');
-    updateFolderSetupScreenForProfile();
-}
+
+function showFolderSetupScreen() { showLoginScreen(); }
 
 // ===== PROFILE HELPERS =====
 
@@ -899,33 +751,7 @@ function _isDhyanHash() {
 }
 
 /** Updates the folder setup screen title/text to reflect the active profile */
-function updateFolderSetupScreenForProfile() {
-    const isDhyan = _isDhyanHash();
-    const titleEl = document.querySelector('#folder-setup-screen h2');
-    const descEl = document.querySelector('#folder-setup-screen p');
-    if (titleEl) {
-        titleEl.textContent = isDhyan ? '📂 Link Dhyan Data Folder' : '📂 Link Your Data Folder';
-    }
-    if (descEl) {
-        descEl.textContent = isDhyan
-            ? 'Select the local folder where Dhyan\'s order data is stored. This folder is separate from the Krimaa master folder.'
-            : 'Krimaa works fully offline. First, link the shared local folder where your data is stored.';
-    }
-    // Show profile badge on folder setup screen
-    let badge = document.getElementById('folder-setup-profile-badge');
-    if (!badge) {
-        badge = document.createElement('div');
-        badge.id = 'folder-setup-profile-badge';
-        badge.style.cssText = 'margin-bottom:12px;text-align:center;font-size:0.78rem;font-weight:700;';
-        const statusEl = document.getElementById('folder-setup-status');
-        if (statusEl && statusEl.parentNode) {
-            statusEl.parentNode.insertBefore(badge, statusEl);
-        }
-    }
-    badge.innerHTML = isDhyan
-        ? '<span style="background:#f0f9ff;border:1px solid #bae6fd;color:#0369a1;padding:4px 12px;border-radius:20px;"><i class=\'bx bxs-business\'></i> Dhyan Profile</span>'
-        : '<span style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:4px 12px;border-radius:20px;"><i class=\'bx bxs-building\'></i> Krimaa / Shree Sai Profile</span>';
-}
+
 
 /** Shows/hides the "Switch Profile" button in the sidebar (admin only) */
 function updateProfileSwitchBtn() {
@@ -941,10 +767,12 @@ function updateProfileSwitchBtn() {
 }
 
 /** Switches the active profile: clears session, sets hash, reloads */
-function switchToProfile(profileName) {
+async function switchToProfile(profileName) {
     const targetHash = profileName === 'dhyan' ? 'dhyan' : '';
     const label = profileName === 'dhyan' ? 'Dhyan' : 'Krimaa / Shree Sai';
     if (!confirm(`Switch to ${label} profile?\n\nYou will be logged out and taken to the ${label} login.`)) return;
+    document.activeElement?.blur();
+    try { await FirebaseService.flushWrites(); } catch(error) { showToast('Save failed. Retry before switching profiles.', 'error'); return; }
     // Clear current session
     localStorage.removeItem('isLogged');
     localStorage.removeItem('userRole');
@@ -953,7 +781,7 @@ function switchToProfile(profileName) {
     localStorage.removeItem('userAllowedCompanies');
     AppState.currentUser = null;
     // Disconnect current LAN folder (don't clear the handle — just deactivate)
-    LanStorageService.setActiveProfile(null);
+
     // Set the new profile hash
     window.location.hash = targetHash;
     // Reload the page to cleanly initialize the new profile
@@ -963,19 +791,11 @@ function switchToProfile(profileName) {
 
 
 function showLoginScreen() {
-    document.getElementById('folder-setup-screen').classList.add('hidden');
+
     document.getElementById('login-screen').classList.remove('hidden');
     document.getElementById('app-screen').classList.add('hidden');
     // Show folder status in login form
-    const lanStatus = document.getElementById('login-lan-status');
-    const lanStatusText = document.getElementById('login-lan-status-text');
-    if (lanStatus && LanStorageService.hasSavedHandle()) {
-        lanStatus.style.display = 'flex';
-        lanStatus.style.alignItems = 'center';
-        lanStatus.style.gap = '6px';
-        const statusLabel = LanStorageService.isConnected() ? 'Folder linked & connected — offline mode active' : 'Folder saved (will reconnect on login)';
-        if (lanStatusText) lanStatusText.textContent = statusLabel;
-    }
+
     // Update profile indicator on login screen
     const profileIndicator = document.getElementById('login-profile-indicator');
     const profileBadgeText = document.getElementById('login-profile-badge-text');
@@ -1008,10 +828,7 @@ window.updateFirebasePendingBadge = function(count, lanStatus) {
 
 // Auto-flush Firebase sync queue when internet comes back
 window.addEventListener('online', () => {
-    if (LanStorageService.isConnected()) {
-        console.log('[SYNC] Network restored. Flushing pending Firebase queue...');
-        LanStorageService.flushSyncQueue().catch(e => console.warn('[SYNC] Flush failed:', e.message));
-    }
+
 });
 
 
@@ -1079,11 +896,11 @@ function isFirestoreQuotaBlocked() {
 function activateFirestoreQuotaCooldown(err) {
     _firestoreQuotaBlockedUntilMs = Date.now() + FIRESTORE_QUOTA_COOLDOWN_MS;
     try { localStorage.setItem(FIRESTORE_QUOTA_UNTIL_KEY, String(_firestoreQuotaBlockedUntilMs)); } catch (e) {}
-    enableSheetsFallbackMode();
+    updateBackendModeBanner();
     const now = Date.now();
     if (now - _firestoreQuotaLastToastMs > 60000) {
         _firestoreQuotaLastToastMs = now;
-        showToast('Firestore quota exceeded. App switched to cached mode for 10 minutes.', 'error');
+        showToast('Firestore quota reached. Your edits remain unsaved. Keep this tab open and retry later.', 'error');
     }
     console.warn('Firestore quota cooldown active until:', new Date(_firestoreQuotaBlockedUntilMs).toISOString(), err);
 }
@@ -1094,7 +911,7 @@ function restoreFirestoreQuotaCooldown() {
         const ms = parseInt(raw, 10);
         if (Number.isFinite(ms) && ms > Date.now()) {
             _firestoreQuotaBlockedUntilMs = ms;
-            _useSheetsFallbackMode = true;
+            updateBackendModeBanner();
         } else {
             localStorage.removeItem(FIRESTORE_QUOTA_UNTIL_KEY);
         }
@@ -1111,14 +928,10 @@ function getTomorrowRecoveryLabel() {
 }
 
 function updateBackendModeBanner() {
-    const el = document.getElementById('backend-mode-banner');
-    if (!el) return;
-    if (_useSheetsFallbackMode || isFirestoreQuotaBlocked()) {
-        el.classList.remove('hidden');
-        el.innerHTML = `<i class='bx bx-error-circle'></i><span>Firebase server down. Please use the app from tomorrow 1:00 PM. Loading from Google Sheets (Slow).</span>`;
-    } else {
-        el.classList.add('hidden');
-    }
+ const el = document.getElementById('backend-mode-banner');
+ if (!el) return;
+ el.classList.toggle('hidden', !isFirestoreQuotaBlocked());
+ el.textContent = 'Firestore quota reached. Edits are unsaved; keep this tab open and retry later.';
 }
 
 function setLoaderStatus(text) {
@@ -1460,7 +1273,7 @@ function scheduleQuickWriteFlush(delayMs = 1200) {
         } catch (e) {
             if (isFirestoreQuotaError(e)) {
                 activateFirestoreQuotaCooldown(e);
-                loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS).catch(() => null);
+
             }
             console.warn('Quick flush failed:', e);
         }
@@ -1500,65 +1313,22 @@ function buildPendingOrderOverrideKey(companyId, date, accountId, accountName) {
 }
 
 function setPendingOrderOverride(date, accountId, accountName, value, companyId, field = 'meesho') {
-    const safeCompanyId = String(companyId || '').trim();
-    const safeDate = normalizeToISODate(date);
-    if (!safeCompanyId || !safeDate) return;
-    const safeAccountId = String(accountId || '').trim();
-    const safeName = String(accountName || '').trim();
-    const qty = parseInt(value) || 0;
-    const key = buildPendingOrderOverrideKey(safeCompanyId, safeDate, safeAccountId, safeName);
-    const existing = _pendingOrderOverrides.get(key) || {};
-    const safeField = field === 'flipkart' ? 'flipkart' : 'meesho';
-    const meeshoVal = safeField === 'meesho' ? qty : (parseInt(existing.meesho) || 0);
-    const flipkartVal = safeField === 'flipkart' ? qty : (parseInt(existing.flipkart) || 0);
-    const totalVal = meeshoVal + flipkartVal;
-    _pendingOrderOverrides.set(key, {
-        companyId: safeCompanyId,
-        date: safeDate,
-        accountId: safeAccountId,
-        accountName: safeName,
-        meesho: meeshoVal,
-        flipkart: flipkartVal,
-        total: totalVal,
-        quantity: totalVal,
-        updatedAtMs: Date.now()
-    });
+ const key = buildPendingOrderOverrideKey(companyId, date, accountId, accountName);
+ const previous = _pendingOrderOverrides.get(key) || {};
+ _pendingOrderOverrides.set(key, {...previous, companyId, date:normalizeToISODate(date), accountId, accountName,
+ [field]:Number(value)||0, updatedAtMs:Date.now()});
 }
 
 function applyPendingOrderOverrides(list, companyId) {
-    const safeCompanyId = String(companyId || '').trim();
-    const target = Array.isArray(list) ? list.slice() : [];
-    const now = Date.now();
-
-    _pendingOrderOverrides.forEach((ov, key) => {
-        if (ov.companyId !== safeCompanyId) return;
-        if ((now - (ov.updatedAtMs || now)) > 10 * 60 * 1000) {
-            _pendingOrderOverrides.delete(key);
-            return;
-        }
-
-        const idx = target.findIndex(r => {
-            if (normalizeToISODate(r.date) !== ov.date) return false;
-            const rid = String(r.accountId || '').trim();
-            if (ov.accountId) return rid === ov.accountId;
-            return !rid && String(r.accountName || '').trim().toLowerCase() === String(ov.accountName || '').trim().toLowerCase();
-        });
-
-        if (idx >= 0) {
-            const serverM = parseInt(target[idx]?.meesho) || 0;
-            const serverF = parseInt(target[idx]?.flipkart) || 0;
-            if (serverM === ov.meesho && serverF === ov.flipkart) {
-                _pendingOrderOverrides.delete(key);
-                return;
-            }
-            target[idx] = { ...target[idx], ...ov };
-            return;
-        }
-
-        target.push({ ...ov });
-    });
-
-    return target.sort((a, b) => (normalizeToISODate(b.date) > normalizeToISODate(a.date) ? 1 : -1));
+ const rows = (list || []).map(row => ({...row}));
+ _pendingOrderOverrides.forEach(override => {
+  if (override.companyId !== companyId) return;
+  let row = rows.find(row => row.date === override.date && row.accountId === override.accountId);
+  if (!row) { row = {meesho:0,flipkart:0}; rows.push(row); }
+  Object.assign(row, override);
+  row.total = (Number(row.meesho)||0)+(Number(row.flipkart)||0);
+ });
+ return rows;
 }
 
 function setSheetBackupIndicator(state = 'idle', label = 'Sheet idle') {
@@ -1702,36 +1472,7 @@ async function syncOrdersDirectToSheet(date, orders, companyId, reason = 'orders
     return response;
 }
 
-async function syncOrderDateForAllCompanies(date, options = {}, reason = 'orders_daily') {
-    const safeDate = normalizeToISODate(date);
-    if (!safeDate) return { success: false, skipped: true, message: 'Invalid date' };
-
-    const errors = [];
-
-    for (const cid of ['company1', 'company2']) {
-        let rows = [];
-        try {
-            const dailyRes = await FirebaseService.getOrderRowsForDate(cid, safeDate);
-            rows = Array.isArray(dailyRes?.data) ? dailyRes.data : [];
-        } catch (e) {
-            errors.push(`${cid}: ${e?.message || 'read failed'}`);
-            continue;
-        }
-
-        if (!rows.length) continue;
-
-        try {
-            await syncOrdersDirectToSheet(safeDate, rows, cid, `${reason}_${cid}`);
-        } catch (e) {
-            errors.push(`${cid}: ${e?.message || 'sheet sync failed'}`);
-        }
-    }
-
-    if (errors.length > 0) {
-        throw new Error(errors.join(' | '));
-    }
-    return { success: true };
-}
+async function syncOrderDateForAllCompanies() { }
 
 function buildOrderKeySet(rows) {
     const set = new Set();
@@ -1787,124 +1528,11 @@ function resumeSheetSyncIfPending() {
     }, 1200);
 }
 
-function scheduleBackgroundSheetBackup(reason = '') {
-    _backgroundSheetBackupQueued = true;
-    setPersistentSheetSyncPending(reason || 'queued');
-    setSheetBackupIndicator('queued', 'Sheet queued');
-    if (_backgroundSheetBackupTimer) clearTimeout(_backgroundSheetBackupTimer);
-    _backgroundSheetBackupTimer = setTimeout(() => {
-        runBackgroundSheetBackup(reason).catch(e => console.warn('Background sheet backup failed:', e));
-    }, 800);
-}
+function scheduleBackgroundSheetBackup() { /* Firestore is the sole data store. */ }
 
-async function runBackgroundSheetBackup(reason = '') {
-    if (isFirestoreQuotaBlocked()) {
-        setSheetBackupIndicator('queued', 'Sheet queued (quota cooldown)');
-        return;
-    }
-    if (_backgroundSheetBackupInFlight) return;
-    if (!_backgroundSheetBackupQueued && !_pendingDataChangesForBackup) return;
-    _backgroundSheetBackupInFlight = true;
-    setSheetBackupIndicator('running', 'Sheet syncing');
-    _backgroundSheetBackupQueued = false;
-    let success = false;
-    try {
-        const reasonText = String(reason || 'auto_change');
-        const shouldVerifyOrders = /reconcile|resume|startup|retry/i.test(reasonText);
-        await backupToSheets(true, { skipArchive: true, reason: reasonText, verifyOrders: shouldVerifyOrders });
-        success = true;
-        _backgroundSheetRetryCount = 0;
-        setSheetBackupIndicator('success', 'Sheet synced');
-        setTimeout(() => {
-            if (!_backgroundSheetBackupInFlight && !_backgroundSheetBackupQueued) {
-                setSheetBackupIndicator('idle', 'Sheet idle');
-            }
-        }, 2500);
-    } catch (e) {
-        _backgroundSheetRetryCount = Math.min(_backgroundSheetRetryCount + 1, 8);
-        setSheetBackupIndicator('error', 'Sheet sync error');
-        throw e;
-    } finally {
-        _backgroundSheetBackupInFlight = false;
-        if (success) {
-            _pendingDataChangesForBackup = false;
-            clearPersistentSheetSyncPending();
-        } else {
-            _pendingDataChangesForBackup = true;
-            setPersistentSheetSyncPending(reason || 'retry');
-            const retryDelay = Math.min(180000, 3000 * Math.pow(2, Math.max(0, _backgroundSheetRetryCount - 1)));
-            if (_backgroundSheetBackupTimer) clearTimeout(_backgroundSheetBackupTimer);
-            _backgroundSheetBackupTimer = setTimeout(() => {
-                runBackgroundSheetBackup('retry').catch(() => null);
-            }, retryDelay);
-        }
-        if (_backgroundSheetBackupQueued && !_backgroundSheetBackupInFlight) {
-            runBackgroundSheetBackup('queued').catch(() => null);
-        }
-    }
-}
+async function runBackgroundSheetBackup() { await FirebaseService.flushWrites(); }
 
-function startAdminAutoSync() {
-    if (_adminAutoSyncTimer) clearInterval(_adminAutoSyncTimer);
-    if (_adminRealtimeRefreshTimer) clearInterval(_adminRealtimeRefreshTimer);
-    if (!isAdminUser()) return;
-    _adminAutoSyncTimer = setInterval(async () => {
-        try {
-            if (_useSheetsFallbackMode && !isFirestoreQuotaBlocked()) {
-                try {
-                    await fetchAllCompaniesData({ refreshArchiveMonths: false, enableBackgroundSync: false });
-                    disableSheetsFallbackMode();
-                } catch (e) {}
-                return;
-            }
-            if (isFirestoreQuotaBlocked()) return;
-            if (document.hidden) return;
-            if (_pendingDataChangesForBackup || _backgroundSheetBackupQueued) {
-                await FirebaseService.flushWrites();
-                await runBackgroundSheetBackup('interval');
-                return;
-            }
-            const staleMs = _lastSheetBackupSuccessMs > 0 ? (Date.now() - _lastSheetBackupSuccessMs) : Number.MAX_SAFE_INTEGER;
-            if (!_backgroundSheetBackupInFlight && staleMs >= SHEET_RECONCILE_MAX_STALE_MS) {
-                _pendingDataChangesForBackup = true;
-                scheduleBackgroundSheetBackup('reconcile');
-            }
-        } catch (e) {
-            console.warn('Admin background sync skipped:', e);
-        }
-    }, 45000);
-
-    // Near real-time refresh so cross-account updates show quickly for admin.
-    _adminRealtimeRefreshTimer = setInterval(async () => {
-        if (!isAdminUser()) return;
-        if (isFirestoreQuotaBlocked()) return;
-        if (document.hidden || AppState.isSwitchingCompany || _adminRealtimeBusy) return;
-        if (AppState.currentSection === 'data-sheet' && isDataSheetEditActive()) return;
-        const pendingWrites = typeof FirebaseService !== 'undefined' && FirebaseService.getPendingCount
-            ? FirebaseService.getPendingCount()
-            : 0;
-        const syncStatus = typeof FirebaseService !== 'undefined' && FirebaseService.getSyncStatus
-            ? FirebaseService.getSyncStatus()
-            : 'idle';
-        if (pendingWrites > 0 || syncStatus === 'pending' || syncStatus === 'syncing') return;
-        _adminRealtimeBusy = true;
-        try {
-            if (AppState.currentSection === 'karigar') {
-                await loadKarigarData(true);
-                renderKarigarGrid();
-            } else if (AppState.currentSection === 'dashboard') {
-                await fetchAllCompaniesData({ refreshArchiveMonths: false, enableBackgroundSync: false });
-                renderDashboard();
-            } else if (AppState.currentSection === 'size-prices') {
-                await renderSizePricesPage();
-            }
-        } catch (e) {
-            console.warn('Admin realtime refresh skipped:', e);
-        } finally {
-            _adminRealtimeBusy = false;
-        }
-    }, 15000);
-}
+function startAdminAutoSync() { /* Explicit refresh avoids repeated full-history reads. */ }
 
 // ===== FIREBASE → LAN PULL SYNC (background, cross-profile) =====
 // When admin's LAN is connected, periodically pull latest Firebase data into admin's folder.
@@ -1912,72 +1540,23 @@ function startAdminAutoSync() {
 let _lanPullTimer = null;
 let _lastVisibilityPullMs = 0;
 
-function startLanFirebasePullSync() {
-    if (_lanPullTimer) clearInterval(_lanPullTimer);
 
-    _lanPullTimer = setInterval(async () => {
-        try {
-            if (!LanStorageService.isConnected()) return;
-            if (document.hidden) return;
-            if (isFirestoreQuotaBlocked && isFirestoreQuotaBlocked()) return;
-            // Don't pull while user is actively editing the data sheet
-            if (typeof isDataSheetEditActive === 'function' && isDataSheetEditActive()) return;
-
-            const result = await LanStorageService.pullLatestFromFirebase();
-            if (result && result.pulled > 0) {
-                console.log(`[PULL SYNC] Pulled ${result.pulled} records from Firebase → LAN folder.`);
-                // Silently refresh the current view if it shows data
-                const sec = AppState.currentSection;
-                if (sec === 'dashboard') renderDashboard();
-                else if (sec === 'data-sheet' && !(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) renderDataSheet();
-                else if (sec === 'daily-order' && !(typeof isDataSheetEditActive === 'function' && isDataSheetEditActive())) renderOrderEntryTable();
-            }
-        } catch (e) {
-            console.warn('[PULL SYNC] Background pull skipped:', e.message);
-        }
-    }, 90 * 1000); // Every 90 seconds
-}
 
 async function refreshAppDataManually() {
-    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-        showLoader('Refreshing local data...');
-        try {
-            await Promise.all([
-                fetchAccounts(),
-                fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
-            ]);
-            await loadAvailableSheetMonths(true);
-            if (AppState.currentSection === 'data-sheet') renderDataSheet();
-            showToast('Local data refreshed successfully!', 'success');
-        } catch (e) {
-            console.error(e);
-            showToast('Failed to refresh local data: ' + e.message, 'error');
-        } finally {
-            hideLoader();
-        }
-        return;
-    }
-
-    if (window.LanStorageService && window.LanStorageService.hasSavedHandle()) {
-        showLoader('Reconnecting shared folder...');
-        try {
-            const reconnected = await LanStorageService.autoReconnect();
-            if (reconnected && LanStorageService.isConnected()) {
-                await Promise.all([
-                    fetchAccounts(),
-                    fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
-                ]);
-                await loadAvailableSheetMonths(true);
-                if (AppState.currentSection === 'data-sheet') renderDataSheet();
-                showToast('Reconnected and refreshed local data!', 'success');
-                hideLoader();
-                return;
-            }
-        } catch (e) {}
-        hideLoader();
-    }
-    showToast('Please link your shared LAN folder first.', 'info');
-    showFolderSetupScreen();
+ document.activeElement?.blur();
+ showLoader('Refreshing Firestore…');
+ try {
+  await FirebaseService.flushWrites();
+  _apiReadCache.clear();
+  _remarkCacheLoaded = false;
+  await CloudState.load();
+  await fetchAllCompaniesData();
+  await fetchAccounts();
+  AppState.karigarCacheByCompany = {};
+  navigateTo(AppState.currentSection);
+  showToast('Firestore data refreshed', 'success');
+ } catch (error) { showToast(error.message, 'error'); }
+ finally { hideLoader(); }
 }
 
 
@@ -1987,20 +1566,17 @@ async function switchCompany(previousCompany = '') {
     if (AppState.isSwitchingCompany) return;
     AppState.isSwitchingCompany = true;
     const companyName = getCompanyDisplayName(AppState.currentCompany);
-    
+
     // START MAGICAL TRANSITION
     triggerMagicalTransition(companyName, true);
-    
+
     setCompanyButtonsDisabled(true);
     showProgressToast(`Switching to ${companyName}...`);
 
     try {
         // Soft flush with short timeout so switch remains instant.
         if (typeof FirebaseService !== 'undefined') {
-            await Promise.race([
-                FirebaseService.flushWrites().catch(() => null),
-                new Promise(resolve => setTimeout(resolve, 300))
-            ]);
+            await FirebaseService.flushWrites();
         }
 
         // Instant swap from in-memory company cache (no flicker).
@@ -2037,16 +1613,16 @@ async function switchCompany(previousCompany = '') {
         else if (AppState.currentSection === 'add-account') renderAccountsList();
         else if (AppState.currentSection === 'karigar') await renderKarigarPage(true);
         else if (AppState.currentSection === 'size-prices') renderSizePricesPage();
-        else if (AppState.currentSection === 'data-sheet') { 
+        else if (AppState.currentSection === 'data-sheet') {
             const cmFilter = document.getElementById('sheet-company-filter');
             if (cmFilter) cmFilter.value = AppState.currentCompany;
-            populateSheetMonthFilter(); 
-            renderDataSheet(); 
+            populateSheetMonthFilter();
+            renderDataSheet();
         }
         updateOrderCompanyLabel();
-        
+
         showToast(`Switched to ${companyName} successfully!`, "success");
-    } catch (err) { 
+    } catch (err) {
         if (previousCompany && previousCompany !== AppState.currentCompany) {
             AppState.currentCompany = previousCompany;
             localStorage.setItem('selectedCompany', previousCompany);
@@ -2055,7 +1631,7 @@ async function switchCompany(previousCompany = '') {
             });
         }
         updateOrderCompanyLabel();
-        showToast("Error loading company data", "error"); 
+        showToast("Error loading company data", "error");
     } finally {
         AppState.isSwitchingCompany = false;
         setCompanyButtonsDisabled(false);
@@ -2099,7 +1675,7 @@ function typeWriterEffect(element, text, speed = 50, callback) {
     element.innerHTML = '<span class="typing-text"></span>';
     const span = element.querySelector('.typing-text');
     let i = 0;
-    
+
     function type() {
         if (i < text.length) {
             span.textContent += text.charAt(i);
@@ -2122,7 +1698,7 @@ function checkAuth() {
     const savedName = localStorage.getItem('userName');
     const savedUsername = localStorage.getItem('userUsername');
     const savedAllowedCompanies = localStorage.getItem('userAllowedCompanies');
-    
+
     if (isLogged && savedRole) {
         let allowedCompanies = null;
         try {
@@ -2144,33 +1720,21 @@ function checkAuth() {
             AppState.currentCompany = getAllowedCompanies()[0] || 'company1';
             localStorage.setItem('selectedCompany', AppState.currentCompany);
         }
-        document.getElementById('folder-setup-screen').classList.add('hidden');
+
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app-screen').classList.remove('hidden');
         applyRolePermissions();
         updateBackendModeBanner();
         startAdminAutoSync();
         // ── Start background Firebase→LAN pull sync (keeps admin folder up-to-date with Dhyan's orders) ──
-        startLanFirebasePullSync();
         loadInitialData();
         // Do an immediate first pull so admin sees cross-profile data right away after login
-        if (LanStorageService.isConnected()) {
-            setTimeout(() => {
-                LanStorageService.pullLatestFromFirebase({ force: true }).then(r => {
-                    if (r && r.pulled > 0) {
-                        console.log(`[PULL SYNC] Initial pull: ${r.pulled} records merged.`);
-                        if (typeof clearApiReadCache === 'function') clearApiReadCache();
-                    }
-                }).catch(e => console.warn('[PULL SYNC] Initial pull failed:', e.message));
-            }, 3000); // 3s delay — let loadInitialData complete first
-        }
+
 
     } else {
         // Not logged in — show login or folder-setup
         document.getElementById('app-screen').classList.add('hidden');
-        if (!LanStorageService.hasSavedHandle()) {
-            showFolderSetupScreen();
-        } else {
+        {
             showLoginScreen();
         }
         updateBackendModeBanner();
@@ -2190,9 +1754,7 @@ function checkAuth() {
 }
 
 
-function isLocalDatabaseReorganized() {
-    return localStorage.getItem('krimaa_local_wipe_completed') === 'true';
-}
+function isLocalDatabaseReorganized() { return true; }
 
 function updateReorganizeGates() {
     const isClean = isLocalDatabaseReorganized();
@@ -2222,72 +1784,14 @@ function updateReorganizeGates() {
     }
 }
 
-async function executeLocalDatabaseReorganize() {
-    showLoader('Reorganizing local database & clearing previous data...');
-    try {
-        // 1. Wipe local LAN files
-        if (window.LanStorageService && LanStorageService.isConnected()) {
-            try {
-                await LanStorageService.writeFile('karigars', []);
-                await LanStorageService.writeFile('karigar_transactions', []);
-                await LanStorageService.writeFile('karigar_reset_backups', []);
-                await LanStorageService.writeFile('design_prices', []);
-                await LanStorageService.writeFile('design_price_history', []);
-                await LanStorageService.writeFile('clean_wipe_v1', {
-                    completedAt: new Date().toISOString(),
-                    user: AppState.currentUser?.username || 'admin'
-                });
-            } catch (lanErr) {
-                console.warn('[LAN] Write error during reorganize:', lanErr);
-            }
-        }
-
-        // 2. Clear browser LocalStorage caches
-        try {
-            localStorage.removeItem('krimaa_size_prices_backup');
-            localStorage.removeItem('krimaa_size_price_history_backup');
-            localStorage.removeItem('karigar_paid_status');
-            localStorage.removeItem('karigar_reset_backups');
-            localStorage.setItem('krimaa_local_wipe_completed', 'true');
-        } catch (e) {}
-
-        // 3. Reset in-memory AppState
-        AppState.karigars = [];
-        AppState.karigarTransactions = [];
-        AppState.karigarResetBackups = [];
-        AppState.karigarResetBackupsByCompany = {};
-        AppState.viewingKarigarBackupId = null;
-        AppState.karigarPaidStatus = {};
-        AppState.karigarStatsById = {};
-        AppState.karigarTransactionsById = {};
-        AppState.designPrices = {};
-        AppState.designPricesByCompany = {};
-        AppState.designPriceHistoryByCompany = {};
-
-        if (typeof invalidateAllKarigarCaches === 'function') invalidateAllKarigarCaches();
-
-        // 4. Update UI gates (unlocks both sections and hides the button permanently!)
-        updateReorganizeGates();
-
-        // 5. Re-render both sections to fresh clean states
-        if (typeof renderKarigarPage === 'function') await renderKarigarPage(true);
-        if (typeof loadSizePrices === 'function') await loadSizePrices();
-
-        showToast('✅ Local database reorganized! Previous records removed. You can now start fresh.', 'success');
-    } catch (err) {
-        console.error('executeLocalDatabaseReorganize failed:', err);
-        showToast('Failed to reorganize database: ' + (err.message || 'Unknown error'), 'error');
-    } finally {
-        hideLoader();
-    }
-}
+async function executeLocalDatabaseReorganize() { showToast('Firestore migration is complete.', 'info'); }
 
 function applyRolePermissions() {
     const role = AppState.currentUser?.role;
     const userInfo = document.getElementById('sidebar-user-info');
     const displayName = AppState.currentUser?.displayName || localStorage.getItem('userName') || 'User';
     if (userInfo) userInfo.innerHTML = `<span>${displayName}</span>`;
-    
+
     const navDash = document.getElementById('nav-dashboard');
     const navSheet = document.getElementById('nav-data-sheet');
     const navAccounts = document.getElementById('nav-manage-accounts');
@@ -2342,65 +1846,6 @@ function attachEventListeners() {
         btn.addEventListener('click', executeLocalDatabaseReorganize);
     });
 
-    // ──── Folder Setup Screen ────
-    const folderSetupLinkBtn = document.getElementById('folder-setup-link-btn');
-    const folderSetupContinueBtn = document.getElementById('folder-setup-continue-btn');
-    const folderSetupSkipBtn = document.getElementById('folder-setup-skip-btn');
-    const loginChangeFolderBtn = document.getElementById('login-change-folder-btn');
-    const folderSetupStatus = document.getElementById('folder-setup-status');
-
-    if (folderSetupSkipBtn) {
-        folderSetupSkipBtn.addEventListener('click', () => {
-            document.getElementById('folder-setup-screen').classList.add('hidden');
-            checkAuth();
-        });
-    }
-
-    if (folderSetupLinkBtn) {
-        folderSetupLinkBtn.addEventListener('click', async () => {
-            folderSetupLinkBtn.disabled = true;
-            folderSetupLinkBtn.innerHTML = '<i class="bx bx-loader-alt bx-spin"></i> Linking...';
-            const res = await LanStorageService.connect();
-            folderSetupLinkBtn.disabled = false;
-            folderSetupLinkBtn.innerHTML = '<i class="bx bx-folder-open"></i> Select Shared Folder';
-            if (res.success) {
-                if (folderSetupStatus) {
-                    folderSetupStatus.style.background = '#f0fdf4';
-                    folderSetupStatus.style.borderColor = '#86efac';
-                    folderSetupStatus.style.color = '#166534';
-                    folderSetupStatus.innerHTML = '<i class="bx bx-check-circle"></i> Folder linked successfully!';
-                }
-                if (folderSetupContinueBtn) folderSetupContinueBtn.classList.remove('hidden');
-                showToast('Folder linked! Click "Continue to Login" to proceed.', 'success');
-            } else {
-                if (res.error && res.error.includes('aborted')) {
-                    console.log('Folder selection aborted by user.');
-                } else {
-                    showToast('Failed to link folder: ' + (res.error || 'Unknown error'), 'error');
-                }
-            }
-        });
-    }
-
-    if (folderSetupContinueBtn) {
-        folderSetupContinueBtn.addEventListener('click', () => showLoginScreen());
-    }
-
-    if (loginChangeFolderBtn) {
-        loginChangeFolderBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            LanStorageService.disconnect();
-            showFolderSetupScreen();
-            if (folderSetupStatus) {
-                folderSetupStatus.style.background = '#f1f5f9';
-                folderSetupStatus.style.borderColor = '#e2e8f0';
-                folderSetupStatus.style.color = '#475569';
-                folderSetupStatus.innerHTML = '<i class="bx bx-info-circle"></i> Select a new folder to link.';
-            }
-            if (folderSetupContinueBtn) folderSetupContinueBtn.classList.add('hidden');
-        });
-    }
-
     // ──── Login Form ────
     document.getElementById('login-form')?.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -2411,11 +1856,11 @@ function attachEventListeners() {
         }
         const user = String(document.getElementById('username')?.value || '').trim();
         const pass = String(document.getElementById('password')?.value || '');
-        
+
         const foundUser = USERS.find(u => u.username.toLowerCase() === user.toLowerCase() && u.password === pass);
         if (foundUser) {
             // ── Activate per-profile LAN folder before session is set ──
-            LanStorageService.setActiveProfile(foundUser.username);
+
 
             localStorage.setItem('isLogged', 'true');
             localStorage.setItem('userRole', foundUser.role);
@@ -2462,10 +1907,10 @@ function attachEventListeners() {
             if (btn.disabled || btn.classList.contains('is-disabled') || AppState.isSwitchingCompany) return;
             const targetCompany = btn.dataset.company;
             if (AppState.currentCompany === targetCompany) return;
-            
+
             document.querySelectorAll('.company-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            
+
             const prev = AppState.currentCompany;
             AppState.currentCompany = targetCompany;
             switchCompany(prev);
@@ -2474,16 +1919,18 @@ function attachEventListeners() {
 
     // Navigation
     document.querySelectorAll('.nav-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', async (e) => {
             if (btn.id === 'logout-btn') {
                 e.preventDefault();
+                document.activeElement?.blur();
+                try { await FirebaseService.flushWrites(); } catch(error) { showToast('Save failed. Keep this tab open and retry before logging out.', 'error'); return; }
                 localStorage.removeItem('isLogged');
                 localStorage.removeItem('userRole');
                 localStorage.removeItem('userName');
                 localStorage.removeItem('userUsername');
                 localStorage.removeItem('userAllowedCompanies');
                 AppState.currentUser = null;
-                LanStorageService.setActiveProfile(null);
+
                 // Clear #dhyan hash on logout so next user starts fresh
                 if (window.location.hash) window.location.hash = '';
                 checkAuth();
@@ -2491,13 +1938,13 @@ function attachEventListeners() {
             }
             e.preventDefault();
             const target = btn.getAttribute('data-target');
-            
+
             // Check permissions
             if (target === 'add-account' && !canManageAccounts()) {
                 showToast("You don't have permission to manage accounts", "error");
                 return;
             }
-            
+
             navigateTo(target);
             const sidebar = document.getElementById('sidebar');
             if(window.innerWidth <= 768 && sidebar.classList.contains('open')) closeMobileSidebar();
@@ -2545,7 +1992,7 @@ function attachEventListeners() {
         document.getElementById('new-account-name').value = '';
         if (document.getElementById('new-account-mobile')) document.getElementById('new-account-mobile').value = '';
         if (document.getElementById('new-account-recharge')) document.getElementById('new-account-recharge').value = '';
-        
+
         const container = document.getElementById('active-account-list');
         const tempId = 'temp-' + Date.now();
         const tempHtml = `<div id="${tempId}" class="account-item" style="opacity: 0.6; border: 1px dashed var(--primary);"><i class='bx bx-loader-alt bx-spin'></i><span class="account-name">${accountName} <small class="text-muted">(Syncing...)</small></span></div>`;
@@ -2607,7 +2054,7 @@ function attachEventListeners() {
     // Modal closes
     document.getElementById('close-modal-btn')?.addEventListener('click', () => document.getElementById('order-details-modal').classList.remove('show'));
     document.getElementById('order-details-modal')?.addEventListener('click', (e) => { if(e.target.id === 'order-details-modal') e.target.classList.remove('show'); });
-    
+
 
     document.getElementById('close-edit-modal-btn')?.addEventListener('click', () => document.getElementById('edit-account-modal').classList.remove('show'));
     document.getElementById('edit-account-modal')?.addEventListener('click', (e) => { if(e.target.id === 'edit-account-modal') e.target.classList.remove('show'); });
@@ -2629,12 +2076,12 @@ function attachEventListeners() {
         showLoader();
         try {
             const res = await apiRequest({ action: 'deleteAccount', accountId, companyId: AppState.currentCompany });
-            if (res.success) { 
-                showToast("Account deleted!", "success"); 
-                document.getElementById('delete-account-modal').classList.remove('show'); 
-                await fetchAccounts(); 
-                renderAccountsList(); 
-                try { await fetchAllCompaniesData(); } catch (e) {} 
+            if (res.success) {
+                showToast("Account deleted!", "success");
+                document.getElementById('delete-account-modal').classList.remove('show');
+                await fetchAccounts();
+                renderAccountsList();
+                try { await fetchAllCompaniesData(); } catch (e) {}
             }
             else showToast(res.message || "Failed to delete", "error");
         } catch(err) { showToast("Network Error!", "error"); }
@@ -2686,7 +2133,7 @@ window.addEventListener('appinstalled', (evt) => {
 });
 
 function navigateTo(sectionId) {
-    
+
     // Permission check for order / restricted roles
     if (sectionId === 'add-account' && !canManageAccounts()) {
         showToast("Access denied", "error"); return;
@@ -2702,7 +2149,7 @@ function navigateTo(sectionId) {
     if ((AppState.currentUser?.role === 'order' || AppState.currentUser?.role === 'order_c2') && (sectionId === 'dashboard' || sectionId === 'money-management' || sectionId === 'money-backup')) {
         showToast("Access denied", "error"); return;
     }
-    
+
     AppState.currentSection = sectionId;
     try {
         localStorage.setItem('krimaa_active_section', sectionId);
@@ -2710,7 +2157,7 @@ function navigateTo(sectionId) {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     const activeBtn = document.querySelector(`[data-target="${sectionId}"]`);
     if(activeBtn) activeBtn.classList.add('active');
-    
+
     const titles = {
         'dashboard': 'Dashboard',
         'daily-order': 'Daily Order Entry',
@@ -2721,11 +2168,11 @@ function navigateTo(sectionId) {
         'karigar': 'Karigar Management',
         'size-prices': 'Size Price Management'
     };
-    
+
     // Update global title if it exists, and section-specific title
     const globalTitle = document.getElementById('page-title');
     if (globalTitle) globalTitle.textContent = titles[sectionId];
-    
+
     document.querySelectorAll('.content-section').forEach(sec => sec.classList.remove('active'));
     const targetSec = document.getElementById(sectionId);
     if (targetSec) {
@@ -2746,10 +2193,10 @@ function navigateTo(sectionId) {
     else if (sectionId === 'money-backup') renderMoneyBackupPage();
     else if (sectionId === 'karigar') renderKarigarPage(true);
     else if (sectionId === 'size-prices') renderSizePricesPage();
-    else if (sectionId === 'data-sheet') { 
+    else if (sectionId === 'data-sheet') {
         document.getElementById('sheet-company-filter').value = AppState.currentCompany;
         loadAvailableSheetMonths().then(() => populateSheetMonthFilter());
-        renderDataSheet(); 
+        renderDataSheet();
     }
 }
 
@@ -2804,26 +2251,26 @@ async function autoFixMismatchedAccountNames() {
         console.log("Checking for mismatched account names in historical daily_orders...");
         let changed = false;
         const db = FirebaseService.getDb();
-        
+
         const accountsC1Snap = await db.collection('accounts').where('companyId', '==', 'company1').get();
         const accountsC2Snap = await db.collection('accounts').where('companyId', '==', 'company2').get();
-        
+
         const accountsC1 = [];
         const accountsC2 = [];
         accountsC1Snap.forEach(d => accountsC1.push(d.data().name));
         accountsC2Snap.forEach(d => accountsC2.push(d.data().name));
-        
+
         const ordSnap = await db.collection('daily_orders').get();
         const ops = [];
-        
+
         ordSnap.forEach(doc => {
             const data = doc.data();
             const companyId = data.companyId;
             const validAccounts = companyId === 'company1' ? accountsC1 : accountsC2;
-            
+
             let docChanged = false;
             const newAccs = [...(data.accounts || [])];
-            
+
             for(let i=0; i<newAccs.length; i++) {
                 const oldName = newAccs[i];
                 if (!validAccounts.includes(oldName)) {
@@ -2849,7 +2296,7 @@ async function autoFixMismatchedAccountNames() {
                 changed = true;
             }
         });
-        
+
         if (changed && ops.length > 0) {
             const CHUNK = 450;
             for (let i = 0; i < ops.length; i += CHUNK) {
@@ -2867,10 +2314,7 @@ async function autoFixMismatchedAccountNames() {
 
 function runStartupMaintenanceInBackground() {
     if (_startupMaintenanceRunning) return;
-    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-        console.log("🚀 [MAINTENANCE] Skipped cloud maintenance in LAN mode.");
-        return;
-    }
+
     _startupMaintenanceRunning = true;
     setTimeout(async () => {
         try {
@@ -2952,65 +2396,16 @@ async function hydrateRecent30DaysFromSheetsToFirebase() {
 }
 
 async function loadInitialData() {
-    try {
-        console.log("🚀 [INIT] Starting Krimaa app...");
-        AppState.karigarCacheByCompany = {};
-        FirebaseService.init();
-
-        // ═══ LAN-FIRST MODE (primary path) ═══
-        if (LanStorageService.isConnected()) {
-            showLoader('Loading local data...');
-            console.log("🚀 [INIT] ✅ LAN connected — loading from local folder");
-            
-            await Promise.all([
-                fetchAccounts(),
-                fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
-            ]);
-
-            await loadAvailableSheetMonths(true).catch(e => console.warn('[INIT] Month list fetch:', e));
-            
-            // Refresh pending badge
-            window.updateFirebasePendingBadge(0, 'connected');
-
-            console.log("🚀 [INIT] LAN data ready. Booting UI.");
-            const savedSec = localStorage.getItem('krimaa_active_section') || 'data-sheet';
-            navigateTo(savedSec);
-            return;
-        }
-
-        // Check if saved handle exists and try auto-reconnect
-        if (LanStorageService.hasSavedHandle()) {
-            showLoader('Reconnecting shared folder...');
-            try {
-                const reconnected = await LanStorageService.autoReconnect();
-                if (reconnected && LanStorageService.isConnected()) {
-                    await Promise.all([
-                        fetchAccounts(),
-                        fetchAllCompaniesData({ refreshArchiveMonths: false, skipSheetMerge: true })
-                    ]);
-                    await loadAvailableSheetMonths(true).catch(() => {});
-                    window.updateFirebasePendingBadge(0, 'connected');
-                    console.log("🚀 [INIT] LAN reconnected. Booting UI.");
-                    const savedSec = localStorage.getItem('krimaa_active_section') || 'data-sheet';
-                    navigateTo(savedSec);
-                    return;
-                }
-            } catch (reconErr) {
-                console.warn('[INIT] Auto-reconnect failed:', reconErr);
-            }
-        }
-
-        // If folder not linked or needs user gesture to unlock
-        hideLoader();
-        showFolderSetupScreen();
-        return;
-
-    } catch (err) {
-        console.error('[INIT] Failed:', err);
-        showToast("Error loading data: " + (err?.message || 'Unknown error'), "error");
-    } finally {
-        hideLoader();
-    }
+ showLoader('Loading Firestore data…');
+ try {
+  FirebaseService.init();
+  await CloudState.load();
+  await fetchAllCompaniesData();
+  await fetchAccounts();
+  await loadAvailableSheetMonths(true);
+  navigateTo(localStorage.getItem('krimaa_active_section') || 'data-sheet');
+ } catch (error) { showToast('Unable to load Firestore: '+error.message, 'error'); }
+ finally { hideLoader(); }
 }
 
 
@@ -3021,7 +2416,7 @@ async function fetchAccounts() {
         if (Array.isArray(res?.data)) AppState.accounts = res.data;
         else if (Array.isArray(res)) AppState.accounts = res; // compatibility with legacy shape
         else AppState.accounts = [];
-        
+
         if (res?.details) AppState.accountDetails = res.details;
     } catch(e) {
         console.error(e);
@@ -3029,21 +2424,9 @@ async function fetchAccounts() {
     }
 }
 
-function getSheetsCache(companyId) {
-    if (!isAdminUser()) return [];
-    try {
-        const cached = localStorage.getItem(`sheetsCache_${companyId}`);
-        if (cached) return JSON.parse(cached);
-    } catch(e) {}
-    return [];
-}
+function getSheetsCache() { return []; }
 
-function setSheetsCache(companyId, data) {
-    if (!isAdminUser()) return;
-    try {
-        localStorage.setItem(`sheetsCache_${companyId}`, JSON.stringify(data));
-    } catch(e) {}
-}
+function setSheetsCache() {}
 
 function clearSheetsCaches() {
     try {
@@ -3150,6 +2533,7 @@ function applyOptimisticOrderUpdate(date, accountId, accountName, value, company
 function applyOptimisticOrdersBatch(date, orders, companyId) {
     (orders || []).forEach(o => {
         applyOptimisticOrderUpdate(date, o.accountId, o.accountName, o.meesho, companyId, 'meesho');
+        if (o.flipkart !== undefined) applyOptimisticOrderUpdate(date, o.accountId, o.accountName, o.flipkart, companyId, 'flipkart');
     });
 }
 
@@ -3196,10 +2580,10 @@ async function fetchAllCompaniesData(options = {}) {
     };
 
     const [c1Acc, c2Acc, f1, f2] = await Promise.all([
-        apiRequest({ action: 'getAccounts', companyId: 'company1' }).catch(() => null),
-        apiRequest({ action: 'getAccounts', companyId: 'company2' }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company1', skipSheetMerge }).catch(() => null),
-        apiRequest({ action: 'getDashboardData', companyId: 'company2', skipSheetMerge }).catch(() => null)
+        apiRequest({ action: 'getAccounts', companyId: 'company1' }),
+        apiRequest({ action: 'getAccounts', companyId: 'company2' }),
+        apiRequest({ action: 'getDashboardData', companyId: 'company1', skipSheetMerge }),
+        apiRequest({ action: 'getDashboardData', companyId: 'company2', skipSheetMerge })
     ]);
 
     const c1Accounts = toList(c1Acc);
@@ -3233,7 +2617,7 @@ function renderAccountsList() {
     if (AppState.accounts.length === 0) { container.innerHTML = '<p class="text-muted">No accounts added yet.</p>'; return; }
     const sorted = getSortedAccounts();
     const canManage = canManageAccounts();
-    
+
     // Add Sortable to container if not initialized
     if (canManage && !container._sortableInstance) {
         container._sortableInstance = Sortable.create(container, {
@@ -3242,7 +2626,7 @@ function renderAccountsList() {
             onEnd: function() {
                 const newOrder = Array.from(container.children).map(c => c.dataset.accountId);
                 // We keep accountId order in Firebase
-                saveAccountOrderToSheet(newOrder); 
+                saveAccountOrderToSheet(newOrder);
                 Array.from(container.children).forEach((el, idx) => {
                     const posEl = el.querySelector('.account-position-badge');
                     if (posEl) posEl.textContent = idx + 1;
@@ -3253,7 +2637,7 @@ function renderAccountsList() {
 
     container.innerHTML = AppState.accountDetails.map((details, idx) => {
         const id = details.accountId;
-        const acc = details.name; 
+        const acc = details.name;
         const rechargeTxt = getRechargeText(details.rechargeDate);
         const hasM = details.hasMeesho !== false;
         const hasF = details.hasFlipkart !== false;
@@ -3322,12 +2706,12 @@ async function saveEditAccount() {
     const hasMeesho = document.getElementById('edit-account-meesho')?.checked !== false;
     const hasFlipkart = document.getElementById('edit-account-flipkart')?.checked === true;
     const compId = AppState.currentCompany;
-    
+
     if (!newName) return showToast("Name cannot be empty!", "error");
     if (!hasMeesho && !hasFlipkart) {
         return showToast("Please enable at least one channel (Meesho or Flipkart)!", "error");
     }
-    
+
     showToast("Updating account...", "info");
     const res = await apiRequest({ action: 'editAccount', accountId: id, newName, companyId: compId, mobile, rechargeDate: recharge, hasMeesho, hasFlipkart });
     if (res.success) {
@@ -3401,9 +2785,10 @@ function initDragAndDrop() {
             const rows = tbody.querySelectorAll('.order-row');
             const newOrder = [];
             rows.forEach((row, idx) => {
-                newOrder.push(row.dataset.account);
+                newOrder.push(row.dataset.accountId);
                 row.querySelector('.position-number').textContent = idx + 1;
                 row.querySelector('.inp-meesho').dataset.index = idx;
+                row.querySelector('.row-total').id = 'total-' + idx;
             });
             saveAccountOrderToSheet(newOrder);
             document.querySelectorAll('.inp-meesho').forEach(inp => {
@@ -3473,7 +2858,7 @@ function checkExistingOrdersForDate() {
         document.querySelectorAll('.order-row').forEach(row => {
             const accId = row.dataset.accountId;
             const accName = row.dataset.accountName;
-            const match = existingOrders.find(o => 
+            const match = existingOrders.find(o =>
                 (accId && String(o.accountId || '').trim() === String(accId).trim()) ||
                 (accName && String(o.accountName || '').trim().toLowerCase() === String(accName).trim().toLowerCase())
             );
@@ -3553,7 +2938,7 @@ function sumTotals(data) {
 // ===== MAIN DASHBOARD RENDER =====
 function renderDashboard() {
     const filterType = document.getElementById('dash-filter-type').value;
-    
+
     // Update title
     let titleTxt = "Overview";
     if (filterType === 'this_month') {
@@ -3579,7 +2964,7 @@ function renderDashboard() {
     const c2Filtered = filterDataByDate(AppState.company2Data);
     const c1Totals = sumTotals(c1Filtered);
     const c2Totals = sumTotals(c2Filtered);
-    
+
     // KPI Cards
     if (document.getElementById('dash-c1-meesho')) document.getElementById('dash-c1-meesho').textContent = c1Totals.meesho;
     if (document.getElementById('dash-c1-flipkart')) document.getElementById('dash-c1-flipkart').textContent = c1Totals.flipkart;
@@ -3613,7 +2998,7 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
     const accTbody = document.getElementById('dash-account-totals');
     if (!accTbody) return;
     accTbody.innerHTML = '';
-    
+
     const buildAccTotals = (accountDetails, filtered) => {
         const totals = {};
         // Use accountId as the key for reliable aggregation
@@ -3621,7 +3006,7 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
             const id = ad.accountId;
             totals[id] = { name: ad.name, meesho: 0, flipkart: 0, total: 0 };
         });
-        
+
         filtered.forEach(row => {
             const id = row.accountId;
             const m = parseInt(row.meesho) || 0;
@@ -3643,12 +3028,12 @@ function renderAccountTotals(c1Filtered, c2Filtered) {
         });
         return totals;
     };
-    
+
     const c1AccTotals = buildAccTotals(AppState.company1Details, c1Filtered);
     const c2AccTotals = buildAccTotals(AppState.company2Details, c2Filtered);
 
     let html = '';
-    
+
     // Company A Header
     const c1Keys = Object.keys(c1AccTotals);
     if (c1Keys.length > 0) {
@@ -3678,7 +3063,7 @@ function renderRecentRecords(c1Filtered, c2Filtered) {
     const allRecords = [];
     c1Filtered.forEach(r => allRecords.push({ ...r, company: 'A' }));
     c2Filtered.forEach(r => allRecords.push({ ...r, company: 'B' }));
-    
+
     const dateGroups = {};
     allRecords.forEach(r => {
         if (!dateGroups[r.date]) dateGroups[r.date] = { totalMeesho: 0, totalOrders: 0, records: [] };
@@ -3686,7 +3071,7 @@ function renderRecentRecords(c1Filtered, c2Filtered) {
         dateGroups[r.date].totalMeesho += m; dateGroups[r.date].totalOrders += t;
         dateGroups[r.date].records.push(r);
     });
-    
+
     const sortedDates = Object.keys(dateGroups).sort((a,b) => new Date(b) - new Date(a)).slice(0, 7);
     let html = '';
     sortedDates.forEach(date => {
@@ -3705,15 +3090,15 @@ function renderRecentRecords(c1Filtered, c2Filtered) {
 function renderTodayStatus() {
     const todayStr = getTodayISODate();
     const banner = document.getElementById('today-status-banner');
-    
+
     const c1Today = AppState.company1Data.filter(d => normalizeToISODate(d.date) === todayStr);
     const c2Today = AppState.company2Data.filter(d => normalizeToISODate(d.date) === todayStr);
     const c1Done = c1Today.length > 0;
     const c2Done = c2Today.length > 0;
-    
+
     const c1Total = c1Today.reduce((s, r) => s + (parseInt(r.total)||0), 0);
     const c2Total = c2Today.reduce((s, r) => s + (parseInt(r.total)||0), 0);
-    
+
     if (c1Done && c2Done) {
         banner.className = 'status-banner status-done mb-2';
         banner.innerHTML = `
@@ -3781,7 +3166,7 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
     const inactiveCount = document.getElementById('inactive-count');
     const inactiveCard = document.getElementById('inactive-card-container');
     const inactiveAccounts = [];
-    
+
     const getLastOrderMeta = (accountId, rawData) => {
         let lastDate = null;
         rawData.forEach(r => {
@@ -3822,7 +3207,7 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
             });
         }
     });
-    
+
     inactiveAccounts.sort((a, b) => {
         const aRank = a.days === -1 ? Number.MAX_SAFE_INTEGER : a.days;
         const bRank = b.days === -1 ? Number.MAX_SAFE_INTEGER : b.days;
@@ -3830,7 +3215,7 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
     });
 
     inactiveCount.textContent = inactiveAccounts.length;
-    
+
     if (inactiveAccounts.length > 0) {
         inactiveCard.classList.remove('hidden');
         container.innerHTML = inactiveAccounts.map(a => {
@@ -3860,12 +3245,12 @@ function renderInactiveAlerts(c1Filtered, c2Filtered) {
 // ===== COMPANY A vs B COMPARISON =====
 function renderCompanyComparison(c1Totals, c2Totals) {
     const grid = document.getElementById('comparison-grid');
-    
+
     const items = [
         { label: 'Meesho Orders', a: c1Totals.meesho, b: c2Totals.meesho },
         { label: 'Total Orders', a: c1Totals.total, b: c2Totals.total }
     ];
-    
+
     grid.innerHTML = items.map(item => {
         const total = item.a + item.b;
         const aWidth = total === 0 ? 0 : Math.round((item.a / total) * 100);
@@ -3897,7 +3282,7 @@ function renderCompanyComparison(c1Totals, c2Totals) {
 function renderHighLowDay(c1Filtered, c2Filtered) {
     const container = document.getElementById('high-low-container');
     const allData = [...c1Filtered, ...c2Filtered];
-    
+
     const dateGrouped = {};
     allData.forEach(r => {
         const rowDate = normalizeToISODate(r.date);
@@ -3905,19 +3290,19 @@ function renderHighLowDay(c1Filtered, c2Filtered) {
         if (!dateGrouped[rowDate]) dateGrouped[rowDate] = 0;
         dateGrouped[rowDate] += parseInt(r.total) || 0;
     });
-    
+
     const dates = Object.entries(dateGrouped);
     if (dates.length === 0) {
         container.innerHTML = '<div class="hl-box best"><div class="hl-header"><i class="bx bx-trending-up"></i> Best Day</div><div class="hl-val">0</div></div><div class="hl-box worst"><div class="hl-header"><i class="bx bx-trending-down"></i> Lowest Day</div><div class="hl-val">0</div></div>';
         return;
     }
-    
+
     dates.sort((a, b) => b[1] - a[1]);
     const highest = dates[0];
     const lowest = dates[dates.length - 1];
-    
+
     const formatDate = (d) => { const [y, m, day] = d.split('-'); const ms = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; return `${day} ${ms[parseInt(m)-1]} ${y}`; };
-    
+
     container.innerHTML = `
         <div class="hl-box best">
             <div class="hl-header"><i class='bx bx-trending-up'></i> Best Day</div>
@@ -3937,7 +3322,7 @@ function renderAccountRanking(c1Filtered, c2Filtered) {
     const rankTbody = document.getElementById('ranking-tbody');
     if (!rankTbody) return;
     const allAccounts = [];
-    
+
     const buildRankData = (detailsList, filtered, companyLabel) => {
         const totals = {};
         detailsList.forEach(ad => {
@@ -3958,15 +3343,15 @@ function renderAccountRanking(c1Filtered, c2Filtered) {
             total: totals[id].total
         }));
     };
-    
+
     const c1Rank = buildRankData(AppState.company1Details, c1Filtered, 'A');
     const c2Rank = buildRankData(AppState.company2Details, c2Filtered, 'B');
-    
+
     const combined = [...c1Rank, ...c2Rank];
     combined.sort((a, b) => b.total - a.total);
-    
+
     if (combined.length === 0) { rankTbody.innerHTML = '<div class="text-center text-muted p-2">No data</div>'; return; }
-    
+
     rankTbody.innerHTML = combined.map((acc, idx) => {
         const rank = idx + 1;
         const rankClass = rank === 1 ? 'top-1' : '';
@@ -3990,13 +3375,13 @@ function renderCalendarHeatmap() {
     const label = document.getElementById('heatmap-month-label');
     const year = AppState.heatmapYear;
     const month = AppState.heatmapMonth;
-    
+
     const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
     label.textContent = `${monthNames[month]} ${year}`;
-    
+
     const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
     const allData = [...AppState.company1Data, ...AppState.company2Data];
-    
+
     // Sum orders by day
     const dayTotals = {};
     allData.forEach(r => {
@@ -4007,10 +3392,10 @@ function renderCalendarHeatmap() {
             dayTotals[day] += parseInt(r.total) || 0;
         }
     });
-    
+
     const values = Object.values(dayTotals);
     const maxOrders = values.length > 0 ? Math.max(...values) : 0;
-    
+
     const getLevel = (count) => {
         if (count === 0 || !count) return 0;
         if (maxOrders === 0) return 0;
@@ -4020,17 +3405,17 @@ function renderCalendarHeatmap() {
         if (pct <= 0.75) return 3;
         return 4;
     };
-    
+
     const firstDayRaw = new Date(year, month, 1).getDay(); // 0=Sun
     const firstDay = firstDayRaw === 0 ? 6 : firstDayRaw - 1; // 0=Mon
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
+
     let html = '';
-    
+
     for (let i = 0; i < firstDay; i++) {
         html += '<div class="heatmap-day heatmap-empty"></div>';
     }
-    
+
     for (let day = 1; day <= daysInMonth; day++) {
         const total = dayTotals[day] || 0;
         const level = getLevel(total);
@@ -4038,17 +3423,17 @@ function renderCalendarHeatmap() {
         const fullDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         html += `<div class="heatmap-day heatmap-${level}" title="${tooltipText}" onclick="showHeatmapDetails('${fullDate}')">${day}</div>`;
     }
-    
+
     grid.innerHTML = html;
 }
 
 window.showHeatmapDetails = function(dateStr) {
     const detailsBox = document.getElementById('heatmap-details');
     detailsBox.classList.remove('hidden');
-    
+
     const [y, m, d] = dateStr.split('-');
     const weekday = new Date(y, parseInt(m)-1, d).toLocaleDateString('en-US', { weekday: 'long' });
-    
+
     let c1M = 0, c1F = 0, c1T = 0;
     AppState.company1Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => {
         const mQty = parseInt(r.meesho) || 0;
@@ -4056,7 +3441,7 @@ window.showHeatmapDetails = function(dateStr) {
         const tQty = typeof r.total !== 'undefined' ? (parseInt(r.total) || 0) : (mQty + fQty);
         c1M += mQty; c1F += fQty; c1T += tQty;
     });
-    
+
     let c2M = 0, c2F = 0, c2T = 0;
     AppState.company2Data.filter(r => normalizeToISODate(r.date) === dateStr).forEach(r => {
         const mQty = parseInt(r.meesho) || 0;
@@ -4067,7 +3452,7 @@ window.showHeatmapDetails = function(dateStr) {
     const dayTotal = c1T + c2T;
     const company1Name = getCompanyDisplayName('company1');
     const company2Name = getCompanyDisplayName('company2');
-    
+
     detailsBox.innerHTML = `
         <div class="date-details-header">
             <div>
@@ -4109,24 +3494,24 @@ window.showHeatmapDetails = function(dateStr) {
 function exportToCSV() {
     const c1Filtered = filterDataByDate(AppState.company1Data);
     const c2Filtered = filterDataByDate(AppState.company2Data);
-    
+
     const rows = [['Date', 'Company', 'Account', 'Meesho', 'Total']];
-    
+
     c1Filtered.forEach(r => {
         rows.push([normalizeToISODate(r.date), 'Company A', r.accountName, parseInt(r.meesho)||0, parseInt(r.total)||0]);
     });
     c2Filtered.forEach(r => {
         rows.push([normalizeToISODate(r.date), 'Company B', r.accountName, parseInt(r.meesho)||0, parseInt(r.total)||0]);
     });
-    
+
     if (rows.length <= 1) { showToast('No data to export', 'error'); return; }
-    
+
     const csv = rows.map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    
+
     const filterType = document.getElementById('dash-filter-type').value;
     let filename = 'krimaa_orders';
     if (filterType === 'this_month') {
@@ -4137,7 +3522,7 @@ function exportToCSV() {
         const to = document.getElementById('dash-filter-to').value;
         if (from && to) filename += `_${from}_to_${to}`;
     }
-    
+
     link.download = `${filename}.csv`;
     document.body.appendChild(link);
     link.click();
@@ -4157,281 +3542,63 @@ function toggleDateDetails(dateId) {
 
 // ===== API (routes through Firebase) =====
 async function apiRequest(payload) {
-    const action = payload?.action;
-    const companyId = payload?.companyId || AppState.currentCompany || 'company1';
-    const readActions = new Set(['getAccounts', 'getDashboardData', 'getRemarks', 'getMoneyBackups', 'getKarigars', 'getKarigarTransactions', 'getDesignPrices']);
-    const cacheKey = `${action}::${companyId}::${String(payload?.month || '')}`;
-    if (readActions.has(action)) {
-        const cached = _apiReadCache.get(cacheKey);
-        if (cached && (Date.now() - cached.ts) < READ_CACHE_TTL_MS) {
-            return cached.value;
-        }
-    }
-
-    // ── LAN OFFLINE READS & WRITES ──
-    if (typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected()) {
-        if (readActions.has(action)) {
-            const lanRes = await window.LanStorageService.fetchFromLocal(payload);
-            if (lanRes !== undefined) {
-                _apiReadCache.set(cacheKey, { ts: Date.now(), value: lanRes });
-                return lanRes;
-            }
-        } else {
-            const lanRes = await window.LanStorageService.writeToLocal(payload);
-            if (lanRes !== undefined) {
-                _apiReadCache.clear();
-                return lanRes;
-            }
-        }
-    }
-
-    if (isFirestoreQuotaBlocked()) {
-        const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
-        if (sheetRead) return sheetRead;
-        if (action === 'submitOrders') {
-            applyOptimisticOrdersBatch(payload.date, payload.orders || [], companyId);
-            const allRows = getLocalOrderRowsForDate(payload.date, companyId);
-            await syncOrdersDirectToSheet(payload.date, allRows.length ? allRows : (payload.orders || []), companyId, 'quota_sheet_mode_submit');
-            return { success: true, message: 'Saved to Google Sheet (quota mode)' };
-        }
-        if (action === 'updateOrder') {
-            const accountName = resolveAccountNameForSheet(payload.accountId, companyId) || payload.accountId;
-            applyOptimisticOrderUpdate(payload.date, payload.accountId, accountName, payload.value, companyId);
-            const allRows = getLocalOrderRowsForDate(payload.date, companyId);
-            await syncOrdersDirectToSheet(
-                payload.date,
-                allRows.length ? allRows : [{ accountId: payload.accountId, accountName, meesho: payload.value }],
-                companyId,
-                'quota_sheet_mode_update'
-            );
-            return { success: true, message: 'Saved to Google Sheet (quota mode)' };
-        }
-        if (action === 'saveRemark') {
-            await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
-            if (!_remarkCache) _remarkCache = {};
-            _remarkCache[payload.date] = payload.remark || '';
-            return { success: true, message: 'Remark saved to Google Sheet (quota mode)' };
-        }
-        if (action === 'addAccount' || action === 'editAccount' || action === 'deleteAccount' || action === 'updateAccountOrder') {
-            const passPayload = { ...payload, action, companyId };
-            const sheetRes = await sheetsApiRequest(passPayload);
-            return sheetRes && typeof sheetRes === 'object' ? sheetRes : { success: true };
-        }
-        const cached = buildCachedApiResult(action, companyId);
-        if (cached) return cached;
-        if (!readActions.has(action)) {
-            throw new Error('Firestore quota exceeded. Please retry after cooldown.');
-        }
-    }
-    try {
-        let result;
-        let orderSheetSyncWarning = '';
-        switch (action) {
-            case 'getAccounts': result = await FirebaseService.getAccounts(companyId); break;
-            case 'getDashboardData': {
-                result = await FirebaseService.getOrders(companyId, payload.month);
-                if (!payload?.skipSheetMerge) {
-                    try {
-                        const sheetRes = await sheetsApiRequest({ action: 'getDashboardData', companyId, month: payload?.month || '' });
-                        const sheetRows = filterRecentRows(sheetRes?.data || [], SHEETS_FALLBACK_DAYS).map(r => ({ ...r, companyId }));
-                        const firebaseRows = Array.isArray(result?.data) ? result.data : [];
-                        result = { ...(result || {}), success: true, data: mergeOrderRowsUnique(firebaseRows, sheetRows) };
-                    } catch (sheetMergeErr) {
-                        console.warn('Non-blocking: sheet merge failed for getDashboardData', sheetMergeErr);
-                    }
-                }
-                break;
-            }
-            case 'submitOrders':
-                result = await FirebaseService.submitOrders(payload.date, payload.orders, companyId);
-                if (result && result.success !== false) {
-                    try {
-                        await syncOrderDateForAllCompanies(
-                            payload.date,
-                            { companyId, rows: payload.orders || [] },
-                            'submitOrders'
-                        );
-                    } catch (sheetErr) {
-                        console.warn('Immediate order sheet sync failed after submitOrders:', sheetErr);
-                        orderSheetSyncWarning = sheetErr?.message || 'Sheet sync queued';
-                        _pendingDataChangesForBackup = true;
-                        scheduleBackgroundSheetBackup('submitOrders');
-                    }
-                }
-                break;
-            case 'addAccount':
-                result = await FirebaseService.addAccount(payload.accountName, companyId, payload.mobile, payload.gstin, payload.rechargeDate, payload.hasMeesho, payload.hasFlipkart);
-                if (result && result.success !== false) {
-                    try {
-                        await sheetsApiRequest({ action: 'addAccount', accountName: payload.accountName, companyId, mobile: payload.mobile, gstin: payload.gstin, rechargeDate: payload.rechargeDate });
-                    } catch (e) { scheduleBackgroundSheetBackup('addAccount'); }
-                }
-                break;
-            case 'editAccount':
-                result = await FirebaseService.editAccount(payload.accountId, payload.newName, companyId, payload.mobile, payload.gstin, payload.rechargeDate, payload.hasMeesho, payload.hasFlipkart);
-                if (result && result.success !== false) {
-                    try {
-                        await sheetsApiRequest({ action: 'editAccount', accountId: payload.accountId, newName: payload.newName, companyId, mobile: payload.mobile, gstin: payload.gstin, rechargeDate: payload.rechargeDate });
-                    } catch (e) { scheduleBackgroundSheetBackup('editAccount'); }
-                }
-                break;
-            case 'deleteAccount':
-                result = await FirebaseService.deleteAccount(payload.accountId, companyId);
-                if (result && result.success !== false) {
-                    try {
-                        await sheetsApiRequest({ action: 'deleteAccount', accountId: payload.accountId, companyId });
-                    } catch (e) { scheduleBackgroundSheetBackup('deleteAccount'); }
-                }
-                break;
-            case 'updateAccountOrder':
-                result = await FirebaseService.updateAccountOrder(payload.orderedAccounts, companyId);
-                if (result && result.success !== false) {
-                    try {
-                        await sheetsApiRequest({ action: 'updateAccountOrder', orderedAccounts: payload.orderedAccounts, companyId });
-                    } catch (e) { scheduleBackgroundSheetBackup('updateAccountOrder'); }
-                }
-                break;
-            case 'saveRemark':
-                result = await FirebaseService.saveRemark(payload.date, payload.remark);
-                if (result && result.success !== false) {
-                    try {
-                        await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
-                    } catch (e) { scheduleBackgroundSheetBackup('saveRemark'); }
-                }
-                break;
-            case 'getRemarks': result = await FirebaseService.getRemarks(); break;
-            case 'updateOrder':
-                result = await FirebaseService.updateOrder(payload.date, payload.accountId, payload.field, payload.value, companyId);
-                if (result && result.success !== false) {
-                    try {
-                        await syncOrderDateForAllCompanies(
-                            payload.date,
-                            { companyId },
-                            'updateOrder'
-                        );
-                    } catch (sheetErr) {
-                        console.warn('Immediate order sheet sync failed after updateOrder:', sheetErr);
-                        orderSheetSyncWarning = sheetErr?.message || 'Sheet sync queued';
-                        _pendingDataChangesForBackup = true;
-                        scheduleBackgroundSheetBackup('updateOrder');
-                    }
-                }
-                break;
-            case 'getCompanies': result = { success: true, data: [{id: 'company1', name: 'Company 1'}, {id: 'company2', name: 'Company 2'}] }; break;
-            case 'updateMoney': result = await FirebaseService.updateMoney(payload.accountId, companyId, payload.money, payload.expense, payload.date); break;
-            case 'resetAllMoney': result = await FirebaseService.resetAllMoney(payload.date); break;
-            case 'createMoneyBackup': result = await FirebaseService.createMoneyBackup(payload.date, payload.rows, payload.reason); break;
-            case 'getMoneyBackups': result = await FirebaseService.getMoneyBackups(); break;
-            case 'deleteMoneyBackup': result = await FirebaseService.deleteMoneyBackup(payload.backupId); break;
-            case 'getKarigars': result = await FirebaseService.getKarigars(companyId); break;
-            case 'getKarigarTransactions': result = await FirebaseService.getKarigarTransactions(companyId); break;
-            case 'getDesignPrices': result = await FirebaseService.getDesignPrices(payload.DESIGN_PRICE_SCOPE || 'global'); break;
-            default: throw new Error('Unknown action: ' + action);
-        }
-        const mutatingActions = new Set([
-            'addAccount', 'editAccount', 'deleteAccount',
-            'updateAccountOrder', 'saveRemark', 'updateMoney',
-            'resetAllMoney', 'createMoneyBackup', 'deleteMoneyBackup'
-        ]);
-        if (mutatingActions.has(action) && result && result.success !== false) {
-            _pendingDataChangesForBackup = true;
-            scheduleBackgroundSheetBackup(action);
-        }
-        if (orderSheetSyncWarning && result && typeof result === 'object') {
-            result.sheetSyncWarning = orderSheetSyncWarning;
-        }
-        if (readActions.has(action)) {
-            _apiReadCache.set(cacheKey, { ts: Date.now(), value: result });
-        }
-        if (!readActions.has(action)) {
-            _apiReadCache.clear();
-        }
-        if (_useSheetsFallbackMode && !isFirestoreQuotaBlocked() && readActions.has(action)) {
-            disableSheetsFallbackMode();
-        }
-        return result;
-    } catch (err) {
-        if (isFirestoreQuotaError(err)) {
-            activateFirestoreQuotaCooldown(err);
-            const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
-            if (sheetRead) return sheetRead;
-            if (action === 'submitOrders') {
-                applyOptimisticOrdersBatch(payload.date, payload.orders || [], companyId);
-                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
-                await syncOrdersDirectToSheet(payload.date, allRows.length ? allRows : (payload.orders || []), companyId, 'quota_sheet_mode_submit');
-                return { success: true, message: 'Saved to Google Sheet (quota mode)' };
-            }
-            if (action === 'updateOrder') {
-                const accountName = resolveAccountNameForSheet(payload.accountId, companyId) || payload.accountId;
-                applyOptimisticOrderUpdate(payload.date, payload.accountId, accountName, payload.value, companyId);
-                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
-                await syncOrdersDirectToSheet(
-                    payload.date,
-                    allRows.length ? allRows : [{ accountId: payload.accountId, accountName, meesho: payload.value }],
-                    companyId,
-                    'quota_sheet_mode_update'
-                );
-                return { success: true, message: 'Saved to Google Sheet (quota mode)' };
-            }
-            if (action === 'saveRemark') {
-                await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
-                if (!_remarkCache) _remarkCache = {};
-                _remarkCache[payload.date] = payload.remark || '';
-                return { success: true, message: 'Remark saved to Google Sheet (quota mode)' };
-            }
-            if (readActions.has(action)) {
-                try {
-                    await loadRecentDataFromSheets(SHEETS_FALLBACK_DAYS);
-                } catch (sheetErr) {
-                    console.warn('Sheet-mode load failed after quota error:', sheetErr);
-                }
-            }
-            const cached = buildCachedApiResult(action, companyId);
-            if (cached) return cached;
-        }
-        if (isFirestoreUnavailableError(err)) {
-            enableSheetsFallbackMode();
-            const sheetRead = await readFromSheetsInQuotaMode(action, payload, companyId);
-            if (sheetRead) return sheetRead;
-            if (action === 'submitOrders') {
-                applyOptimisticOrdersBatch(payload.date, payload.orders || [], companyId);
-                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
-                await syncOrdersDirectToSheet(payload.date, allRows.length ? allRows : (payload.orders || []), companyId, 'down_sheet_mode_submit');
-                return { success: true, message: 'Saved to Google Sheet (server down mode)' };
-            }
-            if (action === 'updateOrder') {
-                const accountName = resolveAccountNameForSheet(payload.accountId, companyId) || payload.accountId;
-                applyOptimisticOrderUpdate(payload.date, payload.accountId, accountName, payload.value, companyId);
-                const allRows = getLocalOrderRowsForDate(payload.date, companyId);
-                await syncOrdersDirectToSheet(
-                    payload.date,
-                    allRows.length ? allRows : [{ accountId: payload.accountId, accountName, meesho: payload.value }],
-                    companyId,
-                    'down_sheet_mode_update'
-                );
-                return { success: true, message: 'Saved to Google Sheet (server down mode)' };
-            }
-            if (action === 'saveRemark') {
-                await sheetsApiRequest({ action: 'saveRemark', date: payload.date, remark: payload.remark || '' });
-                if (!_remarkCache) _remarkCache = {};
-                _remarkCache[payload.date] = payload.remark || '';
-                return { success: true, message: 'Remark saved to Google Sheet (server down mode)' };
-            }
-            const cached = buildCachedApiResult(action, companyId);
-            if (cached) return cached;
-        }
-        console.error(`Firebase ${action} error:`, err);
-        throw err;
-    }
+ const action=payload.action, companyId=payload.companyId || AppState.currentCompany;
+ const read=action.startsWith('get');
+ const key=JSON.stringify([action,companyId,payload.month || '']);
+ const cached=_apiReadCache.get(key);
+ if(read && cached && Date.now()-cached.ts < READ_CACHE_TTL_MS) return cached.value;
+ if(isFirestoreQuotaBlocked()) throw new Error('Firestore quota reached. Keep this tab open and retry later.');
+ try {
+ let result;
+ switch(action) {
+ case 'getAccounts': result = await FirebaseService.getAccounts(companyId); break;
+case 'getRemarks': result = await FirebaseService.getRemarks(); break;
+case 'updateMoney': result = await FirebaseService.updateMoney(payload.accountId, companyId, payload.money, payload.expense, payload.date); break;
+case 'resetAllMoney': result = await FirebaseService.resetAllMoney(payload.date); break;
+case 'createMoneyBackup': result = await FirebaseService.createMoneyBackup(payload.date, payload.rows, payload.reason); break;
+case 'getMoneyBackups': result = await FirebaseService.getMoneyBackups(); break;
+case 'deleteMoneyBackup': result = await FirebaseService.deleteMoneyBackup(payload.backupId); break;
+case 'getKarigars': result = await FirebaseService.getKarigars(companyId); break;
+case 'getKarigarTransactions': result = await FirebaseService.getKarigarTransactions(companyId); break;
+case 'getDesignPrices': result = await FirebaseService.getDesignPrices(payload.DESIGN_PRICE_SCOPE || 'global'); break;
+ case 'getDashboardData': result=await FirebaseService.getOrders(companyId,payload.month); break;
+ case 'submitOrders': result=await FirebaseService.submitOrders(payload.date,payload.orders,companyId); break;
+ case 'updateOrder': result=await FirebaseService.updateOrder(payload.date,payload.accountId,payload.field,payload.value,companyId); break;
+ case 'addAccount': result=await FirebaseService.addAccount(payload.accountName,companyId,payload.mobile,payload.gstin,payload.rechargeDate,payload.hasMeesho,payload.hasFlipkart); break;
+ case 'editAccount': result=await FirebaseService.editAccount(payload.accountId,payload.newName,companyId,payload.mobile,payload.gstin,payload.rechargeDate,payload.hasMeesho,payload.hasFlipkart); break;
+ case 'deleteAccount': result=await FirebaseService.deleteAccount(payload.accountId,companyId); break;
+ case 'updateAccountOrder': result=await FirebaseService.updateAccountOrder(payload.orderedAccounts,companyId); break;
+ case 'saveRemark': result=await FirebaseService.saveRemark(payload.date,payload.remark); break;
+ case 'getCompanies': result={success:true,data:['company1','company2'].map(id=>({id,name:getCompanyDisplayName(id)}))}; break;
+ default: throw new Error('Unknown action: '+action);
+ }
+ if(result?.success===false) throw new Error(result.message || 'Firestore operation failed');
+ if(read) _apiReadCache.set(key,{ts:Date.now(),value:result});
+ else if (action==='updateOrder' || action==='submitOrders') {
+  for (const [cachedKey, cachedValue] of _apiReadCache) {
+   const [cachedAction,cachedCompany,month] = JSON.parse(cachedKey);
+   if(cachedAction !== 'getDashboardData' || cachedCompany !== companyId) continue;
+   if(month && !payload.date.startsWith(month)) continue;
+   const rows = (cachedValue.value.data || []).filter(row => normalizeToISODate(row.date) !== normalizeToISODate(payload.date));
+   cachedValue.value = {...cachedValue.value, data:[...rows,...result.data]};
+  }
+ } else _apiReadCache.clear();
+ if(action==='updateOrder') {
+  const overrideKey=buildPendingOrderOverrideKey(companyId,payload.date,payload.accountId,'');
+  const override=_pendingOrderOverrides.get(overrideKey);
+  if(override && override[payload.field]===Number(payload.value)) {
+   delete override[payload.field];
+   if(override.meesho===undefined && override.flipkart===undefined) _pendingOrderOverrides.delete(overrideKey);
+  }
+ }
+ return result;
+ } catch(error) { if(isFirestoreQuotaError(error)) activateFirestoreQuotaCooldown(error); throw error; }
 }
 
 // Google Sheets API – used only for backup/archive operations
 // ===== GOOGLE SHEETS — DISABLED =====
 // All data is now stored in LAN JSON files. Google Sheets integration has been removed.
-async function sheetsApiRequest(payload) {
-    console.warn('[SHEETS DISABLED] Action blocked:', payload?.action || 'unknown');
-    return { success: false, data: [], details: [], message: 'Google Sheets is disabled. Data is stored locally in LAN folder.' };
-}
+async function sheetsApiRequest() { throw new Error('Google Sheets storage is disabled. Data is stored in Firestore.'); }
 
 
 
@@ -4439,7 +3606,7 @@ async function sheetsApiRequest(payload) {
 async function ensureFirebaseSeeded() {
     const seeded = localStorage.getItem('firebase_seeded');
     if (seeded) return;
-    
+
     try {
         // Timeout entire migration to 30s max so app doesn't hang
         await Promise.race([
@@ -4462,14 +3629,14 @@ async function _doFirebaseSeed() {
         // If Firestore itself fails, skip seeding entirely
         return;
     }
-    
+
     if (!c1Empty && !c2Empty) {
         localStorage.setItem('firebase_seeded', 'true');
         return;
     }
-    
+
     showProgressToast('Setting up Firebase… (one-time)');
-    
+
     try {
         if (c1Empty) {
             const [accRes, ordRes] = await Promise.all([
@@ -4494,7 +3661,7 @@ async function _doFirebaseSeed() {
                 }
             }
         } catch(e) { console.warn('Remarks migration skipped:', e); }
-        
+
         localStorage.setItem('firebase_seeded', 'true');
         showToast('Firebase ready!', 'success');
     } catch (e) {
@@ -4514,22 +3681,22 @@ async function backupToSheets(isAuto = false, opts = {}) {
     if (!isAuto) showToast('Starting background sync to Google Sheets…', 'info');
     setPersistentSheetSyncPending(rawBackupType || backupType || 'backup');
     setLastBackupStatusText(`Sheet syncing (${backupType})...`);
-    
+
     try {
         // 1. Flush any pending Firestore writes
         await FirebaseService.flushWrites();
-        
+
         // 2. Get EVERY single piece of data from Firebase
         const allData = await FirebaseService.getAllDataForBackup();
-        
+
         if (!isAuto && btn) { btn.innerHTML = "<i class='bx bx-loader-alt bx-spin'></i> Pushing to Sheet..."; }
-        
+
         // 3. Send all data to Google Sheets in one comprehensive call
         let response = await sheetsApiRequest({
             action: 'saveFullBackup',
             data: allData
         });
-        
+
         if (response && response.success) {
             // Verify orders actually landed in sheet; retry one full push if any keys are missing.
             if (shouldVerifyOrders) {
@@ -4551,7 +3718,7 @@ async function backupToSheets(isAuto = false, opts = {}) {
             }
 
             const now = new Date().toISOString();
-            await FirebaseService.setBackupMeta({ 
+            await FirebaseService.setBackupMeta({
                 lastBackup: now,
                 lastBackupType: backupType,
                 totalOrders: (allData.company1.orders.length || 0) + (allData.company2.orders.length || 0)
@@ -4560,28 +3727,28 @@ async function backupToSheets(isAuto = false, opts = {}) {
             setLastSheetSyncSuccessTimestamp(now);
             clearPersistentSheetSyncPending();
             if (!isAuto) showToast('Full backup successful!', 'success');
-            
+
             let totalArchived = 0;
             if (!skipArchive) {
                 // Cleanup Firestore after successful backup
                 if (!isAuto) showToast('Archiving orders older than 30 days...', 'info');
                 let dateCursor = new Date();
                 dateCursor.setMonth(dateCursor.getMonth() - 1); // Start 1 month ago (30-day retention)
-                
+
                 // Go back up to 6 months to find un-archived data chunks
                 for (let i = 0; i < 6; i++) {
                     const y = dateCursor.getFullYear();
                     const m = String(dateCursor.getMonth() + 1).padStart(2, '0');
-                    
+
                     const result = await FirebaseService.backupAndArchiveMonthlyData(y, m);
                     if (result && result.success) {
                         totalArchived += (result.count || 0);
                     }
-                    
+
                     dateCursor.setMonth(dateCursor.getMonth() - 1); // step backward 1 month
                 }
             }
-            
+
             if (!isAuto && btn) {
                 setTimeout(() => {
                     btn.disabled = false;
@@ -4645,7 +3812,7 @@ async function monthlyCleanup(isAuto = false) {
 async function checkAutoBackup() {
     try {
         const meta = await FirebaseService.getBackupMeta();
-        
+
         if (meta && meta.lastBackup) {
             const safeType = normalizeBackupTypeLabel(meta.lastBackupType || '');
             updateLastBackupTimeDisplay(meta.lastBackup, safeType);
@@ -4653,9 +3820,9 @@ async function checkAutoBackup() {
         } else {
             updateLastBackupTimeDisplay(null);
         }
-        
+
         console.log("✅ Auto background backup is enabled for admin changes.");
-        
+
     } catch (e) {
         console.warn('Auto-backup meta check failed:', e);
     }
@@ -4670,7 +3837,7 @@ function initSyncIndicator() {
         if (status === 'pending' || status === 'syncing') {
             _pendingDataChangesForBackup = true;
         }
-        if (status === 'saved' && _pendingDataChangesForBackup) {
+        if (false && _pendingDataChangesForBackup) {
             const recentDirectOrderSync = (Date.now() - _lastDirectOrderSheetSyncMs) < 15000;
             if (recentDirectOrderSync) {
                 _pendingDataChangesForBackup = false;
@@ -4679,11 +3846,7 @@ function initSyncIndicator() {
                 scheduleBackgroundSheetBackup('firestore_saved');
             }
         }
-        if (status === 'error' && pending > 0 && !isFirestoreQuotaBlocked()) {
-            setTimeout(() => {
-                FirebaseService.flushWrites().catch(() => null);
-            }, 1800);
-        }
+
         if (el) {
             el.className = 'sync-indicator sync-' + status;
             const icons = {
@@ -4702,7 +3865,7 @@ function initSyncIndicator() {
             };
             el.innerHTML = `<i class='bx ${icons[status] || icons.idle}'></i><span>${labels[status] || 'Synced'}</span>`;
         }
-        
+
         // Manual Save Button on Data Sheet
         const saveBtn = document.getElementById('sheet-save-btn');
         if (saveBtn) {
@@ -4720,7 +3883,7 @@ function initSyncIndicator() {
             }
         }
     });
-    
+
     // Bind Save Now button
     document.getElementById('sheet-save-btn')?.addEventListener('click', () => {
         if (typeof FirebaseService !== 'undefined') {
@@ -4739,7 +3902,7 @@ function updateOrderDateLabel() {
     const dateObj = new Date(y, parseInt(m)-1, d);
     const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
     const todayStr = getTodayISODate();
-    
+
     if (val === todayStr) {
         document.getElementById('order-date-label').textContent = `${dayName}, ${d}/${m}/${y} (Today)`;
     } else {
@@ -4811,22 +3974,10 @@ let _remarkCache = null;
 let _remarkCacheLoaded = false;
 
 async function loadRemarksFromBackend() {
-    if (_remarkCacheLoaded && _remarkCache) return _remarkCache;
-    try {
-        const res = await apiRequest({ action: 'getRemarks' });
-        if (res && res.success !== false && res.data) {
-            _remarkCache = res.data;
-            // Also sync to localStorage as fallback
-            localStorage.setItem('sheetRemarks', JSON.stringify(res.data));
-        } else {
-            _remarkCache = {};
-        }
-    } catch (e) {
-        console.warn('Could not load remarks from backend, using local', e);
-        try { _remarkCache = JSON.parse(localStorage.getItem('sheetRemarks') || '{}'); } catch(ex) { _remarkCache = {}; }
-    }
-    _remarkCacheLoaded = true;
-    return _remarkCache;
+ if (_remarkCacheLoaded && _remarkCache) return _remarkCache;
+ const res = await apiRequest({action:'getRemarks'});
+ _remarkCache = res.data || {}; _remarkCacheLoaded = true;
+ return _remarkCache;
 }
 
 function initDataSheetListeners() {
@@ -4834,8 +3985,8 @@ function initDataSheetListeners() {
     const monthFilter = document.getElementById('sheet-month-filter');
     const exportBtn = document.getElementById('sheet-export-btn');
     const reorderBtn = document.getElementById('sheet-reorder-btn');
-    
-    if (compFilter) compFilter.addEventListener('change', renderDataSheet);
+
+    if (compFilter) compFilter.addEventListener('change', () => { document.activeElement?.blur(); renderDataSheet(); });
     if (monthFilter) monthFilter.addEventListener('change', renderDataSheet);
     if (exportBtn) exportBtn.addEventListener('click', exportSheetCSV);
     if (reorderBtn) reorderBtn.addEventListener('click', openReorderColumnsModal);
@@ -4859,7 +4010,7 @@ function openReorderColumnsModal() {
     const modal = document.getElementById('reorder-columns-modal');
     const list = document.getElementById('reorder-account-list');
     if (!modal || !list) return;
-    
+
     const companyFilterEl = document.getElementById('sheet-company-filter');
     let companyFilter = companyFilterEl ? companyFilterEl.value : 'all';
     if (isSingleCompanyMode()) {
@@ -4875,16 +4026,16 @@ function openReorderColumnsModal() {
         showToast('Please select Company 1 or Company 2 first to reorder.', 'info');
         return;
     }
-    
+
     list.innerHTML = getOrderedCompanyAccounts(companyFilter).map(acc => `
         <div class="account-item reorder-item" data-account="${String(acc.accountId || '').replace(/'/g, "\\'")}" style="cursor: grab; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; background: #f8fafc; display: flex; align-items: center; gap: 0.75rem;">
             <i class='bx bx-menu text-muted'></i>
             <span class="font-bold text-sm">${acc.name}</span>
         </div>
     `).join('');
-    
+
     modal.classList.add('show');
-    
+
     if (list._sortableInstance) list._sortableInstance.destroy();
     list._sortableInstance = Sortable.create(list, {
         animation: 150,
@@ -4919,7 +4070,7 @@ async function loadAvailableSheetMonths(force = false) {
 function populateSheetMonthFilter() {
     const monthFilter = document.getElementById('sheet-month-filter');
     if (!monthFilter) return;
-    
+
     const currentMonth = getTodayISODate().substring(0, 7);
     const months = new Set();
     months.add(currentMonth); // Always have current month
@@ -4935,7 +4086,7 @@ function populateSheetMonthFilter() {
     (AppState.availableSheetMonths || []).forEach(m => months.add(m));
 
     // In LAN-first mode, pre-populate all historical months since Jan 2024 so they are selectable
-    const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
+    const isLan = false;
     if (isLan) {
         const startYear = 2024;
         const curDate = new Date();
@@ -4948,13 +4099,14 @@ function populateSheetMonthFilter() {
             }
         }
     }
-    
+
     const sortedMonths = [...months].sort().reverse();
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    
+
     // Remember current selection
-    const prevVal = monthFilter.value;
-    
+    const prevVal = monthFilter.dataset.initialized ? monthFilter.value : currentMonth;
+    monthFilter.dataset.initialized = 'true';
+
     let html = `<option value="all" ${!prevVal || prevVal === 'all' ? 'selected' : ''}>All Time</option>`;
     sortedMonths.forEach(m => {
         const [y, mo] = m.split('-');
@@ -4967,42 +4119,18 @@ function populateSheetMonthFilter() {
 }
 
 async function loadHistoricalData(companyId, month) {
-    try {
-        showLoader();
-        const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
-        if (isLan) {
-            showToast(`Loading ${month} data from LAN…`, 'info');
-        } else {
-            showToast(`Fetching ${month} data from Firestore…`, 'info');
-        }
-        const res = await apiRequest({ action: 'getDashboardData', companyId, month });
-        const list = Array.isArray(res?.data) ? res.data : [];
-        if (companyId === 'company1') AppState.company1Data = list;
-        else AppState.company2Data = list;
-        await loadAvailableSheetMonths(true);
-        await renderDataSheet();
-        if (isLan) {
-            showToast(`Loaded ${list.length} records from LAN.`, 'success');
-        } else {
-            showToast(`Loaded ${list.length} records from Firestore.`, 'success');
-        }
-    } catch (e) {
-        console.error('Load historical failed:', e);
-        const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
-        showToast(isLan ? 'Failed to load from LAN' : 'Failed to load from Firestore', 'error');
-    } finally {
-        hideLoader();
-    }
+ await refreshAppDataManually();
 }
 
 async function renderDataSheet() {
+    if (isDataSheetEditActive()) return;
     const renderSeq = ++_renderDataSheetSeq;
     const thead = document.getElementById('sheet-thead');
     const tbody = document.getElementById('sheet-tbody');
     const emptyMsg = document.getElementById('sheet-empty');
     const wrapper = document.querySelector('.sheet-wrapper');
     if (!thead || !tbody) return;
-    
+
     const companyFilterEl = document.getElementById('sheet-company-filter');
     let companyFilter = companyFilterEl ? companyFilterEl.value : 'all';
     if (isSingleCompanyMode()) {
@@ -5018,7 +4146,7 @@ async function renderDataSheet() {
     const rawMonthFilter = monthFilterEl ? String(monthFilterEl.value || '').trim() : '';
     const monthFilter = rawMonthFilter || 'all';
     if (monthFilterEl && !rawMonthFilter) monthFilterEl.value = 'all';
-    
+
     const sheetTitle = document.getElementById('sheet-title');
     if (sheetTitle) {
         const dStr = getTodayISODate();
@@ -5030,11 +4158,11 @@ async function renderDataSheet() {
             sheetTitle.innerHTML = `<span class="text-primary font-bold mr-2"><i class='bx bx-calendar'></i> ${dStr}</span> Viewing Firestore live data`;
         }
     }
-    
+
     // Determine which companies to show
     let accounts = [];
     let rawData = [];
-    
+
     if (companyFilter === 'company1') {
         accounts = getOrderedCompanyAccounts('company1').map(ad => ({
             id: ad.accountId,
@@ -5074,7 +4202,7 @@ async function renderDataSheet() {
         }));
         rawData = [...AppState.company1Data, ...AppState.company2Data];
     }
-    
+
     // Filter by month
     const currentMonth = getTodayISODate().substring(0, 7);
     if (monthFilter && monthFilter !== 'all') {
@@ -5083,20 +4211,20 @@ async function renderDataSheet() {
             return d && d.startsWith(monthFilter);
         });
     }
-    
+
     // Collect unique dates, then expand the sheet so zero-order days still show.
     const dateSet = new Set();
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (d) dateSet.add(d);
     });
-    
+
     // Always include today's date in the data sheet if it matches the current month filter (and not viewing archive)
     const todayStr = getTodayISODate();
     if (monthFilter === currentMonth || monthFilter === 'all') {
         dateSet.add(todayStr);
     }
-    
+
     const sortedExistingDates = [...dateSet].sort();
     let dates = [];
     if (monthFilter && monthFilter !== 'all') {
@@ -5109,16 +4237,16 @@ async function renderDataSheet() {
         const endDate = lastDate > todayStr ? lastDate : todayStr;
         dates = buildDateRangeDescending(firstDate, endDate);
     }
-    
+
     if (accounts.length === 0 || dates.length === 0) {
         wrapper.classList.add('hidden');
         emptyMsg.classList.remove('hidden');
-        
+
         // If a specific month is selected and no data locally, offer one-click Firestore/LAN reload.
         if (monthFilter && monthFilter !== 'all' && monthFilter !== currentMonth) {
             const compId = companyFilter === 'all' ? 'company1' : companyFilter; // Default to comp1 if all
-            const isLan = typeof window !== 'undefined' && window.LanStorageService && window.LanStorageService.isConnected();
-            
+            const isLan = false;
+
             if (isLan) {
                 // Instantly trigger load in the background so the user never has to click!
                 setTimeout(() => {
@@ -5158,12 +4286,12 @@ async function renderDataSheet() {
     }
     wrapper.classList.remove('hidden');
     emptyMsg.classList.add('hidden');
-    
+
     // Map active account names to their current active IDs to handle any past ID mismatches
     const activeIdByName = {};
     accounts.forEach(acc => {
         if (acc.name) {
-            activeIdByName[acc.name.toLowerCase().trim()] = acc.id;
+            activeIdByName[acc.company + '::' + acc.name.toLowerCase().trim()] = acc.id;
         }
     });
 
@@ -5173,15 +4301,16 @@ async function renderDataSheet() {
     rawData.forEach(r => {
         const d = normalizeToISODate(r.date);
         if (!d) return;
-        
+
         let key = r.accountId;
         const nameLower = r.accountName ? r.accountName.toLowerCase().trim() : '';
-        if (activeIdByName[nameLower]) {
-            key = activeIdByName[nameLower];
+        if (!key && activeIdByName[(r.companyId || companyFilter) + '::' + nameLower]) {
+            key = activeIdByName[(r.companyId || companyFilter) + '::' + nameLower];
         } else if (!key) {
             key = r.accountName;
         }
         if (!key) return;
+        key = (r.companyId || companyFilter) + '::' + key;
 
         if (!lookup[d]) lookup[d] = {};
 
@@ -5198,13 +4327,14 @@ async function renderDataSheet() {
             lookup[d][key] = { meesho: mVal, flipkart: fVal, total: tVal };
         }
     });
-    
+
     // Load remarks (from backend first time, then cached)
     const savedRemarks = await loadRemarksFromBackend();
+    if (renderSeq !== _renderDataSheetSeq || isDataSheetEditActive()) return;
     if (renderSeq !== _renderDataSheetSeq) return;
-    
+
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    
+
     // === HEADER ===
     let headerRow1 = '<tr><th class="sheet-date-col" rowspan="2">Date</th>';
     let headerRow2 = '<tr class="sheet-subheader-row">';
@@ -5232,9 +4362,9 @@ async function renderDataSheet() {
     headerRow1 += '<th class="sheet-acct-group sheet-remarks-col" rowspan="2">Remarks</th>';
     headerRow1 += '</tr>';
     headerRow2 += '</tr>';
-    
+
     thead.innerHTML = headerRow1 + headerRow2;
-    
+
     // === BODY ===
     let bodyHtml = '';
     const grandTotals = {
@@ -5255,7 +4385,7 @@ async function renderDataSheet() {
             };
         }
         accounts.forEach((acc, idx) => {
-            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, flipkart: 0, total: 0 };
+            const cell = lookup[date]?.[acc.company + '::' + acc.id] || { meesho: 0, flipkart: 0, total: 0 };
             const mQty = parseInt(cell.meesho, 10) || 0;
             const fQty = parseInt(cell.flipkart, 10) || 0;
             monthTotals[monthKey].accountTotals[idx].meesho += mQty;
@@ -5268,7 +4398,7 @@ async function renderDataSheet() {
 
     let activeMonth = '';
     const fullColspan = 1 + totalAccountCols + 3 + 1; // Date + accounts cols + 3 totals + remarks
-    
+
     dates.forEach(date => {
         const [y, m, d] = date.split('-');
         const monthKey = `${y}-${m}`;
@@ -5282,21 +4412,21 @@ async function renderDataSheet() {
         const isToday = date === todayStr;
         const dayChipClass = isToday ? 'sheet-day-chip sheet-today' : 'sheet-day-chip';
         const formattedDate = `${d}/${m}/${y}`;
-        
+
         bodyHtml += `<tr data-month="${monthKey}">`;
         bodyHtml += `<td class="sheet-date-cell">${formattedDate} <span class="${dayChipClass}">${dayName}</span></td>`;
-        
+
         let rowM = 0;
         let rowF = 0;
         accounts.forEach((acc, idx) => {
-            const cell = lookup[date]?.[acc.id] || lookup[date]?.[acc.name] || { meesho: 0, flipkart: 0, total: 0 };
+            const cell = lookup[date]?.[acc.company + '::' + acc.id] || { meesho: 0, flipkart: 0, total: 0 };
             const meeshoVal = parseInt(cell.meesho, 10) || 0;
             const flipkartVal = parseInt(cell.flipkart, 10) || 0;
             rowM += meeshoVal;
             rowF += flipkartVal;
             grandTotals.accounts[idx].meesho += meeshoVal;
             grandTotals.accounts[idx].flipkart += flipkartVal;
-            
+
             if (acc.hasM) {
                 bodyHtml += `<td class="sheet-editable sheet-m-col ${!acc.hasF ? 'sheet-acct-border' : ''}"><input type="number" class="sheet-cell-input" value="${meeshoVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="0"></td>`;
             }
@@ -5308,16 +4438,16 @@ async function renderDataSheet() {
         grandTotals.meesho += rowM;
         grandTotals.flipkart += rowF;
         grandTotals.both += rowBoth;
-        
+
         bodyHtml += `<td class="sheet-total-cell sheet-m-total" title="M: ${rowM.toLocaleString()}">${rowM}</td>`;
         bodyHtml += `<td class="sheet-total-cell sheet-f-total" title="F: ${rowF.toLocaleString()}">${rowF}</td>`;
         bodyHtml += `<td class="sheet-total-cell sheet-both-total" title="Total: ${rowBoth.toLocaleString()}">${rowBoth}</td>`;
-        
+
         const remarkVal = savedRemarks[date] || '';
         bodyHtml += `<td class="sheet-editable sheet-remarks-col"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
         bodyHtml += '</tr>';
     });
-    
+
     // Grand total row (hide for order users; they only need daily totals)
     if (!isOrderUser()) {
         bodyHtml += '<tr class="sheet-grand-row">';
@@ -5338,20 +4468,19 @@ async function renderDataSheet() {
         bodyHtml += '<td></td>';
         bodyHtml += '</tr>';
     }
-    
+
     tbody.innerHTML = bodyHtml;
-    
+
     // === EVENT: Save remarks (buffered to Firebase) ===
     tbody.querySelectorAll('input[data-field="remark"]').forEach(inp => {
         inp.addEventListener('change', () => {
             const date = inp.dataset.date;
             const val = inp.value;
-            
+
             // Update cache immediately
             if (!_remarkCache) _remarkCache = {};
             _remarkCache[date] = val;
-            localStorage.setItem('sheetRemarks', JSON.stringify(_remarkCache));
-            
+
             // Buffer the write to Firebase (flushes after APP_CONFIG.writeBufferMs)
             FirebaseService.bufferWrite(`remark_${date}`, () =>
                 apiRequest({ action: 'saveRemark', date, remark: val, companyId: AppState.currentCompany })
@@ -5359,21 +4488,22 @@ async function renderDataSheet() {
             scheduleQuickWriteFlush(1200);
         });
     });
-    
+
     // === EVENT: Save order cell edits (buffered to Firebase) ===
     tbody.querySelectorAll('input[data-field="meesho"], input[data-field="flipkart"]').forEach(inp => {
         inp.addEventListener('change', () => {
             const { date, accountId, company, field } = inp.dataset;
-            const value = parseInt(inp.value) || 0;
-            
+            const value = Number(inp.value || 0);
+            if (!Number.isSafeInteger(value) || value < 0) { showToast('Enter a non-negative whole number', 'error'); return; }
+
             // Update local state + local cache immediately (prevents temporary row disappear during refresh)
             applyOptimisticOrderUpdate(date, accountId, inp.dataset.accountName, value, company, field);
-            
+
             // Recalculate totals in UI immediately
             recalcSheetRowTotal(inp);
-            
+
             // Buffer the write to Firebase
-            FirebaseService.bufferWrite(`order_${date}_${accountId}_${field}`, () =>
+            FirebaseService.bufferWrite(`order_${company}_${date}_${accountId}_${field}`, () =>
                 apiRequest({ action: 'updateOrder', date, accountId, field, value, companyId: company })
             );
             scheduleQuickWriteFlush(1200);
@@ -5537,14 +4667,14 @@ function recalcSheetRowTotal(inputEl) {
     tr.querySelectorAll('input[data-field="meesho"]').forEach(inp => rowM += parseInt(inp.value) || 0);
     tr.querySelectorAll('input[data-field="flipkart"]').forEach(inp => rowF += parseInt(inp.value) || 0);
     const rowBoth = rowM + rowF;
-    
+
     const mCell = tr.querySelector('.sheet-m-total');
     const fCell = tr.querySelector('.sheet-f-total');
     const bothCell = tr.querySelector('.sheet-both-total');
     if (mCell) mCell.textContent = rowM;
     if (fCell) fCell.textContent = rowF;
     if (bothCell) bothCell.textContent = rowBoth;
-    
+
     // Also recalculate grand total row & month total row
     const tbody = document.getElementById('sheet-tbody');
     if (!tbody) return;
@@ -5579,14 +4709,14 @@ function recalcSheetRowTotal(inputEl) {
         if (mc) grandM += parseInt(mc.textContent) || 0;
         if (fc) grandF += parseInt(fc.textContent) || 0;
     });
-    
+
     const gmCell = grandRow.querySelector('.sheet-grand-m');
     const gfCell = grandRow.querySelector('.sheet-grand-f');
     const gBothCell = grandRow.querySelector('.sheet-grand-both');
     if (gmCell) gmCell.textContent = grandM;
     if (gfCell) gfCell.textContent = grandF;
     if (gBothCell) gBothCell.textContent = grandM + grandF;
-    
+
     // Update individual account grand total column cell
     const changedAccId = inputEl.dataset.accountId;
     const changedField = inputEl.dataset.field;
@@ -5596,7 +4726,7 @@ function recalcSheetRowTotal(inputEl) {
             const inp = row.querySelector(`input[data-account-id="${changedAccId}"][data-field="${changedField}"]`);
             if (inp) colSum += parseInt(inp.value) || 0;
         });
-        const grandCell = changedField === 'meesho' 
+        const grandCell = changedField === 'meesho'
             ? grandRow.querySelector(`.sheet-grand-acct-m[data-account-id="${changedAccId}"]`)
             : grandRow.querySelector(`.sheet-grand-acct-f[data-account-id="${changedAccId}"]`);
         if (grandCell) grandCell.textContent = colSum;
@@ -5606,7 +4736,7 @@ function recalcSheetRowTotal(inputEl) {
 function exportSheetCSV() {
     const table = document.getElementById('sheet-table');
     if (!table) return;
-    
+
     const rows = [];
     const theadRows = table.querySelectorAll('thead tr');
     if (theadRows.length >= 2) {
@@ -5615,7 +4745,7 @@ function exportSheetCSV() {
         rows.push(topRow.join(','));
         rows.push(subRow.join(','));
     }
-    
+
     table.querySelectorAll('tbody tr').forEach(tr => {
         if (tr.classList.contains('sheet-month-row')) {
             const txt = tr.textContent.trim().replace(/\s+/g, ' ');
@@ -5630,9 +4760,9 @@ function exportSheetCSV() {
         });
         rows.push(rowData.join(','));
     });
-    
+
     if (rows.length <= 2) { showToast('No data to export', 'error'); return; }
-    
+
     const csvContent = "data:text/csv;charset=utf-8," + rows.join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -5653,17 +4783,17 @@ document.addEventListener('DOMContentLoaded', () => {
 async function renderMoneyManagement() {
     const tbody = document.getElementById('money-management-tbody');
     if (!tbody) return;
-    
+
     // Combine accounts from both companies + their details in their set order
     const mgmtAccounts = [];
-    
+
     // Determine which company to show first based on current view for consistency
     const sortedCompanies = AppState.currentCompany === 'company2' ? ['company2', 'company1'] : ['company1', 'company2'];
-    
+
     sortedCompanies.forEach(compId => {
         const accounts = getOrderedCompanyAccounts(compId);
         const companyLabel = compId === 'company1' ? 'Company 1' : 'Company 2';
-        
+
         (accounts || []).forEach(details => {
             mgmtAccounts.push({
                 id: details.accountId || '',
@@ -5676,14 +4806,14 @@ async function renderMoneyManagement() {
             });
         });
     });
-    
+
     // Set default date to today
     const dateInput = document.getElementById('money-date');
     if (dateInput && !dateInput.value) {
         dateInput.value = getTodayISODate();
         dateInput.classList.remove('hidden');
     }
-    
+
     if (mgmtAccounts.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" class="text-center p-4 text-muted">No accounts found.</td></tr>';
         document.getElementById('money-grand-money').textContent = '0';
@@ -5691,7 +4821,7 @@ async function renderMoneyManagement() {
         document.getElementById('money-grand-total').textContent = '0';
         return;
     }
-    
+
     tbody.innerHTML = mgmtAccounts.map((acc, idx) => `
         <tr class="money-row" data-account-id="${acc.id}" data-account-name="${acc.name.replace(/"/g, '&quot;')}" data-company-id="${acc.companyId}">
             <td class="drag-handle-cell"><i class='bx bx-menu money-drag-handle' style="cursor: grab; color: #a0aec0;"></i></td>
@@ -5703,7 +4833,7 @@ async function renderMoneyManagement() {
             <td><span class="row-total font-bold" id="money-total-${idx}">${acc.money - acc.expense}</span></td>
         </tr>
     `).join('');
-    
+
     // Helper to calculate grand totals
     const updateGrandTotals = () => {
         let totalMoney = 0;
@@ -5719,36 +4849,36 @@ async function renderMoneyManagement() {
         document.getElementById('money-grand-expense').textContent = totalExpense;
         document.getElementById('money-grand-total').textContent = totalMoney - totalExpense;
     };
-    
+
     tbody.querySelectorAll('.inp-money, .inp-expense').forEach(inp => {
         inp.addEventListener('input', () => {
              updateGrandTotals();
-             
+
              // Unhide save button
              const saveBtn = document.getElementById('money-save-btn');
              if (saveBtn) saveBtn.classList.remove('hidden');
-             
+
              const row = inp.closest('.money-row');
              const accountId = row.dataset.accountId;
              const companyId = row.dataset.companyId;
              const money = parseInt(row.querySelector('.inp-money').value) || 0;
              const expense = parseInt(row.querySelector('.inp-expense').value) || 0;
              const date = document.getElementById('money-date').value || getTodayISODate();
-             
+
              // Also update local state
              const detailsList = companyId === 'company1' ? AppState.company1Details : AppState.company2Details;
              if (detailsList) {
                  const det = detailsList.find(d => d.accountId === accountId);
                  if (det) { det.money = money; det.expense = expense; det.moneyDate = date; }
              }
-             
+
              FirebaseService.bufferWrite(`money_${companyId}_${accountId}`, () => FirebaseService.updateMoney(accountId, companyId, money, expense, date));
              scheduleQuickWriteFlush(1500);
         });
     });
-    
+
     updateGrandTotals();
-    
+
     // Sortable for Money Management
     if (tbody._sortableInstance) tbody._sortableInstance.destroy();
     tbody._sortableInstance = Sortable.create(tbody, {
@@ -5769,7 +4899,7 @@ async function renderMoneyManagement() {
             // Update UI/local state visually and trigger sheet updates
             syncCompanyAccountOrderState('company1', newOrder1);
             syncCompanyAccountOrderState('company2', newOrder2);
-            
+
             showToast('Saving new order...', 'info');
             Promise.all([
                 saveAccountOrderToSheet(newOrder1, 'company1'),
@@ -5804,50 +4934,10 @@ function buildCurrentMoneySnapshotRows() {
 }
 
 async function loadMoneyBackups(force = false) {
-    if (!force && Array.isArray(AppState.moneyBackups) && AppState.moneyBackups.length > 0) {
-        return AppState.moneyBackups;
-    }
-
-    try {
-        const [fbRes, sheetsRes] = await Promise.all([
-            apiRequest({ action: 'getMoneyBackups' }).catch(() => null),
-            sheetsApiRequest({ action: 'getMoneyBackups' }).catch(() => null)
-        ]);
-
-        const fbData = Array.isArray(fbRes?.data) ? fbRes.data : [];
-        const sheetsData = Array.isArray(sheetsRes?.data) ? sheetsRes.data : [];
-
-        // Map helps to merge duplicates. Firebase data will overwrite sheets data if backupDate+reason match
-        const map = new Map();
-        
-        // Load sheets backups first
-        sheetsData.forEach(b => {
-            const key = b.backupDate + '_' + (b.reason || '');
-            map.set(key, b);
-        });
-        
-        // Override with Firebase backups
-        fbData.forEach(b => {
-            const key = b.backupDate + '_' + (b.reason || '');
-            map.set(key, b);
-        });
-
-        const merged = Array.from(map.values());
-        
-        // Sort descending by backupDate
-        merged.sort((a,b) => (b.backupDate > a.backupDate ? 1 : -1));
-
-        AppState.moneyBackups = merged;
-    } catch(e) {
-        console.error("Error loading money backups", e);
-        const res = await apiRequest({ action: 'getMoneyBackups' }).catch(()=>null);
-        AppState.moneyBackups = Array.isArray(res?.data) ? res.data : [];
-    }
-    
-    if (!AppState.selectedMoneyBackupId && AppState.moneyBackups.length > 0) {
-        AppState.selectedMoneyBackupId = AppState.moneyBackups[0].id;
-    }
-    return AppState.moneyBackups;
+ if (!force && AppState.moneyBackups?.length) return AppState.moneyBackups;
+ const result = await apiRequest({action:'getMoneyBackups'});
+ AppState.moneyBackups = result.data || [];
+ return AppState.moneyBackups;
 }
 
 function getSelectedMoneyBackup() {
@@ -6220,8 +5310,8 @@ function openKarigarResetEmployeeDetailsModal(empKey) {
 
             const dateTimeLabel = formatISODateTimeForDisplay(t.transactionDateTime || t.dateTime || t.createdAt || t.date) || '-';
             const upadReason = String(t.reason || t.note || t.remarks || t.particulars || (!isJama ? 'Cash Advance' : '')).trim();
-            const designLabel = isJama 
-                ? (escapeHtml(t.designName) || '-') 
+            const designLabel = isJama
+                ? (escapeHtml(t.designName) || '-')
                 : `<span class="text-danger font-bold">Direct Borrow (Upad)</span>${upadReason ? `<div class="text-xs mt-1" style="color:#475569; font-weight:600;"><i class='bx bx-notepad text-danger'></i> Reason: <span style="color:#0f172a; font-weight:700;">${escapeHtml(upadReason)}</span></div>` : ''}`;
             let createdFrom = String(t.createdFrom || t.source || t.dashboard || t.addedBy || '').trim();
             if (!createdFrom || createdFrom.toLowerCase() === 'web_app') createdFrom = String(t.addedBy || 'unknown').trim();
@@ -6312,7 +5402,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    
+
     const moneySaveBtn = document.getElementById('money-save-btn');
     if (moneySaveBtn) {
         // Clone to remove old bound listeners
@@ -6415,9 +5505,7 @@ async function renderSizePricesPage() {
         rawHistoryMap = (res && res.success && res.history) ? res.history : {};
         if (map && Object.keys(map).length > 0) {
             try {
-                localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(map));
                 if (rawHistoryMap && Object.keys(rawHistoryMap).length > 0) {
-                    localStorage.setItem('krimaa_size_price_history_backup', JSON.stringify(rawHistoryMap));
                 }
             } catch (err) {}
         }
@@ -6426,9 +5514,9 @@ async function renderSizePricesPage() {
     } catch (e) {
         console.warn('Size prices fallback: using cached/empty state', e);
         try {
-            const cachedPrices = localStorage.getItem('krimaa_size_prices_backup');
+            const cachedPrices = CloudState.getItem('krimaa_size_prices_backup');
             if (cachedPrices) map = JSON.parse(cachedPrices);
-            const cachedHist = localStorage.getItem('krimaa_size_price_history_backup');
+            const cachedHist = CloudState.getItem('krimaa_size_price_history_backup');
             if (cachedHist) rawHistoryMap = JSON.parse(cachedHist);
         } catch (err) {}
         if (!map || Object.keys(map).length === 0) {
@@ -6718,16 +5806,7 @@ async function renderSizePricesPage() {
                 try {
                     AppState.designPrices = AppState.designPrices || {};
                     AppState.designPrices[k] = p;
-                    localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(AppState.designPrices));
-                    if (window.LanStorageService && LanStorageService.isConnected()) {
-                        await LanStorageService.writeToLocal({
-                            action: 'upsertDesignPrice',
-                            key: k,
-                            price: p,
-                            companyId,
-                            effectiveFrom
-                        });
-                    }
+
                 } catch (bErr) {
                     console.warn('Auto local size price backup notice:', bErr);
                 }
@@ -6823,15 +5902,7 @@ async function renderSizePricesPage() {
                 // Auto-sync into local backup
                 try {
                     if (AppState.designPrices) delete AppState.designPrices[key];
-                    localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(AppState.designPrices || {}));
-                    if (window.LanStorageService && LanStorageService.isConnected()) {
-                        await LanStorageService.writeToLocal({
-                            action: 'deleteDesignPrice',
-                            key,
-                            companyId,
-                            hideFrom
-                        });
-                    }
+
                 } catch (bErr) {
                     console.warn('Auto local size price delete notice:', bErr);
                 }
@@ -6881,16 +5952,7 @@ async function renderSizePricesPage() {
                 try {
                     AppState.designPrices = AppState.designPrices || {};
                     AppState.designPrices[key] = restorePrice;
-                    localStorage.setItem('krimaa_size_prices_backup', JSON.stringify(AppState.designPrices));
-                    if (window.LanStorageService && LanStorageService.isConnected()) {
-                        await LanStorageService.writeToLocal({
-                            action: 'upsertDesignPrice',
-                            key,
-                            price: restorePrice,
-                            companyId,
-                            effectiveFrom
-                        });
-                    }
+
                 } catch (bErr) {
                     console.warn('Auto local size price restore notice:', bErr);
                 }
@@ -6940,7 +6002,7 @@ async function loadKarigarData(forceReload = false) {
             apiRequest({ action: 'getKarigarTransactions', companyId }),
             apiRequest({ action: 'getDesignPrices', companyId, DESIGN_PRICE_SCOPE })
         ]);
-        
+
         if (kRes.success) AppState.karigars = kRes.data || [];
 
         const karigarNameToId = {};
@@ -7095,16 +6157,7 @@ async function saveArchiveBackupChanges(backup) {
         console.warn('[Archive] Cloud backup sync error:', e);
     }
     try {
-        if (typeof LanStorageService !== 'undefined' && LanStorageService.isConnected()) {
-            const backups = await LanStorageService.readFile('karigar_reset_backups', []);
-            const idx = backups.findIndex(b => b && b.id === backup.id);
-            if (idx >= 0) {
-                backups[idx] = { ...backups[idx], ...backup };
-            } else {
-                backups.push(backup);
-            }
-            await LanStorageService.writeFile('karigar_reset_backups', backups);
-        }
+
     } catch (e) {
         console.warn('[Archive] LAN backup sync error:', e);
     }
@@ -7116,7 +6169,7 @@ function getKarigarPaidStorageKey(companyId, backupId = null) {
     if (backupId) {
         return `karigar_paid_${comp}_backup_${backupId}`;
     }
-    const cycleStart = localStorage.getItem(`karigar_cycle_start_${comp}`) || `${getTodayISODate().substring(0, 7)}-01`;
+    const cycleStart = CloudState.getItem(`karigar_cycle_start_${comp}`) || `${getTodayISODate().substring(0, 7)}-01`;
     return `karigar_paid_${comp}_${cycleStart}`;
 }
 
@@ -7125,7 +6178,7 @@ function getPaidKarigarsMap() {
     const key = getKarigarPaidStorageKey(AppState.currentCompany, backupId);
     let map = {};
     try {
-        const raw = localStorage.getItem(key);
+        const raw = CloudState.getItem(key);
         if (raw) map = JSON.parse(raw);
     } catch (e) {}
 
@@ -7167,7 +6220,7 @@ async function toggleKarigarPaid(karigarId, karigarName, forceValue = null) {
     }
 
     try {
-        localStorage.setItem(key, JSON.stringify(map));
+        CloudState.setItem(key, JSON.stringify(map));
     } catch (e) {}
 
     if (backupId) {
@@ -7178,17 +6231,18 @@ async function toggleKarigarPaid(karigarId, karigarName, forceValue = null) {
         }
     }
 
+    await FirebaseService.flushWrites();
     showToast(`${karigarName || 'Karigar'} marked as ${nextVal ? 'PAID / CLEAR ✓' : 'UNPAID / PENDING'}`, nextVal ? 'success' : 'info');
     renderKarigarGrid();
 }
 
 function toggleKarigarPaidWithConfirm(karigarId, karigarName) {
     const isPaid = isKarigarPaid(karigarId, karigarName);
-    const promptMsg = isPaid 
-        ? `Unmark "${karigarName}" as Paid / Clear?` 
+    const promptMsg = isPaid
+        ? `Unmark "${karigarName}" as Paid / Clear?`
         : `Mark "${karigarName}" as PAID / SETTLED? (Press Enter / OK to confirm)`;
     if (confirm(promptMsg)) {
-        toggleKarigarPaid(karigarId, karigarName, !isPaid);
+        toggleKarigarPaid(karigarId, karigarName, !isPaid).catch(error => showToast('Payment status not saved: '+error.message, 'error'));
     }
 }
 
@@ -7198,7 +6252,7 @@ function getKarigarCurrentCycleLabel() {
         const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
         if (b) return getKarigarBackupRangeLabel(b);
     }
-    const cycleStart = localStorage.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
+    const cycleStart = CloudState.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
     const todayFormatted = formatISODateForDisplay(getTodayISODate());
     return `${formatISODateForDisplay(cycleStart)} to ${todayFormatted}`;
 }
@@ -7268,7 +6322,7 @@ async function updateKarigarCycleToolbar() {
         resetBtn.style.display = isAdminUser() ? 'inline-flex' : 'none';
     }
 
-    const cycleStart = localStorage.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
+    const cycleStart = CloudState.getItem(`karigar_cycle_start_${compId}`) || `${getTodayISODate().substring(0, 7)}-01`;
     const isViewingArchive = Boolean(AppState.viewingKarigarBackupId);
 
     if (karigarContainer) {
@@ -7328,7 +6382,7 @@ async function updateKarigarCycleToolbar() {
     }
 
     const backups = Array.isArray(AppState.karigarResetBackups) ? AppState.karigarResetBackups : [];
-    
+
     let html = `<option value="current">Current Active Cycle (From ${formatISODateForDisplay(cycleStart)} to Present)</option>`;
     backups.forEach((b) => {
         const label = getKarigarBackupRangeLabel(b);
@@ -7466,7 +6520,7 @@ function getSelectedOrFirstKarigar() {
     if (!grid) return null;
     const cards = grid.querySelectorAll('.karigar-card');
     if (cards.length === 0) return null;
-    
+
     let targetCard = null;
     if (_selectedKarigarCardIndex >= 0 && _selectedKarigarCardIndex < cards.length) {
         targetCard = cards[_selectedKarigarCardIndex];
@@ -7517,10 +6571,10 @@ function renderKarigarGrid() {
     const query = rawSearch.toLowerCase();
     const btnCreate = document.getElementById('btn-create-karigar');
     const isAdmin = isAdminUser();
-    
+
     if (!grid) return;
     grid.innerHTML = '';
-    
+
     const allKarigars = getEffectiveKarigarList();
     let paidCount = 0;
     let pendingCount = 0;
@@ -7557,14 +6611,14 @@ function renderKarigarGrid() {
     if (hintEl) {
         hintEl.textContent = `Showing ${filtered.length} of ${allKarigars.length} workers`;
     }
-    
+
     const exactMatch = allKarigars.some(k => (k.name || '').toLowerCase() === query);
     if (query && !exactMatch && isAdmin) {
         btnCreate.style.display = 'block';
     } else {
         btnCreate.style.display = 'none';
     }
-    
+
     if (filtered.length === 0) {
         const escQuery = rawSearch.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         const safeJsQuery = rawSearch.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -7585,9 +6639,9 @@ function renderKarigarGrid() {
         `;
         return;
     }
-    
+
     const resetBtn = document.getElementById('btn-reset-karigar');
-    
+
     if (resetBtn) {
         if (!isAdmin || AppState.viewingKarigarBackupId) {
             resetBtn.style.display = 'none';
@@ -7605,21 +6659,21 @@ function renderKarigarGrid() {
             newResetBtn.addEventListener('click', () => confirmKarigarMonthlyReset(targetCompanyId));
         }
     }
-    
+
     let html = '';
     let globalBalanceSum = 0;
     let globalPicsSum = 0;
-    
+
     filtered.forEach((k, idx) => {
         const stats = calculateKarigarBalance(k.id, k.name);
         globalBalanceSum += stats.balance;
         globalPicsSum += (parseInt(stats.totalPics, 10) || 0);
-        
+
         const lastActivity = stats.lastTx ? `<span class="text-xs text-muted">Last active: ${formatISODateForDisplay(stats.lastTx.date)}</span>` : '<span class="text-xs text-muted">No activity yet</span>';
-        
+
         const isNegative = stats.balance < 0;
         const balColor = isNegative ? '#dc2626' : '#16a34a';
-        
+
         const entId = getEnterpriseKarigarId(k, AppState.currentCompany);
         const isPaid = isKarigarPaid(k.id, k.name);
         const paidStampHtml = isPaid ? `
@@ -7662,7 +6716,7 @@ function renderKarigarGrid() {
                         <span class="actual-bal">₹${Math.abs(stats.balance).toFixed(2)}${isNegative ? ' Due' : ' Clear'}</span>
                     </div>
                 </div>
-                
+
                 <div class="karigar-metrics-strip">
                     <div class="m-col">
                         <span class="m-lbl">Maal (Jama)</span>
@@ -7709,7 +6763,7 @@ function renderKarigarGrid() {
         `;
     });
     grid.innerHTML = html;
-    
+
     const obEl = document.getElementById('karigar-overall-balance');
     if (obEl) {
         obEl.textContent = '₹' + Math.abs(globalBalanceSum).toFixed(2) + (globalBalanceSum < 0 ? ' Due' : ' Clear');
@@ -7719,7 +6773,7 @@ function renderKarigarGrid() {
     if (opEl) {
         opEl.textContent = String(globalPicsSum);
     }
-    
+
     // Bind buttons
     grid.querySelectorAll('.btn-karigar-upad').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -7898,7 +6952,7 @@ function setupKarigarListeners() {
         });
         window.__karigarEscShortcutBound = true;
     }
-    
+
     const createBtn = document.getElementById('btn-create-karigar');
     if (createBtn && !createBtn.dataset.bound) {
         createBtn.addEventListener('click', () => {
@@ -7907,7 +6961,7 @@ function setupKarigarListeners() {
         });
         createBtn.dataset.bound = 'true';
     }
-    
+
     document.getElementById('close-karigar-create-modal')?.addEventListener('click', () => {
         document.getElementById('karigar-create-modal').classList.remove('show');
     });
@@ -7920,7 +6974,7 @@ function setupKarigarListeners() {
     document.getElementById('close-karigar-history-modal')?.addEventListener('click', () => {
         document.getElementById('karigar-history-modal').classList.remove('show');
     });
-    
+
     // Auto-fill price & total calculate for Jama
     const jamaDesign = document.getElementById('karigar-jama-design');
     const jamaPrice = document.getElementById('karigar-jama-price');
@@ -7928,7 +6982,7 @@ function setupKarigarListeners() {
     const jamaTotalDisplay = document.getElementById('karigar-jama-total-display');
     const jamaDate = document.getElementById('karigar-jama-date');
     const jamaTime = document.getElementById('karigar-jama-time');
-    
+
     const jamaSize = document.getElementById('karigar-jama-size');
     if (jamaSize && !jamaSize.dataset.bound) {
         jamaSize.addEventListener('input', () => {
@@ -7990,7 +7044,7 @@ function setupKarigarListeners() {
             if (Number.isFinite(resolved)) {
                 const oldVal = jamaPrice.value;
                 jamaPrice.value = resolved;
-                
+
                 // Show AI animation if it auto-filled a different price
                 if (oldVal != jamaPrice.value) {
                     jamaPrice.classList.add('rainbow-autofill');
@@ -8031,7 +7085,7 @@ function setupKarigarListeners() {
             const stats = calculateKarigarBalance(id, name);
             const borrow = parseFloat(upadAmount.value) || 0;
             const newBal = stats.balance - borrow;
-            
+
             upadBalanceDisplay.textContent = '₹' + newBal.toFixed(2);
             if (newBal < 0) {
                 upadBalanceDisplay.classList.remove('text-primary', 'text-success');
@@ -8043,7 +7097,7 @@ function setupKarigarListeners() {
         });
         upadAmount.dataset.bound = 'true';
     }
-    
+
     // Form submits
     const createForm = document.getElementById('karigar-create-form');
     if (createForm && !createForm.dataset.bound) {
@@ -8079,7 +7133,7 @@ function setupKarigarListeners() {
         createForm.dataset.bound = 'true';
     }
     bindKarigarFormEnterToSubmit(createForm, document.getElementById('karigar-create-modal'));
-    
+
     const jamaForm = document.getElementById('karigar-jama-form');
     if (jamaForm && !jamaForm.dataset.bound) {
         jamaForm.addEventListener('submit', async (e) => {
@@ -8122,7 +7176,7 @@ function setupKarigarListeners() {
 
             const bulkMode = true; // always-on bulk entry
             const autoNext = false; // keep current selected karigar unless user changes
-            
+
             showLoader();
             try {
                 if (AppState.viewingKarigarBackupId) {
@@ -8161,8 +7215,8 @@ function setupKarigarListeners() {
                     auditKarigarFinancials();
                     showToast("Maal (Jama) saved to archive!", "success");
                 } else {
-                    await FirebaseService.addKarigarJama({ 
-                        karigarId, karigarName, date, transactionDateTime, designName, size, pic, price, upadAmount, 
+                    await FirebaseService.addKarigarJama({
+                        karigarId, karigarName, date, transactionDateTime, designName, size, pic, price, upadAmount,
                         companyId: AppState.currentCompany,
                         addedBy: AppState.currentUser?.role || 'admin',
                         actor: buildAuditActor()
@@ -8214,7 +7268,7 @@ function setupKarigarListeners() {
         });
         jamaForm.dataset.bound = 'true';
     }
-    
+
     const upadForm = document.getElementById('karigar-upad-form');
     if (upadForm && !upadForm.dataset.bound) {
         upadForm.addEventListener('submit', async (e) => {
@@ -8250,7 +7304,7 @@ function setupKarigarListeners() {
                 if (submitBtn) submitBtn.disabled = false;
                 return;
             }
-            
+
             showLoader();
             try {
                 if (AppState.viewingKarigarBackupId) {
@@ -8287,8 +7341,8 @@ function setupKarigarListeners() {
                     showToast("Borrow (Upad) saved to archive!", "success");
                     renderKarigarGrid();
                 } else {
-                    await FirebaseService.addKarigarUpad({ 
-                        karigarId, karigarName, date, transactionDateTime, amount, 
+                    await FirebaseService.addKarigarUpad({
+                        karigarId, karigarName, date, transactionDateTime, amount,
                         note: reason, remarks: reason, reason: reason,
                         companyId: AppState.currentCompany,
                         addedBy: AppState.currentUser?.role || 'admin',
@@ -8830,12 +7884,12 @@ function openKarigarUpadModal(id, name) {
     document.getElementById('karigar-upad-amount').value = '';
     const reasonInput = document.getElementById('karigar-upad-reason');
     if (reasonInput) reasonInput.value = '';
-    
+
     // Set summary displays
     document.getElementById('karigar-upad-jama-display').textContent = '₹' + stats.totalJama.toFixed(2);
     const balanceDisplay = document.getElementById('karigar-upad-balance-display');
     balanceDisplay.textContent = '₹' + stats.balance.toFixed(2);
-    
+
     if (stats.balance < 0) {
         balanceDisplay.classList.remove('text-primary', 'text-success');
         balanceDisplay.classList.add('text-danger');
@@ -8843,7 +7897,7 @@ function openKarigarUpadModal(id, name) {
         balanceDisplay.classList.remove('text-danger');
         balanceDisplay.classList.add('text-primary');
     }
-    
+
     document.getElementById('karigar-upad-modal').classList.add('show');
 
     // Focus Karigar dropdown so Arrow keys browse karigars and Enter moves to Upad Amount
@@ -8865,11 +7919,11 @@ function openKarigarHistoryModal(id, name) {
     document.getElementById('karigar-history-name-display').textContent = name;
     const tbody = document.getElementById('karigar-history-tbody');
     tbody.innerHTML = '';
-    
+
     let totalJama = 0;
     let totalUpad = 0;
     const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
-    
+
     if (txs.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-muted">No transactions recorded for this karigar.</td></tr>';
     } else {
@@ -8877,14 +7931,14 @@ function openKarigarHistoryModal(id, name) {
             const isJama = t.type === 'jama';
             const jamaVal = isJama ? round2(t.total || 0) : 0;
             const upadVal = isJama ? round2(t.upadAmount || 0) : round2(t.amount || t.upadAmount || 0);
-            
+
             totalJama = round2(totalJama + jamaVal);
             totalUpad = round2(totalUpad + upadVal);
-            
+
             let companyTag = '';
             if (t.companyId === 'company1') companyTag = `<span class="badge badge-primary badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C1</span>`;
             if (t.companyId === 'company2') companyTag = `<span class="badge badge-success badge-sm" style="font-size: 0.6rem; padding: 2px 4px;">C2</span>`;
-            
+
             let createdFrom = String(t.createdFrom || t.source || t.dashboard || t.addedBy || '').trim();
             if (!createdFrom || createdFrom.toLowerCase() === 'web_app') {
                 createdFrom = String(t.addedBy || 'unknown').trim();
@@ -8895,7 +7949,7 @@ function openKarigarHistoryModal(id, name) {
             if (updatedFrom) {
                 addedByTag += `<span class="text-xs text-muted block"><i class='bx bx-edit'></i> Updated from: ${updatedFrom}</span>`;
             }
-            
+
             const txDateObj = parseFlexibleDateTime(t.transactionDateTime || t.dateTime || t.createdAt) || parseFlexibleDateTime(t.date);
             const displayDate = txDateObj ? formatISODateForDisplay(txDateObj) : (formatISODateForDisplay(t.date) || '-');
             const timeTag = txDateObj
@@ -8909,7 +7963,7 @@ function openKarigarHistoryModal(id, name) {
             } else if (isJama && upadVal > 0 && upadReason) {
                 upadReasonTag = `<div class="text-xs mt-1" style="color: #475569; font-weight: 600;"><i class='bx bx-notepad text-danger'></i> Upad Reason: <span style="color: #0f172a; font-weight: 700;">${escapeHtml(upadReason)}</span></div>`;
             }
-            
+
             const row = `
                 <tr style="border-bottom: 1px solid var(--border-light); ${!isJama ? 'background: #fffcfc;' : ''}">
                     <td class="p-2 text-sm">${displayDate} ${timeTag} <div class="mt-1">${companyTag}</div></td>
@@ -8932,12 +7986,12 @@ function openKarigarHistoryModal(id, name) {
             tbody.insertAdjacentHTML('beforeend', row);
         });
     }
-    
+
     const netBal = round2(totalJama - totalUpad);
     document.getElementById('history-total-jama').textContent = '₹' + totalJama.toFixed(2);
     document.getElementById('history-total-upad').textContent = '₹' + totalUpad.toFixed(2);
     document.getElementById('history-net-balance').textContent = '₹' + netBal.toFixed(2);
-    
+
     const balEl = document.getElementById('history-net-balance');
     if (netBal < 0) {
         balEl.classList.remove('text-primary', 'text-success');
@@ -8946,7 +8000,7 @@ function openKarigarHistoryModal(id, name) {
         balEl.classList.remove('text-danger');
         balEl.classList.add('text-success');
     }
-    
+
     const printSlipBtn = document.getElementById('btn-print-slip-employee');
     if (printSlipBtn) {
         printSlipBtn.onclick = () => {
@@ -8969,21 +8023,21 @@ function openKarigarHistoryModal(id, name) {
     }
     if (deleteBtn) deleteBtn.style.display = isAdminUser() ? '' : 'none';
     if (editKarigarBtn) editKarigarBtn.style.display = isAdminUser() ? '' : 'none';
-    
+
     document.getElementById('karigar-history-modal').classList.add('show');
 }
 
 async function deleteCompleteKarigar(id, name) {
     if (!isAdminUser()) return showToast('Only admin can delete karigar', 'error');
     if (!confirm(`!! WARNING !!\nAre you sure you want to completely delete "${name}"? This will permanently remove them from the system.`)) return;
-    
+
     showLoader();
     try {
         await FirebaseService.deleteKarigar(id, AppState.currentCompany, buildAuditActor());
         _pendingDataChangesForBackup = true;
         scheduleBackgroundSheetBackup('deleteKarigar');
         showToast(`Employee ${name} deleted`, 'success');
-        
+
         document.getElementById('karigar-history-modal').classList.remove('show');
         invalidateKarigarCache();
         await renderKarigarPage(true);
@@ -9000,39 +8054,9 @@ async function deleteCompleteKarigar(id, name) {
 // immediately after any karigar add/edit/delete or size price change.
 // This keeps karigars.json, karigar_transactions.json, and design_prices.json
 // always in sync without requiring the user to manually export anything.
-async function autoSyncKarigarsToLAN() {
-    if (!window.LanStorageService || !LanStorageService.isConnected()) return;
-    try {
-        // Read live data from the LAN store (which is the authoritative source)
-        const karigarsRes = await FirebaseService.getKarigars(AppState.currentCompany || 'company1');
-        if (karigarsRes && karigarsRes.data) {
-            await LanStorageService.writeFile('karigars', karigarsRes.data);
-        }
-        // Also sync karigar_transactions
-        const txRes = await FirebaseService.getKarigarTransactions(AppState.currentCompany || 'company1');
-        if (txRes && Array.isArray(txRes.data)) {
-            await LanStorageService.writeFile('karigar_transactions', txRes.data);
-        }
-    } catch (e) {
-        console.warn('[LAN] autoSyncKarigarsToLAN failed:', e.message);
-    }
-}
+async function autoSyncKarigarsToLAN() {}
 
-async function autoSyncDesignPricesToLAN() {
-    if (!window.LanStorageService || !LanStorageService.isConnected()) return;
-    try {
-        // design_prices are written via the _writeLocalDoc path (writeEncryptedFile → writeFile)
-        // so they're already updated. But we also re-write design_price_history to keep it fresh.
-        const histRes = await FirebaseService.getDesignPriceHistory
-            ? await FirebaseService.getDesignPriceHistory('global')
-            : null;
-        if (histRes && Array.isArray(histRes.data)) {
-            await LanStorageService.writeFile('design_price_history', histRes.data);
-        }
-    } catch (e) {
-        console.warn('[LAN] autoSyncDesignPricesToLAN failed:', e.message);
-    }
-}
+async function autoSyncDesignPricesToLAN() {}
 
 // ===== CLEAR ALL KARIGARS (Admin Only) =====
 async function clearAllKarigars() {
@@ -9089,17 +8113,7 @@ async function clearAllKarigars() {
 
         // 3. If LAN folder is connected, write empty arrays directly to the JSON files
         //    to ensure the local backup folder is immediately in sync.
-        if (window.LanStorageService && LanStorageService.isConnected()) {
-            try {
-                await LanStorageService.writeFile('karigars', []);
-                await LanStorageService.writeFile('karigar_transactions', []);
-                // Also clear the karigar_reset_backups if the user wants a full fresh start
-                // (Do NOT clear this — keep historical archives safe)
-                console.log('[LAN] Cleared karigars.json and karigar_transactions.json');
-            } catch (lanErr) {
-                console.warn('[LAN] Failed to clear local JSON files:', lanErr.message);
-            }
-        }
+
 
         // 4. Flush all pending writes to Firebase
         await FirebaseService.flushWrites();
@@ -9133,7 +8147,7 @@ async function clearAllKarigars() {
 async function deleteKarigarHistory(txId, karigarId, karigarName) {
     if (!isAdminUser()) return showToast('Only admin can delete transaction', 'error');
     if (!confirm('Are you certain you want to specifically delete this record? This cannot be undone.')) return;
-    
+
     showLoader();
     try {
         if (AppState.viewingKarigarBackupId) {
@@ -9154,12 +8168,12 @@ async function deleteKarigarHistory(txId, karigarId, karigarName) {
         _pendingDataChangesForBackup = true;
         scheduleBackgroundSheetBackup('deleteKarigarTransaction');
         showToast('Record deleted successfully', 'success');
-        
+
         // Remove locally without full fetch
         AppState.karigarTransactions = AppState.karigarTransactions.filter(t => t.id !== txId);
         rebuildKarigarComputedCache();
         invalidateKarigarCache();
-        
+
         // Refresh the open modal and background grid immediately
         openKarigarHistoryModal(karigarId, karigarName);
         renderKarigarGrid();
@@ -9286,7 +8300,7 @@ async function confirmKarigarMonthlyReset(targetCompanyId = '') {
     if (!isAdminUser()) return showToast('Only admin can run monthly reset', 'error');
     const safeCompanyId = String(targetCompanyId || AppState.currentCompany || 'company1').trim() || 'company1';
     const targetCompanyName = getCompanyDisplayName(safeCompanyId);
-    
+
     let txs = Array.isArray(AppState.karigarTransactions) ? AppState.karigarTransactions : [];
     if (AppState.viewingKarigarBackupId) {
         const b = (AppState.karigarResetBackups || []).find(x => x.id === AppState.viewingKarigarBackupId);
@@ -9387,7 +8401,7 @@ async function executeKarigarMonthlyReset(safeCompanyId, targetCompanyName, txs)
     try {
         showToast(`Archiving ${targetCompanyName} Karigar data...`, 'info');
         await FirebaseService.flushWrites();
-        
+
         const backupRows = (txs || [])
             .filter(tx => String(tx.companyId || '').trim() === safeCompanyId)
             .map(tx => ({ ...tx }));
@@ -9404,9 +8418,9 @@ async function executeKarigarMonthlyReset(safeCompanyId, targetCompanyName, txs)
 
         // 3. Update reset date and cycle start in localStorage
         const todayIso = getTodayISODate();
-        localStorage.setItem(`karigar_cycle_start_${safeCompanyId}`, todayIso);
-        localStorage.setItem(`karigar_last_reset_date_${safeCompanyId}`, new Date().toISOString());
-        localStorage.setItem(`karigar_last_reset_month_${safeCompanyId}`, todayIso.substring(0, 7));
+        CloudState.setItem(`karigar_cycle_start_${safeCompanyId}`, todayIso);
+        CloudState.setItem(`karigar_last_reset_date_${safeCompanyId}`, new Date().toISOString());
+        CloudState.setItem(`karigar_last_reset_month_${safeCompanyId}`, todayIso.substring(0, 7));
 
         // 4. Update memory state
         if (String(AppState.currentCompany || '').trim() === safeCompanyId) {
@@ -9439,7 +8453,7 @@ function getEnterpriseKarigarId(karigar, companyId = 'company1') {
     const comp = String(companyId || AppState?.currentCompany || 'company1').trim();
     const compPrefix = (comp === 'company2') ? 'DH' : 'SS';
     const name = String(karigar.name || '').trim();
-    
+
     // Check if name has a number prefix or suffix (e.g. "2 ASMAUN", "5 SABIR", "SUHOJIT 3")
     const match = name.match(/^(\d+)/) || name.match(/(\d+)$/);
     if (match) {
@@ -9448,7 +8462,7 @@ function getEnterpriseKarigarId(karigar, companyId = 'company1') {
             return `${compPrefix}-KRG-${String(num).padStart(3, '0')}`;
         }
     }
-    
+
     // Fallback for names without numbers: assign unique available number
     const list = Array.isArray(AppState?.karigars) ? AppState.karigars : [];
     const used = new Set();
@@ -9476,7 +8490,7 @@ function getEnterpriseKarigarId(karigar, companyId = 'company1') {
 function numberToIndianWords(amount) {
     const num = Math.floor(Math.abs(Number(amount) || 0));
     if (num === 0) return 'Zero Rupees Only';
-    
+
     const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
         'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
     const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
@@ -9606,6 +8620,8 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         }
     });
 
+    const reportDates = karigarTxs.map(t => normalizeToISODate(t.date || t.transactionDateTime)).filter(Boolean).sort();
+    if (!options.periodLabel && reportDates.length) periodLabel = formatISODateForDisplay(reportDates[0]) + ' to ' + formatISODateForDisplay(reportDates[reportDates.length - 1]);
     const netBalance = round2(totalJama - totalUpad);
     const inWords = numberToIndianWords(Math.abs(netBalance));
 
@@ -9710,7 +8726,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         pageDoc.setFontSize(7.5);
         pageDoc.text('NET BALANCE', box4X + boxW / 2, boxY + 4.5, { align: 'center' });
         pageDoc.setFont('helvetica', 'bold');
-        pageDoc.setFontSize(10.5);
+        pageDoc.setFontSize(9);
         pageDoc.text('Rs. ' + Math.abs(netBalance).toFixed(2) + (netBalance < 0 ? ' (DUE)' : ' (PAYABLE)'), box4X + boxW / 2, boxY + 10.5, { align: 'center' });
 
         let currentY = boxY + boxH + 4.5;
@@ -9756,7 +8772,8 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
                 5: { halign: 'right', cellWidth: 24 },
                 6: { halign: 'right', cellWidth: 28 }
             },
-            margin: { left: 14, right: 14 }
+            showFoot: 'lastPage',
+            margin: { top: 14, bottom: 16, left: 14, right: 14 }
         });
 
         currentY = pageDoc.lastAutoTable.finalY + 4;
@@ -9809,7 +8826,8 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
                 3: { halign: 'center', cellWidth: 32 },
                 4: { halign: 'right', cellWidth: 30 }
             },
-            margin: { left: 14, right: 14 }
+            showFoot: 'lastPage',
+            margin: { top: 14, bottom: 16, left: 14, right: 14 }
         });
 
         currentY = pageDoc.lastAutoTable.finalY + 4;
@@ -9904,6 +8922,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
     const includeWorker = options.includeWorker !== false;
     const includeFactory = options.includeFactory !== false;
 
+    const firstSlipPage = doc.internal.getCurrentPageInfo().pageNumber;
     let pagesRendered = 0;
     if (includeWorker) {
         const copyBadge = includeFactory ? '1. WORKER COPY' : 'WORKER COPY';
@@ -9922,7 +8941,8 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
 
     // Stamp footer on every page rendered for this karigar (Karigar-wise Page X/pagesRendered)
     const totalDocPages = doc.internal.getNumberOfPages();
-    const workerFirstPage = totalDocPages - pagesRendered + 1;
+    const workerFirstPage = firstSlipPage;
+    pagesRendered = totalDocPages - firstSlipPage + 1;
     for (let pIndex = 0; pIndex < pagesRendered; pIndex++) {
         const targetPage = workerFirstPage + pIndex;
         doc.setPage(targetPage);
@@ -10435,47 +9455,17 @@ function exportKarigarSalarySlipPDF(karigar, customOptions = {}) {
     generateKarigarSalarySlipPDF(karigar, txs, { isBulk: false, ...customOptions });
 }
 
-function printPDFViaHiddenIframe(doc, title = 'Document') {
-    if (!doc) return;
-    doc.autoPrint();
-    const blob = doc.output('blob');
-    const blobUrl = URL.createObjectURL(blob);
-
-    showToast(`Opening Print dialog for ${title}...`, 'info');
-
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '1px';
-    iframe.style.height = '1px';
-    iframe.style.border = '0';
-    iframe.style.opacity = '0.01';
-    iframe.src = blobUrl;
-    document.body.appendChild(iframe);
-
-    let printed = false;
-    const triggerPrint = () => {
-        if (printed) return;
-        printed = true;
-        try {
-            iframe.contentWindow?.focus();
-            iframe.contentWindow?.print();
-        } catch (err) {
-            console.warn('Iframe print error, falling back to window.open:', err);
-            const w = window.open(blobUrl, '_blank');
-            if (w) w.focus();
-        }
-        setTimeout(() => {
-            try { document.body.removeChild(iframe); } catch(e){}
-            try { URL.revokeObjectURL(blobUrl); } catch(e){}
-        }, 120000);
-    };
-
-    iframe.onload = () => {
-        setTimeout(triggerPrint, 250);
-    };
-    setTimeout(triggerPrint, 900);
+function printPDFViaHiddenIframe(doc, title = 'Report') {
+ if (!doc) return;
+ const url = URL.createObjectURL(doc.output('blob'));
+ const viewer = window.open(url, '_blank');
+ if (viewer) {
+  showToast('Report opened. Use the PDF viewer’s Print or Share option.', 'info');
+ } else {
+  doc.save(title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf');
+  showToast('Report downloaded. Open the PDF to print.', 'info');
+ }
+ setTimeout(() => URL.revokeObjectURL(url), 300000);
 }
 
 function printKarigarSalarySlip(karigar, customOptions = {}) {
@@ -11007,7 +9997,7 @@ function exportTableToPDF(title, headers, bodyData, filename) {
     doc.text(title, 14, 15);
     doc.setFontSize(10);
     doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 22);
-    
+
     doc.autoTable({
         startY: 25,
         head: [headers],
@@ -11028,7 +10018,7 @@ document.getElementById('export-pdf-sheet-btn')?.addEventListener('click', () =>
         const text = th.textContent.trim();
         if(text && text !== '#' && text !== '') headers.push(text);
     });
-    
+
     // Custom logic to parse Data Sheet since it has inputs
     const rows = [];
     table.querySelectorAll('tbody tr:not(.sheet-grand-row)').forEach(tr => {
@@ -11040,7 +10030,7 @@ document.getElementById('export-pdf-sheet-btn')?.addEventListener('click', () =>
         });
         if(rowData.length > 0) rows.push(rowData);
     });
-    
+
     const timeAppend = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}).replace(/:/g, '-').replace(/ /g, '');
     exportTableToPDF('Combined Data Sheet', headers, rows, `Data_Sheet_${getTodayISODate()}_${timeAppend}.pdf`);
 });
@@ -11061,18 +10051,7 @@ document.getElementById('export-pdf-money-btn')?.addEventListener('click', () =>
     exportTableToPDF('Money Management Report', ['Company', 'Account', 'Money', 'Expense', 'Balance'], rows, `Money_Report_${getTodayISODate()}_${timeAppend}.pdf`);
 });
 
-document.getElementById('export-pdf-karigar-btn')?.addEventListener('click', () => {
-    const rows = [];
-    document.querySelectorAll('#karigar-grid .card').forEach(card => {
-        const name = card.querySelector('.font-bold.text-lg')?.textContent.trim() || '';
-        const jama = card.querySelector('.text-success')?.textContent.replace('₹', '').trim() || '0';
-        const upad = card.querySelector('.text-danger')?.textContent.replace('₹', '').trim() || '0';
-        const balance = card.querySelector('.karigar-balance-val .actual-bal')?.textContent.replace('₹', '').trim() || '0';
-        rows.push([name, jama, upad, balance]);
-    });
-    const timeAppend = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}).replace(/:/g, '-').replace(/ /g, '');
-    exportTableToPDF('Karigar Management Report', ['Name', 'Total Jama', 'Total Upad', 'Balance'], rows, `Karigar_Report_${getTodayISODate()}_${timeAppend}.pdf`);
-});
+document.getElementById('export-pdf-karigar-btn')?.addEventListener('click', () => exportKarigarMasterSummaryPayrollPDF());
 
 document.getElementById('global-export-btn')?.addEventListener('click', () => {
     document.getElementById('global-export-modal').classList.add('show');
@@ -11090,51 +10069,52 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
     const fromDate = document.getElementById('export-from-date').value;
     const toDate = document.getElementById('export-to-date').value;
     if (!fromDate || !toDate) { showToast('Please select both dates', 'error'); return; }
-    
+
     document.getElementById('global-export-modal').classList.remove('show');
     showLoader();
     try {
         showToast('Generating Multi-Page PDF...', 'info');
-        
+
         // Actually fetch the real data here directly from Google Sheets via sheetsApiRequest
-        const res = await sheetsApiRequest({ action: 'getGlobalReport', fromDate, toDate });
+        await FirebaseService.flushWrites();
+        const res = await FirebaseService.getGlobalReport(fromDate, toDate);
         if(!res || !res.success) throw new Error(res?.message || 'Failed to generate report');
-        
+
         if (!window.jspdf) { throw new Error('PDF Library not loaded'); }
         const { jsPDF } = window.jspdf;
         const doc = new jsPDF();
-        
+
         doc.setFontSize(20);
         doc.text('Krimaa Global Report', 14, 20);
         doc.setFontSize(10);
         doc.text(`Report Period: ${fromDate} to ${toDate}`, 14, 28);
         doc.text(`Generated exactly at: ${new Date().toLocaleString()}`, 14, 34);
-        
+
         // Data Sheet Table
         doc.setFontSize(14);
         doc.text('Daily Orders Overview', 14, 45);
         doc.autoTable({
             startY: 50,
-            head: [['Date', 'Company', 'Account', 'Orders', 'Amount']],
-            body: res.orders.map(o => [o.date, o.companyId, o.accountName, o.meesho, o.total]),
+            head: [['Date', 'Company', 'Account', 'Meesho', 'Flipkart', 'Total']],
+            body: res.orders.map(o => [o.date, getCompanyDisplayName(o.companyId), o.accountName, o.meesho, o.flipkart, o.total]),
             theme: 'grid',
             headStyles: { fillColor: [40, 40, 40] }
         });
-        
+
         // Karigars Table
         doc.addPage();
         doc.text('Karigar Transactions Snapshot', 14, 15);
         doc.autoTable({
             startY: 20,
             head: [['Date', 'Type', 'Karigar', 'Design', 'Amount']],
-            body: res.karigarTransactions.map(k => [k.date || '-', k.type || '-', k.karigarName || '-', k.designName || '-', k.amount || k.total || '0']),
+            body: res.karigarTransactions.map(k => [k.date || '-', k.type || '-', k.karigarName || '-', k.designName || '-', k.type === 'upad' ? (k.upadAmount || k.amount || 0) : (k.total || k.amount || 0)]),
             theme: 'grid',
             headStyles: { fillColor: [19, 91, 236] }
         });
-        
+
         doc.save(`Krimaa_Global_Report_${fromDate}_to_${toDate}.pdf`);
         showToast('Global Report downloaded!', 'success');
-        
+
     } catch(e) {
         console.error(e);
         showToast('Error generating global report', 'error');
@@ -11142,193 +10122,4 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
         hideLoader();
     }
 });
-
-// ===== LAN DRIVE UI & CONTROLLERS =====
-function initLanSettingsUI() {
-    const indicator = document.getElementById('lan-indicator');
-    const modal = document.getElementById('lan-settings-modal');
-    const settingsBtn = document.getElementById('lan-settings-btn');
-    const closeBtn = document.getElementById('close-lan-modal-btn');
-    const form = document.getElementById('lan-settings-form');
-    const selectBtn = document.getElementById('lan-select-folder-btn');
-    const disconnectBtn = document.getElementById('lan-disconnect-btn');
-    const badge = document.getElementById('lan-modal-status-badge');
-    const desc = document.getElementById('lan-modal-status-desc');
-    const exportBtn = document.getElementById('lan-export-payload-btn');
-    const importBtn = document.getElementById('lan-import-payload-btn');
-    const fileInput = document.getElementById('lan-import-file-input');
-
-    if (!indicator || !modal) return;
-
-    function syncUI(status) {
-        if (status === "connected") {
-            indicator.className = "sync-indicator sync-saved";
-            indicator.querySelector('span').textContent = "LAN: Connected";
-            indicator.style.display = "";
-            badge.className = "badge badge-a bg-success text-white";
-            badge.textContent = "Connected";
-            desc.textContent = "Linked to local folder. High-speed local reading/writing is active.";
-            disconnectBtn.classList.remove('hidden');
-            selectBtn.classList.add('hidden');
-            document.body.classList.remove('lan-read-only');
-        } else if (status === "read-only") {
-            indicator.className = "sync-indicator sync-error";
-            indicator.querySelector('span').textContent = "LAN: Read-Only";
-            indicator.style.display = "";
-            badge.className = "badge badge-b bg-danger text-white";
-            badge.textContent = "Read-Only";
-            desc.textContent = "Folder path configured but locked/disconnected. Link folder to unlock.";
-            disconnectBtn.classList.remove('hidden');
-            selectBtn.classList.remove('hidden');
-            document.body.classList.add('lan-read-only');
-        } else {
-            indicator.className = "sync-indicator sync-idle";
-            indicator.querySelector('span').textContent = "LAN: Off";
-            badge.className = "badge";
-            badge.style.background = "#cbd5e1";
-            badge.style.color = "#475569";
-            badge.textContent = "Off";
-            desc.textContent = "Firestore is currently your primary database in Read-Only mode. Edits require connecting a LAN folder.";
-            disconnectBtn.classList.add('hidden');
-            selectBtn.classList.remove('hidden');
-            document.body.classList.add('lan-read-only');
-        }
-    }
-
-    LanStorageService.onStatusChange((status) => {
-        syncUI(status);
-    });
-
-    function updateLanModalProfileLabel() {
-        const labelEl = document.getElementById('lan-modal-profile-label');
-        const labelTextEl = document.getElementById('lan-modal-profile-label-text');
-        const profile = LanStorageService.getActiveProfile();
-        const selectBtnEl = document.getElementById('lan-select-folder-btn');
-        if (!labelEl) return;
-        if (profile && !['Krimaa', 'dev', null].includes(profile)) {
-            labelEl.style.display = 'block';
-            if (labelTextEl) labelTextEl.textContent = `Profile: ${profile} (separate folder)`;
-            if (selectBtnEl) selectBtnEl.innerHTML = `<i class='bx bx-folder-open'></i> Link ${profile}'s Folder`;
-        } else {
-            labelEl.style.display = 'none';
-            if (selectBtnEl) selectBtnEl.innerHTML = `<i class='bx bx-folder-open'></i> Link LAN Folder`;
-        }
-    }
-
-    settingsBtn.addEventListener('click', () => { modal.classList.add('show'); updateLanModalProfileLabel(); });
-    indicator.addEventListener('click', () => {
-        if (LanStorageService.isReadOnly()) {
-            LanStorageService.requestUnlock().then(success => {
-                if (success) {
-                    showToast("LAN folder unlocked! Reloading data...", "success");
-                    loadInitialData();
-                }
-            });
-        } else {
-            modal.classList.add('show');
-        }
-    });
-
-    closeBtn.addEventListener('click', () => modal.classList.remove('show'));
-    modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('show'); });
-
-    selectBtn.addEventListener('click', async () => {
-        showLoader("Configuring local folder...");
-        const res = await LanStorageService.connect();
-        hideLoader();
-        if (res.success) {
-            showToast("Successfully linked and unlocked local folder!", "success");
-            loadInitialData();
-        } else {
-            showToast("Failed to link folder: " + res.error, "error");
-        }
-    });
-
-    disconnectBtn.addEventListener('click', () => {
-        if (confirm("Disconnect local folder? Data will revert to reading from Cloud Firestore.")) {
-            LanStorageService.disconnect();
-            showToast("LAN folder disconnected.", "info");
-            loadInitialData();
-        }
-    });
-
-    exportBtn.addEventListener('click', async () => {
-        showLoader("Generating ZIP Archive...");
-        try {
-            const blob = await LanStorageService.generateBackupPayload();
-            const url = URL.createObjectURL(blob);
-            const downloadAnchor = document.createElement('a');
-            downloadAnchor.setAttribute("href", url);
-            downloadAnchor.setAttribute("download", `krimaa_lan_shared_drive_${getTodayISODate()}.zip`);
-            document.body.appendChild(downloadAnchor);
-            downloadAnchor.click();
-            downloadAnchor.remove();
-            URL.revokeObjectURL(url);
-            showToast("LAN backup ZIP exported successfully!", "success");
-        } catch (e) {
-            console.error(e);
-            showToast("Export failed: " + e.message, "error");
-        } finally {
-            hideLoader();
-        }
-    });
-
-    importBtn.addEventListener('click', () => {
-        if (!LanStorageService.isConnected()) {
-            showToast("Link your local folder first before importing backups!", "error");
-            return;
-        }
-        fileInput.click();
-    });
-
-    fileInput.addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        showLoader('Bootstrapping LAN folder...');
-        try {
-            if (file.name.endsWith('.zip')) {
-                // New ZIP format (exported by "Export Firestore Data" button)
-                await LanStorageService.bootstrapFolderFromZip(file);
-            } else {
-                // Legacy JSON payload
-                const text = await file.text();
-                const payload = JSON.parse(text);
-                await LanStorageService.bootstrapFolderFromBackup(payload);
-            }
-            showToast('LAN folder successfully bootstrapped from backup!', 'success');
-            loadInitialData();
-        } catch (err) {
-            showToast('Import failed: ' + err.message, 'error');
-        } finally {
-            hideLoader();
-            fileInput.value = '';
-        }
-    });
-
-    // Auto-reconnect is handled by initApp (awaited before checkAuth).
-    // Just update the UI to reflect current status.
-    syncUI(LanStorageService.getStatus());
-}
-
-
-// ===== OFFLINE CONTINUOUS POLLING =====
-let lastFolderHash = '';
-setInterval(async () => {
-    if (window.LanStorageService && window.LanStorageService.isConnected()) {
-        const currentHash = await window.LanStorageService.getFolderHash();
-        if (lastFolderHash && currentHash !== lastFolderHash) {
-            console.log('[LAN] External data change detected, refreshing UI...');
-            // Refresh dashboard if we are on dashboard
-            if (!document.getElementById('app-screen').classList.contains('hidden') && document.getElementById('dashboard').classList.contains('active')) {
-                loadDashboardData(document.getElementById('dash-filter-type').value);
-            }
-            // Refresh manage order page if open
-            if (document.getElementById('daily-order').classList.contains('active')) {
-                loadInitialData();
-            }
-        }
-        lastFolderHash = currentHash;
-    }
-}, 5000);
 

@@ -1253,13 +1253,10 @@ td.sheet-f-col {
 }
 
 @media (max-width: 768px) and (orientation: portrait) {
-    .sheet-mobile-hint {
-        display: flex;
-    }
-
-    .sheet-wrapper {
-        display: none;
-    }
+    .sheet-mobile-hint { display: none; }
+    .sheet-wrapper { display: block; overflow: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+    .sheet-table { min-width: 920px; }
+    .sheet-cell-input { min-height: 36px; font-size: 16px; }
 }
 
 @media (max-width: 768px) and (orientation: landscape) {
@@ -1934,3 +1931,13 @@ body.lan-read-only .sheet-cell-input {
     transform: translateY(-2px);
 }
 
+
+/* Touch editing keeps complete quantities visible while the sheet scrolls horizontally. */
+@media (max-width: 768px) {
+    .sheet-table { table-layout: auto; }
+    .sheet-table th.sheet-sub-header,
+    .sheet-table td.sheet-editable { min-width: 64px; width: 64px; }
+    .sheet-table .sheet-cell-input { min-width: 52px; min-height: 36px; font-size: 16px; }
+    .sheet-table th.sheet-date-col,
+    .sheet-table td.sheet-date-cell { min-width: 104px; width: 104px; max-width: 104px; }
+}
