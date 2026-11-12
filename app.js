@@ -842,7 +842,9 @@ let _pendingDataChangesForBackup = false;
 let _adminRealtimeBusy = false;
 let _quickWriteFlushTimer = null;
 let _renderDataSheetSeq = 0;
+const AUTO_SAVE_DELAY_MS = 30000;
 const _pendingOrderOverrides = new Map();
+const _pendingRemarkDates = new Set();
 let _sheetSyncLifecycleBound = false;
 let _lastSheetBackupSuccessMs = 0;
 let _lastDirectOrderSheetSyncMs = 0;
@@ -1264,9 +1266,9 @@ function bindSheetSyncLifecycleEvents() {
     });
 }
 
-function scheduleQuickWriteFlush(delayMs = 1200) {
+function scheduleQuickWriteFlush(delayMs = AUTO_SAVE_DELAY_MS) {
     if (_quickWriteFlushTimer) clearTimeout(_quickWriteFlushTimer);
-    const wait = parseInt(delayMs, 10) || 1200;
+    const wait = parseInt(delayMs, 10) || AUTO_SAVE_DELAY_MS;
     _quickWriteFlushTimer = setTimeout(async () => {
         try {
             await FirebaseService.flushWrites();
@@ -1310,6 +1312,24 @@ function buildPendingOrderOverrideKey(companyId, date, accountId, accountName) {
     const safeAccountId = String(accountId || '').trim();
     const safeName = String(accountName || '').trim().toLowerCase();
     return `${safeCompanyId}|${safeDate}|${safeAccountId || safeName}`;
+}
+
+function isOrderCellPending(companyId, date, accountId, accountName, field) {
+    const key = buildPendingOrderOverrideKey(companyId, date, accountId, accountName);
+    const override = _pendingOrderOverrides.get(key);
+    return !!(override && override[field] !== undefined);
+}
+
+function clearSheetCellUnsaved(companyId, date, accountId, field) {
+    const tbody = document.getElementById('sheet-tbody');
+    if (!tbody) return;
+    const safeDate = normalizeToISODate(date);
+    tbody.querySelectorAll('input.sheet-cell-input').forEach(inp => {
+        if (inp.dataset.date !== safeDate || inp.dataset.field !== field) return;
+        if (field !== 'remark' && (inp.dataset.company !== companyId || inp.dataset.accountId !== accountId)) return;
+        inp.defaultValue = inp.value;
+        inp.closest('td')?.classList.remove('sheet-cell-unsaved');
+    });
 }
 
 function setPendingOrderOverride(date, accountId, accountName, value, companyId, field = 'meesho') {
@@ -3589,7 +3609,12 @@ case 'getDesignPrices': result = await FirebaseService.getDesignPrices(payload.D
   if(override && override[payload.field]===Number(payload.value)) {
    delete override[payload.field];
    if(override.meesho===undefined && override.flipkart===undefined) _pendingOrderOverrides.delete(overrideKey);
+   clearSheetCellUnsaved(companyId, payload.date, payload.accountId, payload.field);
   }
+ } else if (action==='saveRemark') {
+  const safeDate = normalizeToISODate(payload.date);
+  _pendingRemarkDates.delete(safeDate);
+  clearSheetCellUnsaved(companyId, safeDate, '', 'remark');
  }
  return result;
  } catch(error) { if(isFirestoreQuotaError(error)) activateFirestoreQuotaCooldown(error); throw error; }
@@ -3881,6 +3906,9 @@ function initSyncIndicator() {
             } else {
                 saveBtn.classList.add('hidden');
             }
+        }
+        if (status === 'saved' && pending === 0 && _pendingOrderOverrides.size === 0 && _pendingRemarkDates.size === 0) {
+            document.querySelectorAll('#sheet-tbody td.sheet-cell-unsaved').forEach(td => td.classList.remove('sheet-cell-unsaved'));
         }
     });
 
@@ -4428,10 +4456,12 @@ async function renderDataSheet() {
             grandTotals.accounts[idx].flipkart += flipkartVal;
 
             if (acc.hasM) {
-                bodyHtml += `<td class="sheet-editable sheet-m-col ${!acc.hasF ? 'sheet-acct-border' : ''}"><input type="number" class="sheet-cell-input" value="${meeshoVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="0"></td>`;
+                const mUnsaved = isOrderCellPending(acc.company, date, acc.id, acc.name, 'meesho') ? ' sheet-cell-unsaved' : '';
+                bodyHtml += `<td class="sheet-editable sheet-m-col ${!acc.hasF ? 'sheet-acct-border' : ''}${mUnsaved}"><input type="number" class="sheet-cell-input" value="${meeshoVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="meesho" min="0" placeholder="0"></td>`;
             }
             if (acc.hasF) {
-                bodyHtml += `<td class="sheet-editable sheet-f-col sheet-acct-border"><input type="number" class="sheet-cell-input" value="${flipkartVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="flipkart" min="0" placeholder="0"></td>`;
+                const fUnsaved = isOrderCellPending(acc.company, date, acc.id, acc.name, 'flipkart') ? ' sheet-cell-unsaved' : '';
+                bodyHtml += `<td class="sheet-editable sheet-f-col sheet-acct-border${fUnsaved}"><input type="number" class="sheet-cell-input" value="${flipkartVal}" data-date="${date}" data-account-id="${escapeHtml(acc.id)}" data-account-name="${escapeHtml(acc.name)}" data-company="${acc.company}" data-field="flipkart" min="0" placeholder="0"></td>`;
             }
         });
         const rowBoth = rowM + rowF;
@@ -4444,7 +4474,8 @@ async function renderDataSheet() {
         bodyHtml += `<td class="sheet-total-cell sheet-both-total" title="Total: ${rowBoth.toLocaleString()}">${rowBoth}</td>`;
 
         const remarkVal = savedRemarks[date] || '';
-        bodyHtml += `<td class="sheet-editable sheet-remarks-col"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
+        const rUnsaved = _pendingRemarkDates.has(date) ? ' sheet-cell-unsaved' : '';
+        bodyHtml += `<td class="sheet-editable sheet-remarks-col${rUnsaved}"><input type="text" class="sheet-cell-input sheet-remark-input" value="${escapeHtml(remarkVal)}" data-date="${date}" data-field="remark" placeholder="Add note..."></td>`;
         bodyHtml += '</tr>';
     });
 
@@ -4471,6 +4502,17 @@ async function renderDataSheet() {
 
     tbody.innerHTML = bodyHtml;
 
+    // === EVENT: Highlight edited cells immediately until saved ===
+    tbody.querySelectorAll('input.sheet-cell-input').forEach(inp => {
+        inp.addEventListener('input', () => {
+            const td = inp.closest('td');
+            if (!td) return;
+            if (inp.value !== inp.defaultValue) {
+                td.classList.add('sheet-cell-unsaved');
+            }
+        });
+    });
+
     // === EVENT: Save remarks (buffered to Firebase) ===
     tbody.querySelectorAll('input[data-field="remark"]').forEach(inp => {
         inp.addEventListener('change', () => {
@@ -4480,12 +4522,14 @@ async function renderDataSheet() {
             // Update cache immediately
             if (!_remarkCache) _remarkCache = {};
             _remarkCache[date] = val;
+            _pendingRemarkDates.add(date);
+            inp.closest('td')?.classList.add('sheet-cell-unsaved');
 
-            // Buffer the write to Firebase (flushes after APP_CONFIG.writeBufferMs)
+            // Buffer the write to Firebase (flushes after AUTO_SAVE_DELAY_MS)
             FirebaseService.bufferWrite(`remark_${date}`, () =>
                 apiRequest({ action: 'saveRemark', date, remark: val, companyId: AppState.currentCompany })
             );
-            scheduleQuickWriteFlush(1200);
+            scheduleQuickWriteFlush(AUTO_SAVE_DELAY_MS);
         });
     });
 
@@ -4498,6 +4542,7 @@ async function renderDataSheet() {
 
             // Update local state + local cache immediately (prevents temporary row disappear during refresh)
             applyOptimisticOrderUpdate(date, accountId, inp.dataset.accountName, value, company, field);
+            inp.closest('td')?.classList.add('sheet-cell-unsaved');
 
             // Recalculate totals in UI immediately
             recalcSheetRowTotal(inp);
@@ -4506,7 +4551,7 @@ async function renderDataSheet() {
             FirebaseService.bufferWrite(`order_${company}_${date}_${accountId}_${field}`, () =>
                 apiRequest({ action: 'updateOrder', date, accountId, field, value, companyId: company })
             );
-            scheduleQuickWriteFlush(1200);
+            scheduleQuickWriteFlush(AUTO_SAVE_DELAY_MS);
         });
     });
 
@@ -4873,7 +4918,7 @@ async function renderMoneyManagement() {
              }
 
              FirebaseService.bufferWrite(`money_${companyId}_${accountId}`, () => FirebaseService.updateMoney(accountId, companyId, money, expense, date));
-             scheduleQuickWriteFlush(1500);
+             scheduleQuickWriteFlush(AUTO_SAVE_DELAY_MS);
         });
     });
 

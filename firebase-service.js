@@ -1898,7 +1898,7 @@ const FirebaseService = (() => {
             flushWrites().catch((e) => {
                 console.warn('Buffered flush failed:', e);
             });
-        }, Math.min(2000, Math.max(300, Number(window.APP_CONFIG?.writeBufferMs) || 1200)));
+        }, Math.min(60000, Math.max(300, Number(window.APP_CONFIG?.writeBufferMs) || 30000)));
     }
 
     async function flushWrites() {

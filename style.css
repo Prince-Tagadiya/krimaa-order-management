@@ -890,10 +890,18 @@ td.sheet-f-col {
     cursor: text;
     min-width: 0;
 }
+.sheet-table tbody td.sheet-editable.sheet-cell-unsaved {
+    background: #fef08a !important;
+    box-shadow: inset 0 0 0 1.5px #eab308;
+}
 .sheet-table tbody td.sheet-editable:focus-within {
     background: #fff7ed;
     box-shadow: inset 0 0 0 2px var(--primary);
     border-radius: 2px;
+}
+.sheet-table tbody td.sheet-editable.sheet-cell-unsaved:focus-within {
+    background: #fef08a !important;
+    box-shadow: inset 0 0 0 2px #ca8a04;
 }
 
 .sheet-cell-input {
