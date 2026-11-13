@@ -2612,6 +2612,180 @@ const FirebaseService = (() => {
 
     function getPendingCount() { return _pendingWrites.size + _activeWriteCount; }
 
+    // ───── KAPAD & LOT MANAGEMENT ─────
+
+    async function saveDesignRecipe(companyId, designNo, name, materials, jobCosts, silaiPrice = 0) {
+        const db = getDb();
+        const docId = `${companyId}__${String(designNo).trim().toUpperCase()}`;
+        const numSilaiPrice = parseFloat(silaiPrice) || 0;
+        const totalMetersPerPc = (materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0), 0);
+        const materialsCost = (materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
+        const otherJobCost = (jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
+        const estimatedCostPerPc = materialsCost + numSilaiPrice + otherJobCost;
+
+        await db.collection('design_recipes').doc(docId).set({
+            companyId,
+            designNo: String(designNo).trim().toUpperCase(),
+            name: String(name || designNo).trim(),
+            silaiPrice: Math.round(numSilaiPrice * 100) / 100,
+            materials: (materials || []).map(m => ({
+                name: String(m.name || '').trim(),
+                metersPerPc: parseFloat(m.metersPerPc) || 0,
+                ratePerMeter: parseFloat(m.ratePerMeter) || 0,
+            })),
+            jobCosts: (jobCosts || []).map(j => ({
+                name: String(j.name || '').trim(),
+                amountPerPc: parseFloat(j.amountPerPc) || 0,
+            })),
+            totalMetersPerPc: Math.round(totalMetersPerPc * 1000) / 1000,
+            estimatedCostPerPc: Math.round(estimatedCostPerPc * 100) / 100,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: false });
+        return { success: true, id: docId, silaiPrice: numSilaiPrice };
+    }
+
+    async function updateRecipeSilaiPrice(companyId, designNo, silaiPrice) {
+        const db = getDb();
+        const docId = `${companyId}__${String(designNo).trim().toUpperCase()}`;
+        const ref = db.collection('design_recipes').doc(docId);
+        const doc = await ref.get();
+        if (doc.exists) {
+            const data = doc.data();
+            const numSilai = parseFloat(silaiPrice) || 0;
+            const materialsCost = (data.materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
+            const otherJobCost = (data.jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
+            const estimatedCostPerPc = materialsCost + numSilai + otherJobCost;
+            await ref.update({
+                silaiPrice: Math.round(numSilai * 100) / 100,
+                estimatedCostPerPc: Math.round(estimatedCostPerPc * 100) / 100,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            });
+            return { success: true, updated: true };
+        }
+        return { success: true, updated: false };
+    }
+
+    async function getDesignRecipes(companyId) {
+        const db = getDb();
+        const snap = await db.collection('design_recipes').where('companyId', '==', companyId).get();
+        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
+
+    async function deleteDesignRecipe(companyId, designNo) {
+        const db = getDb();
+        const docId = `${companyId}__${String(designNo).trim().toUpperCase()}`;
+        await db.collection('design_recipes').doc(docId).delete();
+        return { success: true };
+    }
+
+    async function _nextLotSequence(companyId) {
+        const db = getDb();
+        const ref = db.collection('system_meta').doc(`lotCounter_${companyId}`);
+        let seq = 1;
+        await db.runTransaction(async tx => {
+            const doc = await tx.get(ref);
+            seq = (doc.exists ? (doc.data().seq || 0) : 0) + 1;
+            tx.set(ref, { seq }, { merge: true });
+        });
+        return seq;
+    }
+
+    async function createProductionLot(companyId, designNo, designName, targetPcs, fabricGiven, standardMetersPerPc, customLotNumber = '', lotDate = '', silaiPrice = 0) {
+        const db = getDb();
+        const now = new Date();
+        const safeDate = lotDate || now.toISOString().split('T')[0];
+        const dateObj = new Date(safeDate + 'T00:00:00');
+        const dd = String(dateObj.getDate()).padStart(2, '0');
+        const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const totalMetersGiven = (fabricGiven || []).reduce((s, f) => s + (parseFloat(f.meters) || 0), 0);
+        const roundedMeters = Math.round(totalMetersGiven);
+
+        let lotNumber = String(customLotNumber || '').trim();
+        if (!lotNumber) {
+            let seq = 1;
+            try { seq = await _nextLotSequence(companyId); } catch(e) { seq = (Date.now() % 1000) + 1; }
+            const seqStr = String(seq).padStart(3, '0');
+            const cleanDesign = String(designNo || 'LOT').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            lotNumber = `LOT-SEQ-${seqStr}-${cleanDesign}-${dd}${mm}-${roundedMeters}M`;
+        }
+
+        const docRef = await db.collection('production_lots').add({
+            companyId,
+            lotNumber,
+            date: safeDate,
+            designNo: String(designNo).trim().toUpperCase(),
+            designName: String(designName || designNo).trim(),
+            targetPcs: parseInt(targetPcs) || 0,
+            standardMetersPerPc: parseFloat(standardMetersPerPc) || 0,
+            silaiPrice: parseFloat(silaiPrice) || 0,
+            fabricGiven: (fabricGiven || []).map(f => ({
+                name: String(f.name || '').trim(),
+                meters: parseFloat(f.meters) || 0,
+            })),
+            totalMetersGiven: Math.round(totalMetersGiven * 1000) / 1000,
+            completedPcs: 0,
+            consumedMeters: 0,
+            submissions: [],
+            status: 'open',
+            mismatchMeters: 0,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+        return { success: true, id: docRef.id, lotNumber };
+    }
+
+    async function getProductionLots(companyId) {
+        const db = getDb();
+        const snap = await db.collection('production_lots').where('companyId', '==', companyId).get();
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        list.sort((a, b) => {
+            const ta = a.createdAt?.seconds ? a.createdAt.seconds * 1000 : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+            const tb = b.createdAt?.seconds ? b.createdAt.seconds * 1000 : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+            return tb - ta;
+        });
+        return list;
+    }
+
+    async function submitLotWork(lotId, karigarId, karigarName, pcs, date) {
+        const db = getDb();
+        const ref = db.collection('production_lots').doc(lotId);
+        let result = {};
+        await db.runTransaction(async tx => {
+            const doc = await tx.get(ref);
+            if (!doc.exists) throw new Error('Lot not found');
+            const data = doc.data();
+            if (data.status === 'closed') throw new Error('Lot is already closed');
+            const submittedPcs = parseInt(pcs) || 0;
+            const metersConsumed = Math.round(submittedPcs * (data.standardMetersPerPc || 0) * 1000) / 1000;
+            const submission = {
+                karigarId: String(karigarId || ''),
+                karigarName: String(karigarName || ''),
+                pcs: submittedPcs,
+                metersConsumed,
+                date: date || new Date().toISOString().split('T')[0],
+                submittedAt: new Date().toISOString(),
+            };
+            const newCompletedPcs = (data.completedPcs || 0) + submittedPcs;
+            const newConsumedMeters = Math.round(((data.consumedMeters || 0) + metersConsumed) * 1000) / 1000;
+            const newMismatch = Math.round(((data.totalMetersGiven || 0) - newConsumedMeters) * 1000) / 1000;
+            const newStatus = newCompletedPcs >= (data.targetPcs || 0) ? 'closed' : 'open';
+            tx.update(ref, {
+                completedPcs: newCompletedPcs,
+                consumedMeters: newConsumedMeters,
+                mismatchMeters: newMismatch,
+                status: newStatus,
+                submissions: firebase.firestore.FieldValue.arrayUnion(submission),
+            });
+            result = { completedPcs: newCompletedPcs, consumedMeters: newConsumedMeters, mismatchMeters: newMismatch, status: newStatus, submission };
+        });
+        return { success: true, ...result };
+    }
+
+    async function closeLot(lotId) {
+        const db = getDb();
+        await db.collection('production_lots').doc(lotId).update({ status: 'closed' });
+        return { success: true };
+    }
+
     // ───── PUBLIC API ─────
     return {
         init, getDb, getGlobalReport,
@@ -2637,6 +2811,15 @@ const FirebaseService = (() => {
         upsertDesignPrice,
         hideDesignPrice,
         deleteDesignPrice,
+        // Kapad & Lot
+        saveDesignRecipe,
+        updateRecipeSilaiPrice,
+        getDesignRecipes,
+        deleteDesignRecipe,
+        createProductionLot,
+        getProductionLots,
+        submitLotWork,
+        closeLot,
         // Write buffer
         bufferWrite, flushWrites, getPendingCount,
         // Integrity Fix

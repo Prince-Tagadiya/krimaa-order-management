@@ -19,6 +19,81 @@ function refreshUsersFromEnv() {
 
 const DESIGN_PRICE_SCOPE = 'global';
 
+// ── Fake / seed data for local testing ────────────────────────────────
+const FAKE_KARIGAR_LIST = [
+    { id: 'kar_fake_01', name: '14 JAKIR' },
+    { id: 'kar_fake_02', name: '3 ALAMIN' },
+    { id: 'kar_fake_03', name: '4 RABIKUL' },
+    { id: 'kar_fake_04', name: '5 SABIR' },
+    { id: 'kar_fake_05', name: '2 ASMAUN' },
+];
+
+const FAKE_DESIGN_RECIPES = [
+    {
+        designNo: '1128', name: 'Design 1128',
+        silaiPrice: 75.00,
+        materials: [
+            { name: 'Embroidery Kapad', metersPerPc: 1.20, ratePerMeter: 60 },
+            { name: 'Silai Kapad', metersPerPc: 2.00, ratePerMeter: 45 },
+        ],
+        jobCosts: [
+            { name: 'Embroidery Work', amountPerPc: 35 },
+        ],
+        totalMetersPerPc: 3.20,
+        estimatedCostPerPc: 272.00,
+    },
+    {
+        designNo: '1130', name: 'Design 1130',
+        silaiPrice: 70.00,
+        materials: [
+            { name: 'Net Kapad', metersPerPc: 1.50, ratePerMeter: 55 },
+            { name: 'Lining', metersPerPc: 1.80, ratePerMeter: 40 },
+        ],
+        jobCosts: [
+            { name: 'Hand Work', amountPerPc: 50 },
+        ],
+        totalMetersPerPc: 3.30,
+        estimatedCostPerPc: 274.50,
+    },
+    {
+        designNo: '357', name: 'Design 357',
+        silaiPrice: 65.00,
+        materials: [
+            { name: 'Cotton Kapad', metersPerPc: 2.00, ratePerMeter: 50 },
+        ],
+        jobCosts: [],
+        totalMetersPerPc: 2.00,
+        estimatedCostPerPc: 165.00,
+    },
+    {
+        designNo: '360', name: 'Design 360',
+        silaiPrice: 80.00,
+        materials: [
+            { name: 'Georgette', metersPerPc: 1.75, ratePerMeter: 70 },
+            { name: 'Inner Lining', metersPerPc: 1.50, ratePerMeter: 35 },
+        ],
+        jobCosts: [
+            { name: 'Embroidery', amountPerPc: 60 },
+        ],
+        totalMetersPerPc: 3.25,
+        estimatedCostPerPc: 315.00,
+    },
+];
+
+// Ensure fallback / seed prices exist in AppState
+function seedDesignRecipePricesIntoAppState() {
+    AppState.designPrices = AppState.designPrices || {};
+    AppState.designPricesByCompany = AppState.designPricesByCompany || {};
+    AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] || {};
+    FAKE_DESIGN_RECIPES.forEach(r => {
+        if (!AppState.designPrices[r.designNo] && r.silaiPrice) {
+            AppState.designPrices[r.designNo] = r.silaiPrice;
+            AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][r.designNo] = r.silaiPrice;
+        }
+    });
+}
+try { seedDesignRecipePricesIntoAppState(); } catch(e) {}
+
 function round2(n) {
     return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 }
@@ -2138,7 +2213,7 @@ function navigateTo(sectionId) {
     if (sectionId === 'add-account' && !canManageAccounts()) {
         showToast("Access denied", "error"); return;
     }
-    if ((sectionId === 'karigar' || sectionId === 'size-prices') && !canAccessKarigar()) {
+    if ((sectionId === 'karigar' || sectionId === 'size-prices' || sectionId === 'kapad-lot') && !canAccessKarigar()) {
         showToast("Access denied: Karigar Management is only available for Krimaa admin", "error");
         navigateTo('data-sheet');
         return;
@@ -2166,19 +2241,20 @@ function navigateTo(sectionId) {
         'money-backup': 'Money Backup History',
         'data-sheet': 'Data Sheet',
         'karigar': 'Karigar Management',
-        'size-prices': 'Size Price Management'
+        'size-prices': 'Size Price Management',
+        'kapad-lot': 'Kapad & Lot Management'
     };
 
     // Update global title if it exists, and section-specific title
     const globalTitle = document.getElementById('page-title');
-    if (globalTitle) globalTitle.textContent = titles[sectionId];
+    if (globalTitle) globalTitle.textContent = titles[sectionId] || sectionId;
 
     document.querySelectorAll('.content-section').forEach(sec => sec.classList.remove('active'));
     const targetSec = document.getElementById(sectionId);
     if (targetSec) {
         targetSec.classList.add('active');
         const secTitle = targetSec.querySelector('.page-title');
-        if (secTitle) secTitle.textContent = titles[sectionId];
+        if (secTitle) secTitle.textContent = titles[sectionId] || sectionId;
     }
 
     if (sectionId === 'daily-order') {
@@ -2193,6 +2269,7 @@ function navigateTo(sectionId) {
     else if (sectionId === 'money-backup') renderMoneyBackupPage();
     else if (sectionId === 'karigar') renderKarigarPage(true);
     else if (sectionId === 'size-prices') renderSizePricesPage();
+    else if (sectionId === 'kapad-lot') renderKapadLotPage();
     else if (sectionId === 'data-sheet') {
         document.getElementById('sheet-company-filter').value = AppState.currentCompany;
         loadAvailableSheetMonths().then(() => populateSheetMonthFilter());
@@ -5843,6 +5920,19 @@ async function renderSizePricesPage() {
                     AppState.designPrices = AppState.designPrices || {};
                     AppState.designPrices[k] = p;
 
+                    // Sync to design recipe in Kapad & Lot if recipe exists
+                    if (typeof FirebaseService.updateRecipeSilaiPrice === 'function') {
+                        FirebaseService.updateRecipeSilaiPrice(AppState.currentCompany, k, p).catch(err => console.warn('Recipe silai price sync warning:', err));
+                    }
+                    if (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes)) {
+                        const rec = KapadState.recipes.find(r => r.designNo === k);
+                        if (rec) {
+                            rec.silaiPrice = p;
+                            const matCost = (rec.materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
+                            const jobCost = (rec.jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
+                            rec.estimatedCostPerPc = Math.round((matCost + p + jobCost) * 100) / 100;
+                        }
+                    }
                 } catch (bErr) {
                     console.warn('Auto local size price backup notice:', bErr);
                 }
@@ -6153,7 +6243,11 @@ function getEffectiveKarigarList() {
             return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
         }
     }
-    return (AppState.karigars || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const active = (AppState.karigars || []).filter(k => !k.isDeleted && !k.deleted && (!k.companyId || k.companyId === AppState.currentCompany));
+    if (active.length > 0) {
+        return active.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }
+    return FAKE_KARIGAR_LIST.map(k => ({ ...k, companyId: AppState.currentCompany }));
 }
 
 // ── Karigar Archive Summary Recompute & Storage ──
@@ -7077,6 +7171,13 @@ function setupKarigarListeners() {
             if (!Number.isFinite(resolved)) {
                 resolved = getPriceForDateTime(up, dateValue, timeValue);
             }
+            if (!Number.isFinite(resolved)) {
+                const rec = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes) ? KapadState.recipes : []).find(r => r.designNo === up)
+                    || FAKE_DESIGN_RECIPES.find(r => r.designNo === up);
+                if (rec && Number.isFinite(parseFloat(rec.silaiPrice))) {
+                    resolved = parseFloat(rec.silaiPrice);
+                }
+            }
             if (Number.isFinite(resolved)) {
                 const oldVal = jamaPrice.value;
                 jamaPrice.value = resolved;
@@ -7105,6 +7206,8 @@ function setupKarigarListeners() {
             const p = parseFloat(jamaPrice.value) || 0;
             const q = parseInt(jamaPic.value) || 0;
             jamaTotalDisplay.textContent = '₹' + (p * q).toFixed(2);
+            const noteEl = document.getElementById('karigar-jama-calc-note');
+            if (noteEl) noteEl.textContent = `${q} pcs × ₹${p.toFixed(2)}`;
         }
         jamaDesign.dataset.bound = 'true';
     }
@@ -7257,6 +7360,17 @@ function setupKarigarListeners() {
                         addedBy: AppState.currentUser?.role || 'admin',
                         actor: buildAuditActor()
                     });
+
+                    // Link to Production Lot if selected
+                    const selectedLotId = document.getElementById('karigar-jama-lot-select')?.value;
+                    if (selectedLotId) {
+                        try {
+                            await FirebaseService.submitLotWork(selectedLotId, karigarId, karigarName, parseInt(pic, 10) || 0, date);
+                        } catch (lotErr) {
+                            console.warn('[Karigar Jama] Lot deduction failed:', lotErr);
+                        }
+                    }
+
                     _pendingDataChangesForBackup = true;
                     scheduleBackgroundSheetBackup('addKarigarJama');
                     showToast("Maal (Jama) saved!", "success");
@@ -7268,6 +7382,8 @@ function setupKarigarListeners() {
                     document.getElementById('karigar-jama-size').value = '';
                     document.getElementById('karigar-jama-pic').value = '';
                     document.getElementById('karigar-jama-price').value = '';
+                    const lotSel = document.getElementById('karigar-jama-lot-select');
+                    if (lotSel) lotSel.value = '';
                     if (isAdminUser()) document.getElementById('karigar-jama-upad').value = '';
                     document.getElementById('karigar-jama-total-display').textContent = '0';
                     // Keep same date; refresh time to now for convenience.
@@ -7480,6 +7596,7 @@ function setupKarigarFastEnterNavigation() {
     // 1. Jama Modal Fast Enter Navigation
     const jamaFields = [
         'karigar-jama-select',
+        'karigar-jama-lot-select',
         'karigar-jama-date',
         'karigar-jama-time',
         'karigar-jama-design',
@@ -7520,16 +7637,86 @@ function setupKarigarFastEnterNavigation() {
             const form = document.getElementById('karigar-jama-form');
             if (form && form.dataset.submitting === 'true') return;
 
-            // Karigar select Enter -> jump straight to Design Name / No.
+            // 1. Karigar select Enter -> jump to Production Lot dropdown & open picker!
             if (id === 'karigar-jama-select') {
                 el.dispatchEvent(new Event('change', { bubbles: true }));
-                const designEl = document.getElementById('karigar-jama-design');
-                if (designEl) {
-                    designEl.focus();
-                    if (typeof designEl.select === 'function') {
+                const lotSelect = document.getElementById('karigar-jama-lot-select');
+                if (lotSelect) {
+                    lotSelect.focus();
+                    try { lotSelect.showPicker(); } catch (err) {}
+                } else {
+                    document.getElementById('karigar-jama-design')?.focus();
+                }
+                return;
+            }
+
+            // 2. Production Lot Enter -> if lot chosen, jump straight to Total Pic (Quantity)!
+            if (id === 'karigar-jama-lot-select') {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                const chosenVal = el.value;
+                if (chosenVal) {
+                    const picEl = document.getElementById('karigar-jama-pic');
+                    if (picEl) {
+                        picEl.focus();
+                        try { picEl.select(); } catch (err) {}
+                        return;
+                    }
+                } else {
+                    const designEl = document.getElementById('karigar-jama-design');
+                    if (designEl) {
+                        designEl.focus();
                         try { designEl.select(); } catch (err) {}
+                        return;
                     }
                 }
+                return;
+            }
+
+            // 3. Design Name / No. Enter -> jump to Quantity
+            if (id === 'karigar-jama-design') {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                const picEl = document.getElementById('karigar-jama-pic');
+                if (picEl) {
+                    picEl.focus();
+                    try { picEl.select(); } catch (err) {}
+                    return;
+                }
+            }
+
+            // 4. Quantity Enter -> if admin, focus Price Per Pic; if non-admin, submit!
+            if (id === 'karigar-jama-pic') {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                const priceEl = document.getElementById('karigar-jama-price');
+                if (!isAdminUser()) {
+                    if (typeof form?.requestSubmit === 'function') form.requestSubmit();
+                    else form?.querySelector('button[type="submit"]')?.click();
+                    return;
+                }
+                if (priceEl) {
+                    priceEl.focus();
+                    try { priceEl.select(); } catch (err) {}
+                    return;
+                }
+            }
+
+            // 5. Price Per Pic Enter -> jump to Upad or submit
+            if (id === 'karigar-jama-price') {
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                const upadEl = document.getElementById('karigar-jama-upad');
+                if (isAdminUser() && upadEl) {
+                    upadEl.focus();
+                    try { upadEl.select(); } catch (err) {}
+                    return;
+                }
+                if (typeof form?.requestSubmit === 'function') form.requestSubmit();
+                else form?.querySelector('button[type="submit"]')?.click();
+                return;
+            }
+
+            // 6. Upad Enter -> submit form
+            if (id === 'karigar-jama-upad') {
+                if (typeof form?.requestSubmit === 'function') form.requestSubmit();
+                else form?.querySelector('button[type="submit"]')?.click();
                 return;
             }
 
@@ -7832,6 +8019,85 @@ function openKarigarJamaModal(id, name) {
     document.getElementById('karigar-jama-pic').value = '';
     document.getElementById('karigar-jama-price').value = '';
     document.getElementById('karigar-jama-upad').value = '';
+    const hintEl = document.getElementById('karigar-lot-hint');
+    if (hintEl) hintEl.textContent = 'Auto-fills Design & Price';
+    const noteEl = document.getElementById('karigar-jama-calc-note');
+    if (noteEl) noteEl.textContent = '0 pcs × ₹0.00';
+
+    // Populate active Lots dropdown
+    const lotSelect = document.getElementById('karigar-jama-lot-select');
+    if (lotSelect) {
+        FirebaseService.getProductionLots(AppState.currentCompany).then(lots => {
+            const openLots = (lots || []).filter(l => l.status === 'open');
+            lotSelect.innerHTML = `<option value="">— None (Direct Entry) —</option>` +
+                openLots.map(l => {
+                    const silai = l.silaiPrice || '';
+                    return `<option value="${l.id}" data-design="${esc(l.designNo)}" data-silai="${silai}">${esc(l.lotNumber)} (${esc(l.designNo)} · ${l.completedPcs}/${l.targetPcs} pcs)</option>`;
+                }).join('');
+        }).catch(err => {
+            console.warn('[Karigar Jama] Failed to load lots:', err);
+            lotSelect.innerHTML = `<option value="">— None (Direct Entry) —</option>`;
+        });
+
+        if (!lotSelect.dataset.bound) {
+            lotSelect.addEventListener('change', () => {
+                const opt = lotSelect.selectedOptions[0];
+                const design = opt?.dataset.design;
+                const silaiFromLot = parseFloat(opt?.dataset.silai);
+                const curHint = document.getElementById('karigar-lot-hint');
+
+                if (design) {
+                    const dInp = document.getElementById('karigar-jama-design');
+                    if (dInp) {
+                        dInp.value = design;
+                    }
+
+                    // Auto-fill Silai Rate into Price Per Pic
+                    const cleanKey = String(design).trim().toUpperCase();
+                    let resolvedPrice = null;
+                    if (Number.isFinite(silaiFromLot) && silaiFromLot > 0) {
+                        resolvedPrice = silaiFromLot;
+                    } else if (AppState.designPrices && Number.isFinite(parseFloat(AppState.designPrices[cleanKey]))) {
+                        resolvedPrice = parseFloat(AppState.designPrices[cleanKey]);
+                    } else if (AppState.designPricesByCompany && AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] && Number.isFinite(parseFloat(AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][cleanKey]))) {
+                        resolvedPrice = parseFloat(AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][cleanKey]);
+                    } else {
+                        const rec = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes) ? KapadState.recipes : []).find(r => r.designNo === cleanKey)
+                            || FAKE_DESIGN_RECIPES.find(r => r.designNo === cleanKey);
+                        if (rec && Number.isFinite(parseFloat(rec.silaiPrice))) {
+                            resolvedPrice = parseFloat(rec.silaiPrice);
+                        }
+                    }
+
+                    const pInp = document.getElementById('karigar-jama-price');
+                    if (Number.isFinite(resolvedPrice) && pInp) {
+                        pInp.value = resolvedPrice.toFixed(2);
+                        pInp.classList.add('rainbow-autofill');
+                        setTimeout(() => pInp.classList.remove('rainbow-autofill'), 2500);
+                    }
+
+                    if (curHint) {
+                        curHint.textContent = `✓ Linked: ${design}${Number.isFinite(resolvedPrice) ? ` (₹${resolvedPrice.toFixed(2)}/pc)` : ''}`;
+                    }
+
+                    // Recalculate totals
+                    const pic = parseInt(document.getElementById('karigar-jama-pic')?.value) || 0;
+                    const pr = parseFloat(pInp?.value) || 0;
+                    const totEl = document.getElementById('karigar-jama-total-display');
+                    const cNote = document.getElementById('karigar-jama-calc-note');
+                    if (totEl) totEl.textContent = `₹${(pic * pr).toFixed(2)}`;
+                    if (cNote) cNote.textContent = `${pic} pcs × ₹${pr.toFixed(2)}`;
+
+                    if (dInp) {
+                        dInp.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                } else {
+                    if (curHint) curHint.textContent = 'Auto-fills Design & Price';
+                }
+            });
+            lotSelect.dataset.bound = 'true';
+        }
+    }
     const jamaPriceInput = document.getElementById('karigar-jama-price');
     if (jamaPriceInput) {
         if (!isAdminUser()) {
@@ -10158,4 +10424,1338 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
         hideLoader();
     }
 });
+
+// =====================================================================
+//  KAPAD & LOT MANAGEMENT MODULE
+// =====================================================================
+
+// In-memory Kapad state (backed by Firestore, refreshed on page load)
+const KapadState = {
+    recipes: [],           // design_recipes docs
+    lots: [],              // production_lots docs
+    _bindsDone: false,
+    _currentLotId: null,   // for detail modal
+};
+
+// ── Helper: get effective karigar list (live + fake fallback) ──────────
+function getEffectiveKarigarListForKapad() {
+    const live = (AppState.karigars || []).filter(k => !k.isDeleted && !k.deleted && k.companyId === AppState.currentCompany);
+    if (live.length > 0) return live;
+    return FAKE_KARIGAR_LIST;
+}
+
+// ── Escape HTML ────────────────────────────────────────────────────────
+function esc(v) {
+    return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Render metrics banner ──────────────────────────────────────────────
+function renderKapadMetrics(lots) {
+    const open = lots.filter(l => l.status === 'open');
+    const totalFabricOnFloor = open.reduce((s, l) => s + (l.totalMetersGiven || 0) - (l.consumedMeters || 0), 0);
+    const pcsInProgress = open.reduce((s, l) => s + ((l.targetPcs || 0) - (l.completedPcs || 0)), 0);
+    const totalMismatch = lots.reduce((s, l) => s + Math.abs(l.mismatchMeters || 0), 0);
+
+    const banner = document.getElementById('kapad-metrics-banner');
+    if (!banner) return;
+    banner.innerHTML = `
+        <div class="kapad-metric-box metric-primary">
+            <div class="metric-value">${open.length}</div>
+            <div class="metric-label">Active Lots</div>
+        </div>
+        <div class="kapad-metric-box metric-primary">
+            <div class="metric-value">${totalFabricOnFloor.toFixed(1)} m</div>
+            <div class="metric-label">Kapad on Floor</div>
+        </div>
+        <div class="kapad-metric-box metric-warning">
+            <div class="metric-value">${pcsInProgress}</div>
+            <div class="metric-label">Pcs In Progress</div>
+        </div>
+        <div class="kapad-metric-box ${totalMismatch > 0.1 ? 'metric-danger' : 'metric-success'}">
+            <div class="metric-value">${totalMismatch.toFixed(2)} m</div>
+            <div class="metric-label">⚠ Mismatch Total</div>
+        </div>
+    `;
+}
+
+// ── Render Design Master tab ───────────────────────────────────────────
+function renderDesignMasterTab(recipes) {
+    const grid = document.getElementById('design-recipe-grid');
+    if (!grid) return;
+    if (!recipes || recipes.length === 0) {
+        grid.innerHTML = `<div class="kapad-empty-state" style="grid-column:1/-1">
+            <i class='bx bx-palette'></i>
+            <p>No design recipes yet.<br>Add a design to define its fabric and cost breakdown.</p>
+        </div>`;
+        return;
+    }
+    grid.innerHTML = recipes.map(r => {
+        const materials = (r.materials || []);
+        const jobCosts = (r.jobCosts || []);
+        const silaiPrice = parseFloat(r.silaiPrice) || 0;
+        const silaiBadge = silaiPrice > 0 ? `
+            <div style="margin: 6px 0 8px 0;">
+                <span class="recipe-silai-badge"><i class='bx bx-check-shield'></i> Silai / Karigar Rate: <strong>₹${silaiPrice.toFixed(2)}/pc</strong></span>
+            </div>` : '';
+        const materialRows = materials.map(m => `
+            <div class="design-recipe-material-row">
+                <span>${esc(m.name)}</span>
+                <span>${(parseFloat(m.metersPerPc)||0).toFixed(2)} m × ₹${(parseFloat(m.ratePerMeter)||0).toFixed(0)} = <strong>₹${((parseFloat(m.metersPerPc)||0)*(parseFloat(m.ratePerMeter)||0)).toFixed(0)}</strong></span>
+            </div>`).join('');
+        const jobRows = jobCosts.map(j => `
+            <div class="design-recipe-material-row" style="color:#7c3aed">
+                <span>${esc(j.name)}</span>
+                <span>₹${(parseFloat(j.amountPerPc)||0).toFixed(0)}/pc</span>
+            </div>`).join('');
+        return `
+        <div class="design-recipe-card" data-design-no="${esc(r.designNo)}">
+            <div class="design-recipe-card-header">
+                <div>
+                    <div class="design-recipe-card-no">${esc(r.designNo)}</div>
+                    <div class="design-recipe-card-name">${esc(r.name || r.designNo)}</div>
+                </div>
+                <div class="design-recipe-card-actions">
+                    <button class="btn-icon btn-edit-recipe" data-no="${esc(r.designNo)}" title="Edit"><i class='bx bx-edit'></i></button>
+                    <button class="btn-icon btn-delete-recipe" data-no="${esc(r.designNo)}" data-name="${esc(r.name || r.designNo)}" title="Delete" style="color:#ef4444;"><i class='bx bx-trash'></i></button>
+                </div>
+            </div>
+            ${silaiBadge}
+            <div class="mt-1">
+                <div style="font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:3px;">Materials</div>
+                ${materialRows || '<div style="font-size:0.78rem;color:#94a3b8;">No materials added</div>'}
+            </div>
+            ${jobRows ? `<div class="mt-1"><div style="font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:3px;">Other Job Work</div>${jobRows}</div>` : ''}
+            <div class="design-recipe-totals">
+                <span>Total: ${(parseFloat(r.totalMetersPerPc)||0).toFixed(2)} m/pc</span>
+                <span style="color:#059669;">Est. ₹${(parseFloat(r.estimatedCostPerPc)||0).toFixed(2)}/pc</span>
+            </div>
+            <button class="design-recipe-lot-btn btn-create-lot-from-recipe" data-no="${esc(r.designNo)}">
+                <i class='bx bx-layer-plus'></i> Create Lot
+            </button>
+        </div>`;
+    }).join('');
+}
+
+// ── Render Active/Closed Lots ──────────────────────────────────────────
+function renderLotsGrid(lots, containerId) {
+    const grid = document.getElementById(containerId);
+    if (!grid) return;
+    if (!lots || lots.length === 0) {
+        grid.innerHTML = `<div class="kapad-empty-state" style="grid-column:1/-1">
+            <i class='bx bx-layer'></i>
+            <p>No lots found.</p>
+        </div>`;
+        return;
+    }
+
+    grid.innerHTML = lots.map(l => {
+        const pct = l.targetPcs > 0 ? Math.min(100, Math.round((l.completedPcs / l.targetPcs) * 100)) : 0;
+        const statusClass = l.status === 'closed' ? 'status-closed' : (l.completedPcs > l.targetPcs ? 'status-overrun' : 'status-open');
+        const statusLabel = l.status === 'closed' ? 'Closed' : (l.completedPcs > l.targetPcs ? 'Overrun' : 'Open');
+        const mismatch = parseFloat(l.mismatchMeters) || 0;
+        const mismatchClass = Math.abs(mismatch) < 0.01 ? 'ok' : (mismatch > 0 ? 'warning' : 'danger');
+        const mismatchLabel = Math.abs(mismatch) < 0.01 ? '✓ No mismatch' : (mismatch > 0 ? `+${mismatch.toFixed(2)} m surplus` : `${mismatch.toFixed(2)} m shortage`);
+
+        return `
+        <div class="lot-card ${statusClass}" data-lot-id="${esc(l.id)}">
+            <div class="lot-card-header">
+                <div>
+                    <div class="lot-card-number">${esc(l.lotNumber)}</div>
+                    <div style="font-size:0.75rem;color:#64748b;margin-top:2px;">${esc(l.designNo)} · ${esc(l.designName)}</div>
+                    <div style="font-size:0.72rem;color:#94a3b8;">${esc(l.date || '')}</div>
+                </div>
+                <span class="lot-card-status">${statusLabel}</span>
+            </div>
+            <div class="lot-card-body">
+                <div class="lot-card-row">
+                    <span>Progress</span>
+                    <span><strong>${l.completedPcs}</strong> / ${l.targetPcs} pcs (${pct}%)</span>
+                </div>
+                <div class="lot-progress-track">
+                    <div class="lot-progress-fill" style="width:${pct}%"></div>
+                </div>
+                <div class="lot-card-row">
+                    <span>Fabric given</span>
+                    <span><strong>${(parseFloat(l.totalMetersGiven)||0).toFixed(2)} m</strong></span>
+                </div>
+                <div class="lot-card-row">
+                    <span>Consumed</span>
+                    <span>${(parseFloat(l.consumedMeters)||0).toFixed(2)} m</span>
+                </div>
+                <div>
+                    <span class="lot-mismatch-badge ${mismatchClass}">${mismatchLabel}</span>
+                </div>
+            </div>
+            <div class="lot-card-footer">
+                <button class="btn btn-primary btn-sm btn-lot-direct-print" data-lot-id="${esc(l.id)}" style="background:#2563eb;border-color:#2563eb;" title="Direct Print 2-in-1 A4 Slip (Enter)">
+                    <i class='bx bx-printer'></i> Print
+                </button>
+                <button class="btn btn-outline btn-sm btn-lot-download-pdf" data-lot-id="${esc(l.id)}" title="Download PDF File">
+                    <i class='bx bxs-file-pdf'></i> PDF
+                </button>
+                <button class="btn btn-outline btn-sm btn-lot-detail" data-lot-id="${esc(l.id)}" title="View details">
+                    <i class='bx bx-info-circle'></i> Details
+                </button>
+                ${l.status === 'open' ? `<button class="btn btn-primary btn-sm btn-lot-submit" data-lot-id="${esc(l.id)}" style="background:#059669;border-color:#059669;" title="Record submission">
+                    <i class='bx bx-plus'></i> Submit
+                </button>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ── Filter and Render Lots (with search) ──────────────────────────────
+function filterAndRenderLots() {
+    const activeQuery = (document.getElementById('active-lot-search-input')?.value || '').trim().toLowerCase();
+    const closedQuery = (document.getElementById('closed-lot-search-input')?.value || '').trim().toLowerCase();
+
+    const matchesQuery = (l, q) => {
+        if (!q) return true;
+        const str = `${l.lotNumber || ''} ${l.designNo || ''} ${l.designName || ''} ${l.date || ''}`.toLowerCase();
+        return str.includes(q);
+    };
+
+    const activeLots = (KapadState.lots || []).filter(l => l.status === 'open' && matchesQuery(l, activeQuery));
+    const closedLots = (KapadState.lots || []).filter(l => l.status === 'closed' && matchesQuery(l, closedQuery));
+
+    renderLotsGrid(activeLots, 'active-lots-grid');
+    renderLotsGrid(closedLots, 'closed-lots-grid');
+}
+
+// ── Direct Dual Lot Slip Print (No Download Required) ────────────────
+function printDirectDualLotSlip(lot) {
+    if (!lot) return;
+    const companyName = (typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(lot.companyId || AppState.currentCompany) : '') || 'KRIMAA APPARELS';
+    const safeLotNo = esc(lot.lotNumber || '-');
+    const safeDesign = esc(lot.designNo || '-');
+    const safeDesignName = esc(lot.designName || lot.designNo || '');
+    const safeDate = esc(lot.date || '');
+    const targetPcs = parseInt(lot.targetPcs, 10) || 0;
+    const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
+    const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
+
+    const fabricRows = (lot.fabricGiven || []).map((f, idx) => `
+        <tr>
+            <td style="text-align:center;width:32px;">${idx + 1}</td>
+            <td style="font-weight:700;">${esc(f.name || 'Fabric')}</td>
+            <td style="text-align:right;font-weight:800;font-size:12px;">${(parseFloat(f.meters) || 0).toFixed(2)} m</td>
+            <td style="text-align:right;color:#475569;">${stdRate} m/pc</td>
+            <td style="text-align:right;color:#475569;">${targetPcs ? (((parseFloat(f.meters) || 0) / targetPcs).toFixed(2)) + ' m/pc' : '-'}</td>
+        </tr>
+    `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">${stdRate} m/pc</td><td style="text-align:right;">-</td></tr>`;
+
+    const renderSlipHtml = (badgeText, badgeBg, isOffice) => `
+        <div class="slip-card">
+            <div class="slip-header">
+                <div>
+                    <div class="design-label">DESIGN NUMBER</div>
+                    <div class="design-title">${safeDesign} <span class="design-subname">${safeDesignName && safeDesignName !== safeDesign ? `(${safeDesignName})` : ''}</span></div>
+                    <div class="slip-sub">${companyName.toUpperCase()} · DATE: ${safeDate}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div class="copy-badge" style="background:${badgeBg};">${badgeText}</div>
+                    <div class="header-lot-no">LOT: <strong>${safeLotNo}</strong></div>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">DESIGN NO</div>
+                    <div class="stat-val text-primary" style="font-size:16px;">${safeDesign}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">LOT NUMBER</div>
+                    <div class="stat-val">${safeLotNo}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">TARGET QUANTITY</div>
+                    <div class="stat-val">${targetPcs} Pieces</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">TOTAL KAPAD</div>
+                    <div class="stat-val text-success">${totalMeters} Meters</div>
+                </div>
+            </div>
+
+            <table class="fabric-table">
+                <thead>
+                    <tr>
+                        <th style="width:32px;text-align:center;">#</th>
+                        <th>FABRIC / MATERIAL ITEM</th>
+                        <th style="text-align:right;">ISSUED METERS</th>
+                        <th style="text-align:right;">STD RECIPE</th>
+                        <th style="text-align:right;">ACTUAL/PC</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${fabricRows}
+                    <tr class="total-row">
+                        <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
+                        <td style="text-align:right;font-size:13px;font-weight:900;">${totalMeters} m</td>
+                        <td colspan="2" style="text-align:right;color:#64748b;font-size:10px;">For ${targetPcs} pieces</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="slip-footer">
+                <span>${isOffice ? 'Office Copy — Keep in production issue register' : 'Floor Copy — Issue with goods to karigar / workshop'}</span>
+                <span>Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}</span>
+            </div>
+        </div>
+    `;
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lot Slip - ${safeLotNo}</title>
+<style>
+    @page { size: A4 portrait; margin: 8mm 10mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+    body { background: #fff; color: #0f172a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page-wrap { display: flex; flex-direction: column; justify-content: space-between; height: 280mm; max-height: 280mm; }
+    .slip-card { border: 2px solid #0f172a; border-radius: 8px; padding: 12px 14px; background: #fff; height: 133mm; display: flex; flex-direction: column; justify-content: flex-start; }
+    .slip-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 8px; }
+    .design-label { font-size: 9px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+    .design-title { font-size: 26px; font-weight: 900; line-height: 1.1; color: #0f172a; }
+    .design-subname { font-size: 14px; font-weight: 600; color: #475569; }
+    .slip-sub { font-size: 10px; color: #64748b; font-weight: 600; margin-top: 3px; }
+    .copy-badge { display: inline-block; padding: 3px 12px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
+    .header-lot-no { font-size: 11px; font-weight: 600; color: #475569; margin-top: 4px; }
+    .stats-grid { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr 1.2fr; gap: 6px; margin-bottom: 8px; }
+    .stat-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 8px; background: #f8fafc; }
+    .stat-label { font-size: 8.5px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
+    .stat-val { font-size: 13px; font-weight: 900; color: #0f172a; }
+    .text-primary { color: #2563eb; }
+    .text-success { color: #059669; }
+    .fabric-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+    .fabric-table th, .fabric-table td { border: 1px solid #cbd5e1; padding: 5px 8px; }
+    .fabric-table th { background: #0f172a; color: #fff; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+    .fabric-table tbody tr:nth-child(even) { background: #f8fafc; }
+    .total-row td { background: #e2e8f0 !important; font-weight: 800; }
+    .cut-line-wrap { text-align: center; margin: 4mm 0; position: relative; border-top: 1.5px dashed #94a3b8; }
+    .cut-label { position: relative; top: -8px; background: #fff; padding: 0 14px; font-size: 10px; font-weight: 800; color: #64748b; letter-spacing: 0.5px; display: inline-block; }
+    .slip-footer { margin-top: auto; display: flex; justify-content: space-between; font-size: 9px; color: #94a3b8; padding-top: 6px; border-top: 1px solid #f1f5f9; }
+</style>
+</head>
+<body>
+    <div class="page-wrap">
+        ${renderSlipHtml('OFFICE COPY (FOR RECORD)', '#0f172a', true)}
+        <div class="cut-line-wrap">
+            <span class="cut-label">✂ - - - - - CUT HERE (TOP: OFFICE COPY  |  BOTTOM: FLOOR / MAAL COPY) - - - - - ✂</span>
+        </div>
+        ${renderSlipHtml('FLOOR / MAAL COPY (WITH GOODS)', '#059669', false)}
+    </div>
+    <script>
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                window.print();
+            }, 120);
+        });
+    </script>
+</body>
+</html>`;
+
+    const printWin = window.open('', '_blank', 'width=800,height=900');
+    if (printWin) {
+        printWin.document.open();
+        printWin.document.write(html);
+        printWin.document.close();
+        printWin.focus();
+    } else {
+        showToast('Please allow popups to direct-print lot slip', 'error');
+    }
+}
+
+// ── Download 2-in-1 Dual A4 PDF Slip ──────────────────────────────────
+function downloadDualLotSlipPdf(lot) {
+    if (!lot) return;
+    if (!window.jspdf) {
+        showToast('PDF library not ready', 'error');
+        return;
+    }
+    try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4'
+        });
+
+        const companyName = (typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(lot.companyId || AppState.currentCompany) : '') || 'KRIMAA APPARELS';
+
+        // Helper to render one copy on the page
+        const renderSingleCopy = (startY, badgeText, isOffice) => {
+            // Outer card border: X: 11 to 199 (W: 188)
+            doc.setDrawColor(30, 41, 59); // slate-800
+            doc.setLineWidth(0.5);
+            doc.roundedRect(11, startY, 188, 130, 2.5, 2.5, 'S');
+
+            // Header background banner
+            if (isOffice) {
+                doc.setFillColor(241, 245, 249); // slate-100
+            } else {
+                doc.setFillColor(240, 253, 244); // emerald-50
+            }
+            doc.roundedRect(11.2, startY + 0.2, 187.6, 20, 2.5, 2.5, 'F');
+
+            // DESIGN NUMBER FIRST AND GIANT
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7.5);
+            doc.setTextColor(100, 116, 139);
+            doc.text('DESIGN NUMBER', 16, startY + 6);
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(16);
+            doc.setTextColor(15, 23, 42); // slate-900
+            doc.text(String(lot.designNo || '-'), 16, startY + 13);
+
+            if (lot.designName && lot.designName !== lot.designNo) {
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(8);
+                doc.setTextColor(71, 85, 105);
+                doc.text(`(${lot.designName})`, 18 + doc.getTextWidth(String(lot.designNo || '-')) + 2, startY + 13);
+            }
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(7.5);
+            doc.setTextColor(100, 116, 139);
+            doc.text(`${companyName.toUpperCase()} · DATE: ${lot.date || '-'}`, 16, startY + 18);
+
+            // Copy Badge (Top-Right)
+            if (isOffice) {
+                doc.setFillColor(15, 23, 42); // slate-900
+            } else {
+                doc.setFillColor(5, 150, 105); // emerald-600
+            }
+            doc.roundedRect(126, startY + 4, 68, 7.5, 2, 2, 'F');
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(7.5);
+            doc.setTextColor(255, 255, 255);
+            doc.text(badgeText, 160, startY + 9, { align: 'center' });
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(8);
+            doc.setTextColor(71, 85, 105);
+            doc.text(`LOT: ${lot.lotNumber || '-'}`, 194, startY + 17, { align: 'right' });
+
+            // 4 Summary statistic boxes: W: 36, 62, 38, 38 mm -> 174mm total + 6mm gaps = 180mm
+            // Starts at X = 15. Ends at 15 + 36 + 2 + 62 + 2 + 38 + 2 + 38 = 195mm (Leaves clean 4mm inner margin from border at 199mm)
+            const boxY = startY + 23;
+            const boxes = [
+                { label: 'DESIGN NO', val: String(lot.designNo || '-'), w: 36, highlight: true },
+                { label: 'LOT NUMBER', val: String(lot.lotNumber || '-'), w: 62 },
+                { label: 'TARGET PCS', val: `${lot.targetPcs || 0} Pcs`, w: 38 },
+                { label: 'TOTAL KAPAD', val: `${(parseFloat(lot.totalMetersGiven) || 0).toFixed(2)} Mtr`, w: 38, highlight: true }
+            ];
+
+            let curX = 15;
+            boxes.forEach(b => {
+                doc.setFillColor(248, 250, 252);
+                doc.setDrawColor(226, 232, 240);
+                doc.roundedRect(curX, boxY, b.w, 13.5, 1.5, 1.5, 'FD');
+
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(6.5);
+                doc.setTextColor(100, 116, 139);
+                doc.text(b.label, curX + 2.5, boxY + 4.5);
+
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(b.highlight ? 9.5 : 8.5);
+                if (b.highlight) {
+                    if (isOffice) doc.setTextColor(37, 99, 235);
+                    else doc.setTextColor(5, 150, 105);
+                } else {
+                    doc.setTextColor(15, 23, 42);
+                }
+                doc.text(String(b.val), curX + 2.5, boxY + 10.5);
+
+                curX += b.w + 2;
+            });
+
+            // Fabric Breakdown Table
+            const tableY = startY + 39;
+            const fabricRows = (lot.fabricGiven || []).map((f, idx) => [
+                String(idx + 1),
+                f.name || 'Fabric',
+                `${(parseFloat(f.meters) || 0).toFixed(2)} m`,
+                `${(parseFloat(lot.standardMetersPerPc) || 0).toFixed(2)} m/pc`,
+                lot.targetPcs ? `${Math.round(((parseFloat(f.meters) || 0) / lot.targetPcs) * 100) / 100} m/pc` : '-'
+            ]);
+
+            if (fabricRows.length === 0) {
+                fabricRows.push(['1', 'Main Fabric', `${(parseFloat(lot.totalMetersGiven) || 0).toFixed(2)} m`, `${(parseFloat(lot.standardMetersPerPc) || 0).toFixed(2)} m/pc`, '-']);
+            }
+
+            fabricRows.push([
+                '',
+                'TOTAL FABRIC ISSUED',
+                `${(parseFloat(lot.totalMetersGiven) || 0).toFixed(2)} m`,
+                '',
+                `For ${lot.targetPcs || 0} pcs`
+            ]);
+
+            doc.autoTable({
+                startY: tableY,
+                margin: { left: 15, right: 15 },
+                head: [['#', 'Fabric / Material Item', 'Issued Meters', 'Std Recipe', 'Actual/Pc']],
+                body: fabricRows,
+                theme: 'grid',
+                styles: {
+                    font: 'helvetica',
+                    fontSize: 7.5,
+                    cellPadding: 1.8,
+                    lineColor: [203, 213, 225],
+                    lineWidth: 0.2
+                },
+                headStyles: {
+                    fillColor: [15, 23, 42],
+                    textColor: [255, 255, 255],
+                    fontStyle: 'bold',
+                    halign: 'left'
+                },
+                columnStyles: {
+                    0: { cellWidth: 10, halign: 'center' },
+                    1: { cellWidth: 78 },
+                    2: { cellWidth: 32, fontStyle: 'bold', halign: 'right' },
+                    3: { cellWidth: 30, halign: 'right' },
+                    4: { cellWidth: 30, halign: 'right' }
+                },
+                didParseCell: (data) => {
+                    if (data.row.index === fabricRows.length - 1) {
+                        data.cell.styles.fontStyle = 'bold';
+                        data.cell.styles.fillColor = [226, 232, 240];
+                    }
+                }
+            });
+
+            // NO SIGNATURES! Clean bottom footer note only
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(6.5);
+            doc.setTextColor(148, 163, 184);
+            const footerNote = isOffice ? 'Office Copy — Keep in production issue register' : 'Floor Copy — Give along with issued cutting fabric to karigar';
+            doc.text(footerNote, 16, startY + 125);
+            doc.text(`Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}`, 194, startY + 125, { align: 'right' });
+        };
+
+        // Render Top Half: OFFICE COPY
+        renderSingleCopy(10, 'OFFICE COPY (FOR RECORD)', true);
+
+        // Center Dotted Cut Line (Y = 146)
+        doc.setDrawColor(100, 116, 139);
+        doc.setLineWidth(0.3);
+        doc.setLineDashPattern([2, 2], 0);
+        doc.line(11, 146, 199, 146);
+        doc.setLineDashPattern([], 0);
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(7);
+        doc.setTextColor(100, 116, 139);
+        doc.text('✂ - - - - - - - - - - CUT HERE (TOP: OFFICE COPY  |  BOTTOM: FLOOR / MAAL COPY) - - - - - - - - - - ✂', 105, 146.5, { align: 'center' });
+
+        // Render Bottom Half: FLOOR / MAAL COPY
+        renderSingleCopy(152, 'FLOOR / MAAL COPY (WITH GOODS)', false);
+
+        const safeLotNo = String(lot.lotNumber || 'LOT').replace(/[^a-zA-Z0-9_-]/g, '_');
+        doc.save(`${safeLotNo}_Dual_Slip.pdf`);
+        showToast(`Lot slip for ${lot.lotNumber} downloaded!`, 'success');
+    } catch (e) {
+        console.error('[PDF] Dual Lot Slip generation error:', e);
+        showToast('Error generating PDF slip: ' + e.message, 'error');
+    }
+}
+
+// ── Main page render ───────────────────────────────────────────────────
+async function renderKapadLotPage() {
+    const companyId = AppState.currentCompany;
+
+    // Load data
+    showLoader('Loading Kapad & Lot data...');
+    try {
+        // Try Firestore first; fall back to fake data for designs if Firestore is empty
+        let recipes = [];
+        let lots = [];
+        try {
+            recipes = await FirebaseService.getDesignRecipes(companyId);
+        } catch(e) { console.warn('[Kapad] getDesignRecipes error:', e); }
+        if (recipes.length === 0) {
+            // Seed fake recipes for testing (in-memory only, tagged with companyId)
+            recipes = FAKE_DESIGN_RECIPES.map(r => ({ ...r, companyId, id: `${companyId}__${r.designNo}`, _isFake: true }));
+        }
+
+        try {
+            lots = await FirebaseService.getProductionLots(companyId);
+        } catch(e) { console.warn('[Kapad] getProductionLots error:', e); }
+
+        KapadState.recipes = recipes;
+        KapadState.lots = lots;
+
+        renderKapadMetrics(lots);
+        renderDesignMasterTab(recipes);
+        filterAndRenderLots();
+
+        if (!KapadState._bindsDone) {
+            bindKapadEvents();
+            KapadState._bindsDone = true;
+        }
+    } catch(e) {
+        console.error('[Kapad] renderKapadLotPage error:', e);
+        showToast('Error loading kapad data', 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ── Bind all Kapad events (once) ──────────────────────────────────────
+function bindKapadEvents() {
+    // Sub-tabs
+    document.querySelectorAll('.kapad-subtab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.kapad-subtab').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.kapad-subtab-panel').forEach(p => p.style.display = 'none');
+            btn.classList.add('active');
+            const panel = document.getElementById(`kapad-subtab-${btn.dataset.subtab}`);
+            if (panel) panel.style.display = 'block';
+        });
+    });
+
+    // Search filters for Active & Closed Lots
+    document.getElementById('active-lot-search-input')?.addEventListener('input', filterAndRenderLots);
+    document.getElementById('closed-lot-search-input')?.addEventListener('input', filterAndRenderLots);
+
+    // Add Design Recipe
+    document.getElementById('btn-add-design-recipe')?.addEventListener('click', () => openDesignRecipeModal(null));
+
+    // Create Lot (from button in Active Lots tab)
+    document.getElementById('btn-create-lot')?.addEventListener('click', () => openCreateLotModal(null));
+
+    // Design Recipe Grid — delegated
+    document.getElementById('design-recipe-grid')?.addEventListener('click', e => {
+        const editBtn = e.target.closest('.btn-edit-recipe');
+        const deleteBtn = e.target.closest('.btn-delete-recipe');
+        const lotBtn = e.target.closest('.btn-create-lot-from-recipe');
+        if (editBtn) {
+            const r = KapadState.recipes.find(x => x.designNo === editBtn.dataset.no);
+            if (r) openDesignRecipeModal(r);
+        }
+        if (deleteBtn) {
+            if (!confirm(`Delete recipe for Design ${deleteBtn.dataset.name}?`)) return;
+            deleteDesignRecipeAction(deleteBtn.dataset.no);
+        }
+        if (lotBtn) {
+            const r = KapadState.recipes.find(x => x.designNo === lotBtn.dataset.no);
+            if (r) openCreateLotModal(r);
+        }
+    });
+
+    // Lot grids — delegated
+    ['active-lots-grid', 'closed-lots-grid'].forEach(gridId => {
+        document.getElementById(gridId)?.addEventListener('click', e => {
+            const printBtn = e.target.closest('.btn-lot-direct-print');
+            const pdfBtn = e.target.closest('.btn-lot-download-pdf');
+            const detailBtn = e.target.closest('.btn-lot-detail');
+            const submitBtn = e.target.closest('.btn-lot-submit');
+            const lotId = (printBtn || pdfBtn || detailBtn || submitBtn)?.dataset.lotId;
+            if (!lotId) return;
+
+            const lot = KapadState.lots.find(x => x.id === lotId);
+            if (printBtn && lot) {
+                printDirectDualLotSlip(lot);
+                return;
+            }
+            if (pdfBtn && lot) {
+                downloadDualLotSlipPdf(lot);
+                return;
+            }
+            if (detailBtn) openLotDetailModal(lotId);
+            if (submitBtn) openSubmitKarigarModal(lotId);
+        });
+    });
+
+    // ── Design Recipe Modal ────────────────────────────────────────────
+    document.getElementById('close-design-recipe-modal')?.addEventListener('click', closeDesignRecipeModal);
+    document.getElementById('cancel-design-recipe-modal')?.addEventListener('click', closeDesignRecipeModal);
+    document.getElementById('modal-design-recipe')?.addEventListener('click', e => { if (e.target === document.getElementById('modal-design-recipe')) closeDesignRecipeModal(); });
+
+    document.getElementById('btn-add-material-row')?.addEventListener('click', () => addMaterialRow());
+    document.getElementById('btn-add-jobcost-row')?.addEventListener('click', () => addJobCostRow());
+
+    document.getElementById('save-design-recipe-btn')?.addEventListener('click', saveDesignRecipeAction);
+    document.getElementById('recipe-silai-price')?.addEventListener('input', recalcRecipeTotals);
+
+    // ── Create Lot Modal ───────────────────────────────────────────────
+    document.getElementById('close-create-lot-modal')?.addEventListener('click', closeCreateLotModal);
+    document.getElementById('cancel-create-lot-modal')?.addEventListener('click', closeCreateLotModal);
+    document.getElementById('modal-create-lot')?.addEventListener('click', e => { if (e.target === document.getElementById('modal-create-lot')) closeCreateLotModal(); });
+
+    document.getElementById('lot-design-select')?.addEventListener('change', onLotDesignChange);
+    document.getElementById('lot-target-pcs')?.addEventListener('input', onLotDesignChange);
+    document.getElementById('lot-date')?.addEventListener('change', updateGeneratedLotNumberPreview);
+    document.getElementById('lot-number-input')?.addEventListener('input', () => {
+        const inp = document.getElementById('lot-number-input');
+        if (inp) inp.dataset.userEdited = 'true';
+    });
+    document.getElementById('save-create-lot-btn')?.addEventListener('click', () => saveCreateLotAction(false));
+    document.getElementById('save-create-lot-download-btn')?.addEventListener('click', () => saveCreateLotAction(true));
+    setupCreateLotFastEnterNavigation();
+
+    // ── Lot Detail Modal ───────────────────────────────────────────────
+    document.getElementById('close-lot-detail-modal')?.addEventListener('click', closeLotDetailModal);
+    document.getElementById('modal-lot-detail')?.addEventListener('click', e => { if (e.target === document.getElementById('modal-lot-detail')) closeLotDetailModal(); });
+    document.getElementById('lot-detail-print-btn')?.addEventListener('click', () => {
+        const lot = KapadState.lots.find(x => x.id === KapadState._currentLotId);
+        if (lot) printDirectDualLotSlip(lot);
+    });
+    document.getElementById('lot-detail-pdf-btn')?.addEventListener('click', () => {
+        const lot = KapadState.lots.find(x => x.id === KapadState._currentLotId);
+        if (lot) downloadDualLotSlipPdf(lot);
+    });
+    document.getElementById('lot-detail-submit-btn')?.addEventListener('click', () => {
+        closeLotDetailModal();
+        if (KapadState._currentLotId) openSubmitKarigarModal(KapadState._currentLotId);
+    });
+    document.getElementById('lot-detail-close-btn')?.addEventListener('click', closeLotAction);
+
+    // ── Submit Karigar Modal ────────────────────────────────────────────
+    document.getElementById('close-submit-karigar-modal')?.addEventListener('click', closeSubmitKarigarModal);
+    document.getElementById('cancel-submit-karigar-modal')?.addEventListener('click', closeSubmitKarigarModal);
+    document.getElementById('modal-submit-karigar')?.addEventListener('click', e => { if (e.target === document.getElementById('modal-submit-karigar')) closeSubmitKarigarModal(); });
+    document.getElementById('submit-pcs')?.addEventListener('input', updateSubmitPreview);
+    document.getElementById('save-submit-karigar-btn')?.addEventListener('click', saveSubmitKarigarAction);
+}
+
+// ── Live recipe totals ─────────────────────────────────────────────────
+function recalcRecipeTotals() {
+    let totalMeters = 0, totalCost = 0;
+    document.querySelectorAll('#recipe-materials-list .dynamic-material-row').forEach(row => {
+        const m = parseFloat(row.querySelector('.row-meters')?.value) || 0;
+        const r = parseFloat(row.querySelector('.row-rate')?.value) || 0;
+        const cost = m * r;
+        totalMeters += m;
+        totalCost += cost;
+        const costField = row.querySelector('.row-cost');
+        if (costField) costField.value = cost.toFixed(2);
+    });
+
+    // Compulsory Silai Rate
+    const silaiVal = parseFloat(document.getElementById('recipe-silai-price')?.value) || 0;
+    totalCost += silaiVal;
+
+    // Additional Job Costs
+    document.querySelectorAll('#recipe-jobcosts-list .dynamic-jobcost-row').forEach(row => {
+        totalCost += parseFloat(row.querySelector('.row-amount')?.value) || 0;
+    });
+    document.getElementById('recipe-total-meters').textContent = totalMeters.toFixed(2);
+    document.getElementById('recipe-total-cost').textContent = `₹${totalCost.toFixed(2)}`;
+}
+
+// ── Material / job cost rows ───────────────────────────────────────────
+function addMaterialRow(data = {}) {
+    const list = document.getElementById('recipe-materials-list');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'dynamic-material-row';
+    row.innerHTML = `
+        <input class="row-name" type="text" placeholder="Material item name (e.g. Embroidery)" value="${esc(data.name || '')}">
+        <input class="row-meters" type="number" step="0.01" min="0" placeholder="0.00" value="${data.metersPerPc || ''}">
+        <input class="row-rate" type="number" step="0.01" min="0" placeholder="0.00" value="${data.ratePerMeter || ''}">
+        <input class="row-cost" type="number" readonly placeholder="0.00" value="${data.metersPerPc && data.ratePerMeter ? ((parseFloat(data.metersPerPc)||0)*(parseFloat(data.ratePerMeter)||0)).toFixed(2) : ''}">
+        <button class="row-delete-btn" type="button" title="Remove"><i class='bx bx-trash'></i></button>
+    `;
+    row.querySelector('.row-delete-btn').addEventListener('click', () => { row.remove(); recalcRecipeTotals(); });
+    row.querySelector('.row-meters').addEventListener('input', recalcRecipeTotals);
+    row.querySelector('.row-rate').addEventListener('input', recalcRecipeTotals);
+    list.appendChild(row);
+    recalcRecipeTotals();
+}
+
+function addJobCostRow(data = {}) {
+    const list = document.getElementById('recipe-jobcosts-list');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'dynamic-jobcost-row';
+    row.innerHTML = `
+        <input class="row-name" type="text" placeholder="Work name (e.g. Hand Work, Washing)" value="${esc(data.name || '')}">
+        <input class="row-amount" type="number" step="0.01" min="0" placeholder="0.00" value="${data.amountPerPc || ''}">
+        <button class="row-delete-btn" type="button" title="Remove"><i class='bx bx-trash'></i></button>
+    `;
+    row.querySelector('.row-delete-btn').addEventListener('click', () => { row.remove(); recalcRecipeTotals(); });
+    row.querySelector('.row-amount').addEventListener('input', recalcRecipeTotals);
+    list.appendChild(row);
+    recalcRecipeTotals();
+}
+
+// ── Open Design Recipe Modal ───────────────────────────────────────────
+function openDesignRecipeModal(recipe = null) {
+    document.getElementById('design-recipe-modal-title').textContent = recipe ? `Edit Design ${recipe.designNo}` : 'New Design Recipe';
+    const noInput = document.getElementById('recipe-design-no');
+    const nameInput = document.getElementById('recipe-design-name');
+    const silaiInput = document.getElementById('recipe-silai-price');
+    noInput.value = recipe ? recipe.designNo : '';
+    noInput.readOnly = !!recipe;
+    nameInput.value = recipe ? (recipe.name || '') : '';
+
+    let silaiVal = recipe ? (parseFloat(recipe.silaiPrice) || '') : '';
+    if (!silaiVal && recipe) {
+        const k = String(recipe.designNo || '').trim().toUpperCase();
+        if (AppState.designPrices && Number.isFinite(parseFloat(AppState.designPrices[k]))) {
+            silaiVal = parseFloat(AppState.designPrices[k]);
+        }
+    }
+    if (silaiInput) silaiInput.value = silaiVal || '';
+
+    document.getElementById('recipe-materials-list').innerHTML = '';
+    document.getElementById('recipe-jobcosts-list').innerHTML = '';
+    document.getElementById('recipe-total-meters').textContent = '0.00';
+    document.getElementById('recipe-total-cost').textContent = '₹0.00';
+
+    if (recipe) {
+        (recipe.materials || []).forEach(m => addMaterialRow(m));
+        (recipe.jobCosts || []).forEach(j => addJobCostRow(j));
+    } else {
+        addMaterialRow({ name: 'Main Fabric', metersPerPc: '', ratePerMeter: '' });
+    }
+
+    recalcRecipeTotals();
+    document.getElementById('save-design-recipe-btn').dataset.editNo = recipe ? recipe.designNo : '';
+    document.getElementById('modal-design-recipe').style.display = 'flex';
+}
+
+function closeDesignRecipeModal() {
+    document.getElementById('modal-design-recipe').style.display = 'none';
+}
+
+// ── Save Design Recipe ────────────────────────────────────────────────
+async function saveDesignRecipeAction() {
+    const designNo = document.getElementById('recipe-design-no').value.trim().toUpperCase();
+    const name = document.getElementById('recipe-design-name').value.trim() || `Design ${designNo}`;
+    if (!designNo) { showToast('Design No is required', 'error'); return; }
+
+    const silaiInput = document.getElementById('recipe-silai-price');
+    const silaiPrice = parseFloat(silaiInput?.value);
+    if (!Number.isFinite(silaiPrice) || silaiPrice <= 0) {
+        showToast('Please enter compulsory Silai / Karigar Rate (₹/pc)', 'error');
+        silaiInput?.focus();
+        return;
+    }
+
+    const materials = [];
+    document.querySelectorAll('#recipe-materials-list .dynamic-material-row').forEach(row => {
+        const n = row.querySelector('.row-name')?.value.trim();
+        const m = parseFloat(row.querySelector('.row-meters')?.value) || 0;
+        const r = parseFloat(row.querySelector('.row-rate')?.value) || 0;
+        if (n) materials.push({ name: n, metersPerPc: m, ratePerMeter: r });
+    });
+
+    const jobCosts = [];
+    document.querySelectorAll('#recipe-jobcosts-list .dynamic-jobcost-row').forEach(row => {
+        const n = row.querySelector('.row-name')?.value.trim();
+        const a = parseFloat(row.querySelector('.row-amount')?.value) || 0;
+        if (n) jobCosts.push({ name: n, amountPerPc: a });
+    });
+
+    if (materials.length === 0) { showToast('Add at least one material', 'error'); return; }
+
+    showLoader('Saving design recipe & syncing silai rate...');
+    try {
+        await FirebaseService.saveDesignRecipe(AppState.currentCompany, designNo, name, materials, jobCosts, silaiPrice);
+
+        // Sync into Size Prices immediately so it shows automatically in size and price!
+        try {
+            await FirebaseService.upsertDesignPrice(designNo, silaiPrice, buildAuditActor(), DESIGN_PRICE_SCOPE);
+            AppState.designPrices = AppState.designPrices || {};
+            AppState.designPrices[designNo] = silaiPrice;
+            if (AppState.designPricesByCompany) {
+                AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] || {};
+                AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][designNo] = silaiPrice;
+            }
+            invalidateAllKarigarCaches();
+        } catch(priceErr) {
+            console.warn('[Kapad] Size price auto-upsert warning:', priceErr);
+        }
+
+        closeDesignRecipeModal();
+        showToast(`Design ${designNo} saved! Silai rate ₹${silaiPrice.toFixed(2)} synced to Size Prices`, 'success');
+        KapadState._bindsDone = false; // reset so sub-tab state is kept but recipes refresh
+        await renderKapadLotPage();
+    } catch(e) {
+        console.error(e);
+        showToast('Error saving recipe: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ── Delete Design Recipe ───────────────────────────────────────────────
+async function deleteDesignRecipeAction(designNo) {
+    showLoader('Deleting...');
+    try {
+        await FirebaseService.deleteDesignRecipe(AppState.currentCompany, designNo);
+        showToast(`Design ${designNo} deleted`, 'success');
+        KapadState._bindsDone = false;
+        await renderKapadLotPage();
+    } catch(e) {
+        showToast('Error deleting recipe: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ── Open Create Lot Modal ──────────────────────────────────────────────
+function openCreateLotModal(recipe = null) {
+    // Populate design dropdown
+    const sel = document.getElementById('lot-design-select');
+    sel.innerHTML = `<option value="">— Choose Design —</option>` +
+        KapadState.recipes.map(r => `<option value="${esc(r.designNo)}">${esc(r.designNo)} — ${esc(r.name || r.designNo)}</option>`).join('');
+    if (recipe) sel.value = recipe.designNo;
+
+    document.getElementById('lot-target-pcs').value = '';
+    document.getElementById('lot-date').value = getTodayISODate();
+    document.getElementById('lot-fabric-preview').classList.add('hidden');
+
+    const lotInp = document.getElementById('lot-number-input');
+    if (lotInp) {
+        lotInp.value = '';
+        delete lotInp.dataset.userEdited;
+    }
+
+    document.getElementById('modal-create-lot').style.display = 'flex';
+
+    setTimeout(() => {
+        const dSel = document.getElementById('lot-design-select');
+        dSel?.focus();
+        if (recipe) onLotDesignChange();
+    }, 50);
+}
+
+function closeCreateLotModal() {
+    document.getElementById('modal-create-lot').style.display = 'none';
+}
+
+function setupCreateLotFastEnterNavigation() {
+    const modal = document.getElementById('modal-create-lot');
+    if (!modal || modal.dataset.enterBound === 'true') return;
+    modal.dataset.enterBound = 'true';
+
+    modal.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey) return;
+
+        const target = e.target;
+        if (!target) return;
+
+        // 1. In design select
+        if (target.id === 'lot-design-select') {
+            e.preventDefault();
+            const pcsInp = document.getElementById('lot-target-pcs');
+            if (pcsInp) {
+                pcsInp.focus();
+                pcsInp.select?.();
+            }
+            return;
+        }
+
+        // 2. In target pcs
+        if (target.id === 'lot-target-pcs') {
+            e.preventDefault();
+            onLotDesignChange();
+            setTimeout(() => {
+                const firstFabric = document.querySelector('#lot-fabric-rows .lot-fabric-qty');
+                if (firstFabric) {
+                    firstFabric.focus();
+                    firstFabric.select?.();
+                } else {
+                    document.getElementById('save-create-lot-btn')?.focus();
+                }
+            }, 30);
+            return;
+        }
+
+        // 3. In fabric qty rows
+        if (target.classList.contains('lot-fabric-qty')) {
+            e.preventDefault();
+            const rows = Array.from(document.querySelectorAll('#lot-fabric-rows .lot-fabric-qty'));
+            const idx = rows.indexOf(target);
+            if (idx >= 0 && idx < rows.length - 1) {
+                rows[idx + 1].focus();
+                rows[idx + 1].select?.();
+            } else {
+                document.getElementById('save-create-lot-btn')?.focus();
+            }
+            return;
+        }
+
+        // 4. In lot-date or lot-number-input
+        if (target.id === 'lot-date' || target.id === 'lot-number-input') {
+            e.preventDefault();
+            document.getElementById('save-create-lot-btn')?.focus();
+            return;
+        }
+    });
+}
+
+function onLotDesignChange() {
+    const designNo = document.getElementById('lot-design-select')?.value;
+    const targetPcs = parseInt(document.getElementById('lot-target-pcs')?.value) || 0;
+    const recipe = KapadState.recipes.find(r => r.designNo === designNo);
+
+    const previewDiv = document.getElementById('lot-fabric-preview');
+    const rowsDiv = document.getElementById('lot-fabric-rows');
+
+    if (!recipe || targetPcs <= 0) {
+        previewDiv?.classList.add('hidden');
+        updateGeneratedLotNumberPreview();
+        return;
+    }
+
+    previewDiv?.classList.remove('hidden');
+
+    // Build editable fabric rows
+    rowsDiv.innerHTML = (recipe.materials || []).map((m, i) => {
+        const qty = Math.ceil((m.metersPerPc || 0) * targetPcs * 100) / 100;
+        return `<div class="lot-fabric-row">
+            <label>${esc(m.name)}</label>
+            <input type="number" step="0.01" min="0" class="lot-fabric-qty" data-idx="${i}" data-name="${esc(m.name)}" value="${qty}">
+            <span class="fabric-unit">m</span>
+        </div>`;
+    }).join('');
+
+    // Bind input changes to update total
+    rowsDiv.querySelectorAll('.lot-fabric-qty').forEach(inp => {
+        inp.addEventListener('input', updateLotTotalMeters);
+    });
+    updateLotTotalMeters();
+}
+
+function updateLotTotalMeters() {
+    let total = 0;
+    document.querySelectorAll('#lot-fabric-rows .lot-fabric-qty').forEach(inp => {
+        total += parseFloat(inp.value) || 0;
+    });
+    const el = document.getElementById('lot-total-meters-preview');
+    if (el) el.textContent = total.toFixed(2);
+    updateGeneratedLotNumberPreview();
+}
+
+function getNextLotSeqNumber() {
+    let maxSeq = 0;
+    (KapadState.lots || []).forEach(l => {
+        const m = String(l.lotNumber || '').match(/SEQ[-_]?(\d+)/i) || String(l.lotNumber || '').match(/LOT[-_](\d+)/i) || String(l.lotNumber || '').match(/[-_](\d+)$/);
+        if (m) {
+            const num = parseInt(m[1], 10);
+            if (num > maxSeq) maxSeq = num;
+        }
+    });
+    if (maxSeq === 0) {
+        maxSeq = (KapadState.lots || []).length;
+    }
+    return maxSeq + 1;
+}
+
+function updateGeneratedLotNumberPreview() {
+    const designNo = document.getElementById('lot-design-select')?.value;
+    const dateVal = document.getElementById('lot-date')?.value || getTodayISODate();
+    const dObj = new Date(dateVal + 'T00:00:00');
+    const dd = String(dObj.getDate()).padStart(2, '0');
+    const mm = String(dObj.getMonth() + 1).padStart(2, '0');
+
+    let totalMeters = 0;
+    document.querySelectorAll('#lot-fabric-rows .lot-fabric-qty').forEach(inp => {
+        totalMeters += parseFloat(inp.value) || 0;
+    });
+    const roundedMeters = Math.round(totalMeters);
+    const cleanDesign = String(designNo || 'LOT').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    const nextSeq = getNextLotSeqNumber();
+    const seqStr = String(nextSeq).padStart(3, '0');
+
+    const lotInput = document.getElementById('lot-number-input');
+    if (lotInput && !lotInput.dataset.userEdited) {
+        lotInput.value = `LOT-SEQ-${seqStr}-${cleanDesign}-${dd}${mm}-${roundedMeters}M`;
+    }
+}
+
+// ── Save Create Lot ────────────────────────────────────────────────────
+async function saveCreateLotAction(downloadOnly = false) {
+    const designNo = document.getElementById('lot-design-select').value;
+    const targetPcs = parseInt(document.getElementById('lot-target-pcs').value) || 0;
+    const date = document.getElementById('lot-date').value;
+    const customLotNumber = document.getElementById('lot-number-input')?.value.trim();
+
+    if (!designNo) { showToast('Select a design', 'error'); return; }
+    if (targetPcs < 1) { showToast('Enter target pieces', 'error'); return; }
+
+    const recipe = KapadState.recipes.find(r => r.designNo === designNo);
+    if (!recipe) { showToast('Design recipe not found', 'error'); return; }
+
+    // Collect fabric
+    const fabricGiven = [];
+    document.querySelectorAll('#lot-fabric-rows .lot-fabric-qty').forEach(inp => {
+        fabricGiven.push({ name: inp.dataset.name, meters: parseFloat(inp.value) || 0 });
+    });
+
+    if (fabricGiven.length === 0) { showToast('Fabric data missing — select design & pieces first', 'error'); return; }
+
+    showLoader(downloadOnly ? 'Creating lot & generating PDF...' : 'Creating lot & opening print...');
+    try {
+        const res = await FirebaseService.createProductionLot(
+            AppState.currentCompany,
+            designNo,
+            recipe.name || designNo,
+            targetPcs,
+            fabricGiven,
+            recipe.totalMetersPerPc || 0,
+            customLotNumber,
+            date,
+            recipe.silaiPrice || 0
+        );
+        closeCreateLotModal();
+        showToast(`Lot ${res.lotNumber} created!`, 'success');
+
+        // Switch to Active Lots sub-tab
+        document.querySelectorAll('.kapad-subtab').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.kapad-subtab-panel').forEach(p => p.style.display = 'none');
+        const activeTab = document.querySelector('.kapad-subtab[data-subtab="active-lots"]');
+        if (activeTab) activeTab.classList.add('active');
+        const activePanel = document.getElementById('kapad-subtab-active-lots');
+        if (activePanel) activePanel.style.display = 'block';
+
+        const newLotObj = {
+            id: res.id,
+            lotNumber: res.lotNumber,
+            companyId: AppState.currentCompany,
+            date,
+            designNo: String(designNo).trim().toUpperCase(),
+            designName: String(recipe.name || designNo).trim(),
+            targetPcs,
+            standardMetersPerPc: recipe.totalMetersPerPc || 0,
+            silaiPrice: recipe.silaiPrice || 0,
+            fabricGiven,
+            totalMetersGiven: fabricGiven.reduce((s, f) => s + (parseFloat(f.meters) || 0), 0),
+            completedPcs: 0,
+            consumedMeters: 0,
+            submissions: [],
+            status: 'open',
+            mismatchMeters: 0
+        };
+
+        if (downloadOnly) {
+            downloadDualLotSlipPdf(newLotObj);
+        } else {
+            printDirectDualLotSlip(newLotObj);
+        }
+
+        KapadState._bindsDone = false;
+        await renderKapadLotPage();
+    } catch(e) {
+        console.error(e);
+        showToast('Error creating lot: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ── Lot Detail Modal ────────────────────────────────────────────────────
+function openLotDetailModal(lotId) {
+    const lot = KapadState.lots.find(l => l.id === lotId);
+    if (!lot) return;
+    KapadState._currentLotId = lotId;
+
+    document.getElementById('lot-detail-title').textContent = lot.lotNumber;
+    document.getElementById('lot-detail-subtitle').textContent = `${lot.designNo} — ${lot.designName} · ${lot.targetPcs} pcs target`;
+
+    // Stats
+    const pct = lot.targetPcs > 0 ? Math.round((lot.completedPcs / lot.targetPcs) * 100) : 0;
+    document.getElementById('lot-detail-stats').innerHTML = `
+        <div class="lot-detail-stat">
+            <div class="ds-val">${lot.completedPcs}</div>
+            <div class="ds-label">Completed Pcs</div>
+        </div>
+        <div class="lot-detail-stat">
+            <div class="ds-val">${lot.targetPcs - lot.completedPcs}</div>
+            <div class="ds-label">Remaining Pcs</div>
+        </div>
+        <div class="lot-detail-stat">
+            <div class="ds-val">${pct}%</div>
+            <div class="ds-label">Progress</div>
+        </div>
+    `;
+
+    // Fabric
+    const fabricHtml = (lot.fabricGiven || []).map(f =>
+        `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #f1f5f9;font-size:0.82rem;">
+            <span>${esc(f.name)}</span><strong>${(parseFloat(f.meters)||0).toFixed(2)} m</strong>
+        </div>`
+    ).join('') || '<div class="text-muted text-xs">No fabric recorded</div>';
+    document.getElementById('lot-detail-fabric').innerHTML = fabricHtml +
+        `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:0.85rem;font-weight:700;">
+            <span>Consumed</span><span>${(parseFloat(lot.consumedMeters)||0).toFixed(2)} m</span>
+        </div>`;
+
+    // Submissions
+    const subs = lot.submissions || [];
+    if (subs.length === 0) {
+        document.getElementById('lot-detail-submissions').innerHTML = `<div class="text-muted text-xs" style="padding:8px 0;">No submissions yet.</div>`;
+    } else {
+        document.getElementById('lot-detail-submissions').innerHTML = subs.map(s =>
+            `<div class="submission-row">
+                <div>
+                    <strong>${esc(s.karigarName)}</strong>
+                    <div class="text-xs text-muted">${esc(s.date || '')}</div>
+                </div>
+                <div style="text-align:right;">
+                    <div><strong>${s.pcs} pcs</strong></div>
+                    <div class="text-xs text-muted">-${(parseFloat(s.metersConsumed)||0).toFixed(2)} m</div>
+                </div>
+            </div>`
+        ).join('');
+    }
+
+    // Mismatch
+    const mismatch = parseFloat(lot.mismatchMeters) || 0;
+    const mismatchClass = Math.abs(mismatch) < 0.01 ? 'ok' : (mismatch > 0 ? 'warning' : 'danger');
+    document.getElementById('lot-detail-mismatch').innerHTML = `
+        <span class="lot-mismatch-badge ${mismatchClass}" style="font-size:0.85rem;padding:4px 14px;">
+            ${Math.abs(mismatch) < 0.01 ? '✓ No mismatch' : mismatch > 0 ? `+${mismatch.toFixed(2)} m fabric surplus (less used than given)` : `${mismatch.toFixed(2)} m fabric shortage`}
+        </span>`;
+
+    // Hide close button for already-closed lots
+    const closeBtn = document.getElementById('lot-detail-close-btn');
+    const submitBtn = document.getElementById('lot-detail-submit-btn');
+    if (closeBtn) closeBtn.style.display = lot.status === 'closed' ? 'none' : 'inline-flex';
+    if (submitBtn) submitBtn.style.display = lot.status === 'closed' ? 'none' : 'inline-flex';
+
+    document.getElementById('modal-lot-detail').style.display = 'flex';
+}
+
+function closeLotDetailModal() {
+    document.getElementById('modal-lot-detail').style.display = 'none';
+    KapadState._currentLotId = null;
+}
+
+// ── Close Lot ────────────────────────────────────────────────────────────
+async function closeLotAction() {
+    if (!KapadState._currentLotId) return;
+    if (!confirm('Mark this lot as closed? This cannot be undone.')) return;
+    showLoader('Closing lot...');
+    try {
+        await FirebaseService.closeLot(KapadState._currentLotId);
+        closeLotDetailModal();
+        showToast('Lot closed', 'success');
+        KapadState._bindsDone = false;
+        await renderKapadLotPage();
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ── Print Lot Slip ────────────────────────────────────────────────────────
+function printLotSlip() {
+    const lotId = KapadState._currentLotId;
+    const lot = KapadState.lots.find(l => l.id === lotId);
+    if (!lot) return;
+
+    const slipHtml = `
+        <div class="lot-slip-print" style="font-family:monospace;padding:20px;font-size:13px;">
+            <h2 style="text-align:center;margin-bottom:4px;">KRIMAA — LOT SLIP</h2>
+            <div style="text-align:center;color:#555;margin-bottom:12px;">Production Floor Issue Slip</div>
+            <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Lot Number</td><td style="padding:4px 8px;border:1px solid #000;">${lot.lotNumber}</td></tr>
+                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Design No</td><td style="padding:4px 8px;border:1px solid #000;">${lot.designNo} — ${lot.designName}</td></tr>
+                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Date</td><td style="padding:4px 8px;border:1px solid #000;">${lot.date}</td></tr>
+                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Target Pcs</td><td style="padding:4px 8px;border:1px solid #000;">${lot.targetPcs}</td></tr>
+            </table>
+            <div style="font-weight:bold;margin:8px 0 4px;">Fabric Issued:</div>
+            <table style="width:100%;border-collapse:collapse;">
+                <thead><tr><th style="border:1px solid #000;padding:4px 8px;text-align:left;">Material</th><th style="border:1px solid #000;padding:4px 8px;text-align:right;">Meters</th></tr></thead>
+                <tbody>
+                    ${(lot.fabricGiven || []).map(f => `<tr><td style="border:1px solid #000;padding:4px 8px;">${f.name}</td><td style="border:1px solid #000;padding:4px 8px;text-align:right;">${(parseFloat(f.meters)||0).toFixed(2)} m</td></tr>`).join('')}
+                    <tr><td style="border:1px solid #000;padding:4px 8px;font-weight:bold;">TOTAL</td><td style="border:1px solid #000;padding:4px 8px;text-align:right;font-weight:bold;">${(parseFloat(lot.totalMetersGiven)||0).toFixed(2)} m</td></tr>
+                </tbody>
+            </table>
+            <div style="margin-top:16px;">Issued by: _____________ &nbsp;&nbsp; Date: _____________</div>
+            <div style="margin-top:8px;">Received by: _____________ &nbsp;&nbsp; Sign: _____________</div>
+        </div>`;
+
+    const printWin = window.open('', '_blank', 'width=600,height=800');
+    printWin.document.write(`<html><head><title>Lot Slip ${lot.lotNumber}</title></head><body>${slipHtml}</body></html>`);
+    printWin.document.close();
+    printWin.focus();
+    printWin.print();
+    printWin.close();
+}
+
+// ── Open Submit Karigar Modal ─────────────────────────────────────────────
+function openSubmitKarigarModal(lotId) {
+    const lot = KapadState.lots.find(l => l.id === lotId);
+    if (!lot) return;
+    KapadState._currentLotId = lotId;
+
+    document.getElementById('submit-lot-id').value = lotId;
+
+    // Populate karigar list
+    const karigars = getEffectiveKarigarListForKapad();
+    const sel = document.getElementById('submit-karigar-select');
+    sel.innerHTML = `<option value="">— Select Karigar —</option>` +
+        karigars.map(k => `<option value="${esc(k.id)}" data-name="${esc(k.name)}">${esc(k.name)}</option>`).join('');
+
+    document.getElementById('submit-pcs').value = '';
+    document.getElementById('submit-karigar-date').value = getTodayISODate();
+    document.getElementById('submit-preview').classList.add('hidden');
+
+    // Set rate preview
+    document.getElementById('submit-rate-preview').textContent = (parseFloat(lot.standardMetersPerPc)||0).toFixed(2);
+
+    document.getElementById('modal-submit-karigar').style.display = 'flex';
+}
+
+function closeSubmitKarigarModal() {
+    document.getElementById('modal-submit-karigar').style.display = 'none';
+}
+
+function updateSubmitPreview() {
+    const lotId = document.getElementById('submit-lot-id').value;
+    const lot = KapadState.lots.find(l => l.id === lotId);
+    if (!lot) return;
+    const pcs = parseInt(document.getElementById('submit-pcs').value) || 0;
+    const meters = pcs * (parseFloat(lot.standardMetersPerPc) || 0);
+    const preview = document.getElementById('submit-preview');
+    if (pcs > 0) {
+        document.getElementById('submit-meters-preview').textContent = meters.toFixed(2);
+        document.getElementById('submit-pcs-preview').textContent = pcs;
+        preview?.classList.remove('hidden');
+    } else {
+        preview?.classList.add('hidden');
+    }
+}
+
+// ── Save Submission ────────────────────────────────────────────────────
+async function saveSubmitKarigarAction() {
+    const lotId = document.getElementById('submit-lot-id').value;
+    const sel = document.getElementById('submit-karigar-select');
+    const karigarId = sel.value;
+    const karigarName = sel.options[sel.selectedIndex]?.dataset.name || sel.options[sel.selectedIndex]?.text || '';
+    const pcs = parseInt(document.getElementById('submit-pcs').value) || 0;
+    const date = document.getElementById('submit-karigar-date').value;
+
+    if (!karigarId) { showToast('Select a karigar', 'error'); return; }
+    if (pcs < 1) { showToast('Enter pieces completed', 'error'); return; }
+    if (!lotId) { showToast('Lot ID missing', 'error'); return; }
+
+    showLoader('Recording submission...');
+    try {
+        await FirebaseService.submitLotWork(lotId, karigarId, karigarName, pcs, date);
+        closeSubmitKarigarModal();
+        showToast(`Recorded ${pcs} pcs from ${karigarName}`, 'success');
+        KapadState._bindsDone = false;
+        await renderKapadLotPage();
+    } catch(e) {
+        console.error(e);
+        showToast('Error: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
 

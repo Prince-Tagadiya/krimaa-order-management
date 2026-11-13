@@ -80,6 +80,7 @@
                 <li id="nav-manage-accounts"><a href="#" class="nav-btn" data-target="add-account"><i class='bx bx-group'></i> Manage Accounts</a></li>
                 <li id="nav-karigar"><a href="#" class="nav-btn" data-target="karigar"><i class='bx bx-user-circle'></i> Karigar Management</a></li>
                 <li id="nav-size-prices"><a href="#" class="nav-btn" data-target="size-prices"><i class='bx bx-ruler'></i> Size Prices</a></li>
+                <li id="nav-kapad-lot"><a href="#" class="nav-btn" data-target="kapad-lot"><i class='bx bx-package'></i> Kapad &amp; Lot</a></li>
                 <!-- <li id="nav-dashboard"><a href="#" class="nav-btn" data-target="dashboard"><i class='bx bx-grid-alt'></i> Dashboard</a></li> -->
             </ul>
             <div class="sidebar-footer">
@@ -538,6 +539,319 @@
                     </div> <!-- /#size-prices-main-content -->
                 </section>
 
+                <!-- ========== KAPAD & LOT MANAGEMENT ========== -->
+                <section id="kapad-lot" class="content-section">
+                    <div class="kapad-lot-wrap">
+                        <!-- Metrics Banner -->
+                        <div id="kapad-metrics-banner" class="kapad-metrics-banner">
+                            <!-- JS injected -->
+                        </div>
+
+                        <!-- Sub-tab bar -->
+                        <div class="kapad-subtab-bar">
+                            <button class="kapad-subtab active" data-subtab="design-master">
+                                <i class='bx bx-palette'></i> Design Master
+                            </button>
+                            <button class="kapad-subtab" data-subtab="active-lots">
+                                <i class='bx bx-layer'></i> Active Lots
+                            </button>
+                            <button class="kapad-subtab" data-subtab="closed-lots">
+                                <i class='bx bx-check-circle'></i> Closed Lots
+                            </button>
+                        </div>
+
+                        <!-- Design Master Tab -->
+                        <div id="kapad-subtab-design-master" class="kapad-subtab-panel active">
+                            <div class="flex-between flex-wrap gap-2 mb-3">
+                                <h3 class="font-bold text-lg" style="display:flex;align-items:center;gap:8px;">
+                                    <i class='bx bx-palette text-primary'></i> Design Recipe Master
+                                </h3>
+                                <button class="btn btn-primary btn-sm" id="btn-add-design-recipe">
+                                    <i class='bx bx-plus'></i> Add Design
+                                </button>
+                            </div>
+                            <div id="design-recipe-grid" class="design-recipe-grid">
+                                <!-- JS injected -->
+                            </div>
+                        </div>
+
+                        <!-- Active Lots Tab -->
+                        <div id="kapad-subtab-active-lots" class="kapad-subtab-panel" style="display:none">
+                            <div class="flex-between flex-wrap gap-2 mb-3">
+                                <div>
+                                    <h3 class="font-bold text-lg" style="display:flex;align-items:center;gap:8px;">
+                                        <i class='bx bx-layer text-primary'></i> Production Lots (Open)
+                                    </h3>
+                                    <div class="text-xs text-muted">Active production floor lots with kapad in progress</div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <div class="karigar-search-box" style="max-width:280px;">
+                                        <i class='bx bx-search'></i>
+                                        <input type="text" id="active-lot-search-input" placeholder="Search Lot #, Design...">
+                                    </div>
+                                    <button class="btn btn-primary btn-sm" id="btn-create-lot">
+                                        <i class='bx bx-plus'></i> Create New Lot
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="active-lots-grid" class="lot-cards-grid">
+                                <!-- JS injected -->
+                            </div>
+                        </div>
+
+                        <!-- Closed Lots Tab -->
+                        <div id="kapad-subtab-closed-lots" class="kapad-subtab-panel" style="display:none">
+                            <div class="flex-between flex-wrap gap-2 mb-3">
+                                <div>
+                                    <h3 class="font-bold text-lg" style="display:flex;align-items:center;gap:8px;">
+                                        <i class='bx bx-check-circle text-primary'></i> Closed Lots (History)
+                                    </h3>
+                                    <div class="text-xs text-muted">Completed lots history — download slips anytime</div>
+                                </div>
+                                <div class="karigar-search-box" style="max-width:280px;">
+                                    <i class='bx bx-search'></i>
+                                    <input type="text" id="closed-lot-search-input" placeholder="Search by Lot #, Design...">
+                                </div>
+                            </div>
+                            <div id="closed-lots-grid" class="lot-cards-grid">
+                                <!-- JS injected -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ========== KAPAD MODALS ========== -->
+
+                <!-- Design Recipe Modal -->
+                <div id="modal-design-recipe" class="modal kapad-modal" style="display:none;">
+                    <div class="modal-content kapad-modal-content" style="max-width:640px;">
+                        <div class="flex-between mb-3" style="border-bottom:1px solid #e2e8f0;padding-bottom:10px;">
+                            <div>
+                                <h3 class="font-bold text-lg" id="design-recipe-modal-title" style="margin:0;">New Design Recipe</h3>
+                                <div class="text-xs text-muted">Define fabric consumption and Karigar silai rates</div>
+                            </div>
+                            <button class="btn-icon" id="close-design-recipe-modal"><i class='bx bx-x'></i></button>
+                        </div>
+
+                        <div class="mb-3" style="display:flex;gap:12px;flex-wrap:wrap;">
+                            <div style="flex:1;min-width:140px;">
+                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Design No *</label>
+                                <input type="text" id="recipe-design-no" placeholder="e.g. 1128" style="width:100%;padding:0.6rem 0.75rem;border:1.5px solid #cbd5e1;border-radius:8px;font-weight:800;font-size:1.05rem;">
+                            </div>
+                            <div style="flex:2;min-width:200px;">
+                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Design Name / Description</label>
+                                <input type="text" id="recipe-design-name" placeholder="e.g. Design 1128" style="width:100%;padding:0.6rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;">
+                            </div>
+                        </div>
+
+                        <!-- Compulsory Silai / Karigar Rate (Linked with Size & Price) -->
+                        <div class="recipe-silai-group mb-3" style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;padding:12px 14px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                <label class="text-xs font-bold text-success uppercase" style="display:flex;align-items:center;gap:6px;margin:0;">
+                                    <i class='bx bx-check-shield'></i> Silai / Karigar Rate (₹/pc) * (Compulsory)
+                                </label>
+                                <span style="font-size:0.72rem;color:#16a34a;font-weight:700;">Links with Size &amp; Price</span>
+                            </div>
+                            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+                                <div style="position:relative;width:160px;min-width:140px;">
+                                    <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-weight:800;color:#059669;font-size:1.1rem;">₹</span>
+                                    <input type="number" id="recipe-silai-price" step="0.5" min="0" required placeholder="e.g. 75.00" style="width:100%;padding:0.6rem 0.75rem 0.6rem 1.9rem;border:1.5px solid #10b981;border-radius:8px;font-weight:800;font-size:1.05rem;color:#065f46;background:#fff;">
+                                </div>
+                                <div style="font-size:0.75rem;color:#475569;flex:1;min-width:180px;line-height:1.35;">
+                                    Compulsory floor rate for karigar stitching. Auto-syncs to <strong>Size Prices</strong> and auto-fills <strong>Price Per Pic</strong> on Maal (Jama).
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Materials Section -->
+                        <div class="kapad-section-label" style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:0.85rem;color:#1e293b;margin-bottom:4px;">
+                            <i class='bx bx-scissors text-primary'></i> Fabric / Materials (Consumption)
+                        </div>
+                        <div style="font-size:0.72rem;color:#64748b;margin-bottom:8px;">Item name, meters per piece, and cloth rate per meter</div>
+                        <div class="dynamic-row-header-materials" style="display:flex;gap:8px;font-size:0.7rem;font-weight:800;color:#64748b;text-transform:uppercase;padding:0 8px 4px 8px;letter-spacing:0.4px;">
+                            <span style="flex:2.2;min-width:110px;">Material Item</span>
+                            <span style="flex:1;min-width:65px;">Meters/pc</span>
+                            <span style="flex:1;min-width:65px;">Rate (₹/m)</span>
+                            <span style="flex:1;min-width:65px;">Cost (₹/pc)</span>
+                            <span style="width:28px;"></span>
+                        </div>
+                        <div id="recipe-materials-list" class="dynamic-rows-list">
+                            <!-- JS injected rows -->
+                        </div>
+                        <button class="btn btn-outline btn-sm mt-2" id="btn-add-material-row" type="button" style="border-style:dashed;">
+                            <i class='bx bx-plus'></i> Add Material
+                        </button>
+
+                        <!-- Job Costs Section -->
+                        <div class="kapad-section-label mt-3" style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:0.85rem;color:#1e293b;margin-bottom:4px;">
+                            <i class='bx bx-wrench text-primary'></i> Additional Job Work (Optional)
+                        </div>
+                        <div style="font-size:0.72rem;color:#64748b;margin-bottom:8px;">Extra process charges per piece (embroidery, handwork, washing, etc.)</div>
+                        <div class="dynamic-row-header-jobcosts" style="display:flex;gap:8px;font-size:0.7rem;font-weight:800;color:#64748b;text-transform:uppercase;padding:0 8px 4px 8px;letter-spacing:0.4px;">
+                            <span style="flex:3;min-width:120px;">Job / Work Name</span>
+                            <span style="flex:1.2;min-width:80px;">Rate (₹/pc)</span>
+                            <span style="width:28px;"></span>
+                        </div>
+                        <div id="recipe-jobcosts-list" class="dynamic-rows-list">
+                            <!-- JS injected rows -->
+                        </div>
+                        <button class="btn btn-outline btn-sm mt-2" id="btn-add-jobcost-row" type="button" style="border-style:dashed;">
+                            <i class='bx bx-plus'></i> Add Other Job Cost
+                        </button>
+
+                        <!-- Live Totals -->
+                        <div class="recipe-totals-bar mt-3" id="recipe-totals-bar" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
+                            <span style="font-size:0.85rem;">Total Meters/Pc: <strong id="recipe-total-meters" style="color:#2563eb;font-size:1rem;">0.00</strong> m</span>
+                            <span style="font-size:0.85rem;">Total Est. Cost/Pc: <strong id="recipe-total-cost" style="color:#059669;font-size:1.15rem;">₹0.00</strong></span>
+                        </div>
+
+                        <div class="flex-between mt-3" style="gap:0.75rem;padding-top:10px;border-top:1px solid #f1f5f9;">
+                            <button class="btn btn-outline" id="cancel-design-recipe-modal" type="button">Cancel</button>
+                            <button class="btn btn-primary" id="save-design-recipe-btn" type="button" style="background:#2563eb;border-color:#2563eb;padding:0.55rem 1.25rem;">
+                                <i class='bx bx-check'></i> Save Recipe
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Lot Modal -->
+                <div id="modal-create-lot" class="modal kapad-modal" style="display:none;">
+                    <div class="modal-content kapad-modal-content">
+                        <div class="flex-between mb-3">
+                            <h3 class="font-bold text-lg">Create Production Lot</h3>
+                            <button class="btn-icon" id="close-create-lot-modal"><i class='bx bx-x'></i></button>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Select Design *</label>
+                            <select id="lot-design-select" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;">
+                                <option value="">— Choose Design —</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Target Pieces *</label>
+                            <input type="number" id="lot-target-pcs" min="1" placeholder="e.g. 100" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;">
+                        </div>
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Date</label>
+                            <input type="date" id="lot-date" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;">
+                        </div>
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Lot Number (Auto-Generated: Seq + Design + Date + Meters)</label>
+                            <input type="text" id="lot-number-input" placeholder="e.g. LOT-SEQ-001-1128-1311-320M" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;background:#f8fafc;color:#1e293b;">
+                            <div class="text-xs text-muted mt-1">Format: <code>LOT-SEQ-{NUM}-{DESIGN}-{DDMM}-{METERS}M</code></div>
+                        </div>
+
+                        <!-- Auto-calculated fabric -->
+                        <div id="lot-fabric-preview" class="lot-fabric-preview hidden">
+                            <div class="kapad-section-label"><i class='bx bx-water'></i> Fabric to Issue (Auto-calculated + adjustable)</div>
+                            <div id="lot-fabric-rows" class="dynamic-rows-list mt-2">
+                                <!-- JS injected -->
+                            </div>
+                            <div class="recipe-totals-bar mt-2" style="font-size:0.8rem;">
+                                Total meters to give: <strong id="lot-total-meters-preview">0.00</strong> m
+                            </div>
+                        </div>
+
+                        <div class="flex-between mt-3" style="gap:0.5rem;flex-wrap:wrap;">
+                            <button class="btn btn-outline" id="cancel-create-lot-modal">Cancel</button>
+                            <div style="display:flex;gap:0.5rem;">
+                                <button class="btn btn-outline" id="save-create-lot-download-btn" type="button" title="Create and download PDF">
+                                    <i class='bx bxs-file-pdf'></i> Create &amp; Download PDF
+                                </button>
+                                <button class="btn btn-primary" id="save-create-lot-btn" type="button" style="background:#2563eb;border-color:#2563eb;">
+                                    <i class='bx bx-printer'></i> Create &amp; Print Slip (Enter)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Lot Detail Modal -->
+                <div id="modal-lot-detail" class="modal kapad-modal" style="display:none;">
+                    <div class="modal-content kapad-modal-content" style="max-width:640px;">
+                        <div class="flex-between mb-3">
+                            <div>
+                                <h3 class="font-bold text-lg" id="lot-detail-title">LOT-XXXX-001</h3>
+                                <div class="text-xs text-muted" id="lot-detail-subtitle">Design — 100 pcs</div>
+                            </div>
+                            <button class="btn-icon" id="close-lot-detail-modal"><i class='bx bx-x'></i></button>
+                        </div>
+
+                        <!-- Lot summary stats -->
+                        <div id="lot-detail-stats" class="lot-detail-stats mb-3"><!-- JS --></div>
+
+                        <!-- Fabric breakdown -->
+                        <div class="kapad-section-label"><i class='bx bx-water'></i> Fabric Issued</div>
+                        <div id="lot-detail-fabric" class="mb-3" style="font-size:0.85rem;"><!-- JS --></div>
+
+                        <!-- Submissions list -->
+                        <div class="kapad-section-label"><i class='bx bx-user-check'></i> Karigar Submissions</div>
+                        <div id="lot-detail-submissions" class="mb-3"><!-- JS --></div>
+
+                        <!-- Mismatch -->
+                        <div id="lot-detail-mismatch" class="mb-3"><!-- JS --></div>
+
+                        <div class="flex-between mt-3" style="gap:0.5rem;flex-wrap:wrap;">
+                            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                                <button class="btn btn-primary btn-sm" id="lot-detail-print-btn" style="background:#2563eb;border-color:#2563eb;">
+                                    <i class='bx bx-printer'></i> Direct Print Slip (2 Copies)
+                                </button>
+                                <button class="btn btn-outline btn-sm" id="lot-detail-pdf-btn">
+                                    <i class='bx bxs-file-pdf'></i> Download PDF
+                                </button>
+                                <button class="btn btn-outline btn-sm text-danger" id="lot-detail-close-btn" style="border-color:#ef4444;color:#ef4444;">
+                                    <i class='bx bx-lock'></i> Close Lot
+                                </button>
+                            </div>
+                            <button class="btn btn-primary btn-sm" id="lot-detail-submit-btn" style="background:#059669;border-color:#059669;">
+                                <i class='bx bx-plus'></i> Record Submission
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Submit Karigar Work Modal -->
+                <div id="modal-submit-karigar" class="modal kapad-modal" style="display:none;">
+                    <div class="modal-content kapad-modal-content">
+                        <div class="flex-between mb-3">
+                            <h3 class="font-bold text-lg">Record Karigar Submission</h3>
+                            <button class="btn-icon" id="close-submit-karigar-modal"><i class='bx bx-x'></i></button>
+                        </div>
+                        <input type="hidden" id="submit-lot-id">
+
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Karigar *</label>
+                            <select id="submit-karigar-select" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;">
+                                <option value="">— Select Karigar —</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Pieces Completed *</label>
+                            <input type="number" id="submit-pcs" min="1" placeholder="e.g. 40" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;">
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Date</label>
+                            <input type="date" id="submit-karigar-date" style="width:100%;padding:0.55rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;">
+                        </div>
+
+                        <!-- Preview -->
+                        <div id="submit-preview" class="lot-fabric-preview hidden" style="font-size:0.85rem;">
+                            Fabric will be deducted: <strong id="submit-meters-preview">0.00</strong> m
+                            <span class="text-xs text-muted">(@ <span id="submit-rate-preview">0.00</span> m/pc × <span id="submit-pcs-preview">0</span> pcs)</span>
+                        </div>
+
+                        <div class="flex-between mt-3" style="gap:0.5rem;">
+                            <button class="btn btn-outline" id="cancel-submit-karigar-modal">Cancel</button>
+                            <button class="btn btn-primary" id="save-submit-karigar-btn">
+                                <i class='bx bx-check'></i> Record Submission
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- ========== DATA SHEET ========== -->
                 <section id="data-sheet" class="content-section">
                     <div class="sheet-toolbar">
@@ -747,60 +1061,93 @@
 
     <!-- Add Maal (Jama) Modal -->
     <div id="karigar-jama-modal" class="modal" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:all 0.2s;">
-        <div class="modal-content" style="background:white;width:90%;max-width:500px;border-radius:12px;padding:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);max-height:90vh;overflow-y:auto;">
-            <div class="flex-between mb-2">
-                <h3 class="font-bold text-lg">Add New Maal (Jama)</h3>
-                <button id="close-karigar-jama-modal" class="btn-icon"><i class='bx bx-x'></i></button>
+        <div class="modal-content" style="background:white;width:92%;max-width:520px;border-radius:14px;padding:22px;box-shadow:0 15px 35px rgba(0,0,0,0.15);max-height:92vh;overflow-y:auto;position:relative;">
+            <div class="flex-between mb-3" style="position:sticky;top:-22px;background:#fff;z-index:10;padding-bottom:10px;border-bottom:1px solid #e2e8f0;margin-top:-6px;">
+                <div>
+                    <h3 class="font-bold text-lg" style="margin:0;color:#0f172a;">Add New Maal (Jama)</h3>
+                    <div class="text-xs text-muted">Piece-rate entry &amp; lot production deduction</div>
+                </div>
+                <button id="close-karigar-jama-modal" class="btn-icon" type="button"><i class='bx bx-x'></i></button>
             </div>
             <form id="karigar-jama-form">
                 <input type="hidden" id="karigar-jama-id">
 
-                <div style="display:flex; gap:0.75rem; align-items:flex-end; margin-bottom:0.75rem; flex-wrap:wrap;">
-                    <div class="input-group" style="flex: 1; min-width: 220px; margin-bottom:0;">
-                        <label>Karigar</label>
-                        <select id="karigar-jama-select" class="date-input" style="width:100%; padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px;">
-                            <option value="">Loading...</option>
-                        </select>
+                <!-- 1. Karigar -->
+                <div class="input-group" style="margin-bottom:0.75rem;">
+                    <label style="font-weight:700;color:#334155;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.3px;">Karigar *</label>
+                    <select id="karigar-jama-select" class="date-input" style="width:100%; padding: 0.65rem 0.75rem; border: 1.5px solid #cbd5e1; border-radius: 8px; font-weight:700; font-size:0.95rem;">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <!-- 2. Production Lot (Opens on Enter from Karigar) -->
+                <div class="input-group" style="margin-bottom:0.85rem; background:#eff6ff; border:1.5px solid #93c5fd; border-radius:10px; padding:10px 12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <label style="margin:0;font-weight:800;color:#1e40af;font-size:0.8rem;display:flex;align-items:center;gap:6px;">
+                            <i class='bx bx-layer'></i> Production Lot (Press Enter to Choose)
+                        </label>
+                        <span id="karigar-lot-hint" style="font-size:0.7rem;color:#2563eb;font-weight:700;">Auto-fills Design &amp; Price</span>
+                    </div>
+                    <select id="karigar-jama-lot-select" class="date-input" style="width:100%; padding: 0.65rem 0.75rem; border: 1.5px solid #3b82f6; border-radius: 8px; font-weight:700; background:#fff; color:#0f172a; font-size:0.9rem;">
+                        <option value="">— None (Direct Entry) —</option>
+                    </select>
+                </div>
+
+                <!-- 3. Date & Time (Side-by-side) -->
+                <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem;">
+                    <div class="input-group" style="flex: 1.2; margin-bottom:0;">
+                        <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Date</label>
+                        <input type="date" id="karigar-jama-date" class="date-input" style="padding: 0.6rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; width: 100%; font-size:0.9rem;" required>
+                    </div>
+                    <div class="input-group" style="flex: 1; margin-bottom:0;">
+                        <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Time</label>
+                        <input type="time" id="karigar-jama-time" class="date-input" style="padding: 0.6rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; width: 100%; font-size:0.9rem;" required>
                     </div>
                 </div>
-                <div class="input-group">
-                    <label>Date</label>
-                    <input type="date" id="karigar-jama-date" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>
-                </div>
-                <div class="input-group">
-                    <label>Time</label>
-                    <input type="time" id="karigar-jama-time" class="date-input" style="padding: 0.75rem; border: 1px solid var(--border-color); border-radius: 8px; width: 100%;" required>
-                </div>
-                <div class="input-group">
-                    <label>Design Name / No.</label>
-                    <input type="text" id="karigar-jama-design" required placeholder="Enter design name or number">
-                </div>
-                <div style="display: flex; gap: 1rem;">
-                    <div class="input-group" style="flex: 1;">
-                        <label>Size</label>
-                        <input type="text" id="karigar-jama-size" placeholder="e.g. XL">
+
+                <!-- 4. Design Name / No. & Size -->
+                <div style="display:flex; gap:0.75rem; margin-bottom:0.75rem;">
+                    <div class="input-group" style="flex: 1.6; margin-bottom:0;">
+                        <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Design Name / No. *</label>
+                        <input type="text" id="karigar-jama-design" required placeholder="e.g. 1128" style="font-weight:800; font-size:1rem; width:100%; padding:0.6rem 0.75rem; border:1.5px solid #cbd5e1; border-radius:8px;">
+                    </div>
+                    <div class="input-group" style="flex: 1; margin-bottom:0;">
+                        <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Size (Optional)</label>
+                        <input type="text" id="karigar-jama-size" placeholder="e.g. XL" style="font-weight:600; width:100%; padding:0.6rem 0.75rem; border:1px solid #cbd5e1; border-radius:8px;">
                     </div>
                 </div>
-                <div style="display: flex; gap: 1rem;">
-                    <div class="input-group" style="flex: 1;">
-                        <label>Total Pic (Quantity)</label>
-                        <input type="number" id="karigar-jama-pic" min="1" required placeholder="Quantity">
+
+                <!-- 5. Quantity & Price Per Pic -->
+                <div style="display: flex; gap: 0.75rem; margin-bottom:0.75rem;">
+                    <div class="input-group" style="flex: 1; margin-bottom:0;">
+                        <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Total Pic (Quantity) *</label>
+                        <input type="number" id="karigar-jama-pic" min="1" required placeholder="Pieces" style="font-weight:900; font-size:1.1rem; width:100%; padding:0.6rem 0.75rem; border:1.5px solid #cbd5e1; border-radius:8px; color:#1e293b;">
                     </div>
-                    <div class="input-group" style="flex: 1;">
-                        <label>Price Per Pic</label>
-                        <input type="number" step="0.01" min="0" id="karigar-jama-price" required placeholder="Auto-fills from past">
+                    <div class="input-group" style="flex: 1; margin-bottom:0;">
+                        <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Price Per Pic (₹) *</label>
+                        <input type="number" step="0.01" min="0" id="karigar-jama-price" required placeholder="Auto from price" style="font-weight:900; font-size:1.1rem; width:100%; padding:0.6rem 0.75rem; border:1.5px solid #cbd5e1; border-radius:8px; color:#059669;">
                     </div>
                 </div>
-                <div class="input-group">
-                    <label>Advance Taken (Upad) - Optional</label>
-                    <input type="number" id="karigar-jama-upad" placeholder="Any money taken today" min="0">
+
+                <!-- 6. Advance Taken (Upad) -->
+                <div class="input-group" style="margin-bottom:0.75rem;">
+                    <label style="font-size:0.75rem;font-weight:700;color:#64748b;text-transform:uppercase;">Advance Taken (Upad) - Optional</label>
+                    <input type="number" id="karigar-jama-upad" placeholder="Any cash/upad taken now" min="0" style="width:100%; padding:0.6rem 0.75rem; border:1px solid #cbd5e1; border-radius:8px;">
                 </div>
+
                 <!-- Dynamic calculation display -->
-                <div class="mb-2 p-2" style="background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); text-align: right;">
-                    <span class="text-sm text-muted">Total Money:</span> <strong class="text-success text-lg" id="karigar-jama-total-display">0</strong>
+                <div class="mb-3 p-3" style="background: #f8fafc; border-radius: 10px; border: 1.5px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <span class="text-xs font-bold text-muted uppercase" style="letter-spacing:0.5px;">Total Payable</span>
+                        <div class="text-xs text-muted" id="karigar-jama-calc-note">0 pcs × ₹0.00</div>
+                    </div>
+                    <strong class="text-success" style="font-size:1.4rem;font-weight:900;" id="karigar-jama-total-display">₹0.00</strong>
                 </div>
-                <button type="submit" class="btn btn-primary w-100" id="karigar-jama-submit-btn">Add Maal (Jama)</button>
-                <div class="text-muted text-xs text-center mt-2" style="opacity:0.85;">⚡ Tip: Press Enter to move to next box | Type using Keypad | Esc to close</div>
+
+                <button type="submit" class="btn btn-primary w-100" id="karigar-jama-submit-btn" style="padding:0.75rem;font-size:1rem;font-weight:800;background:#059669;border-color:#059669;">
+                    <i class='bx bx-check-circle'></i> Add Maal (Jama)
+                </button>
+                <div class="text-muted text-xs text-center mt-2" style="opacity:0.85;">⚡ Tip: Press Enter to move to next box · Esc to close</div>
             </form>
         </div>
     </div>
