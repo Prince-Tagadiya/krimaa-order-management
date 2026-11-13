@@ -10541,7 +10541,97 @@ function filterAndRenderLots() {
     renderLotsGrid(closedLots, 'closed-lots-grid');
 }
 
-// ── Direct Dual Lot Slip Print (No Download Required) ────────────────
+// ── Helper: Resolve complete lot costing for Office Copy ───────────────
+function resolveLotCostDetails(lot) {
+    if (!lot) {
+        return {
+            silaiPrice: 0,
+            fabricDetails: [],
+            totalFabricCost: 0,
+            fabricCostPerPc: 0,
+            jobCosts: [],
+            jobCostsPerPc: 0,
+            costPerPc: 0,
+            totalLotCost: 0
+        };
+    }
+
+    const targetPcs = parseInt(lot.targetPcs, 10) || 0;
+    const cleanDesign = String(lot.designNo || '').trim().toUpperCase();
+
+    // 1. Locate recipe for this design
+    const recipe = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes))
+        ? KapadState.recipes.find(r => String(r.designNo || '').trim().toUpperCase() === cleanDesign)
+        : null;
+
+    // 2. Silai Price (from lot, recipe, or Size Prices)
+    let silaiPrice = parseFloat(lot.silaiPrice);
+    if (!Number.isFinite(silaiPrice) || silaiPrice <= 0) {
+        if (recipe && Number.isFinite(parseFloat(recipe.silaiPrice)) && parseFloat(recipe.silaiPrice) > 0) {
+            silaiPrice = parseFloat(recipe.silaiPrice);
+        } else if (AppState.designPrices && Number.isFinite(parseFloat(AppState.designPrices[cleanDesign]))) {
+            silaiPrice = parseFloat(AppState.designPrices[cleanDesign]);
+        } else if (AppState.designPricesByCompany?.[DESIGN_PRICE_SCOPE] && Number.isFinite(parseFloat(AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][cleanDesign]))) {
+            silaiPrice = parseFloat(AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][cleanDesign]);
+        } else {
+            silaiPrice = 0;
+        }
+    }
+
+    // 3. Fabric items, rates, and costs
+    let totalFabricCost = 0;
+    const fabricDetails = (lot.fabricGiven || []).map(f => {
+        let rate = parseFloat(f.ratePerMeter);
+        if (!Number.isFinite(rate) || rate <= 0) {
+            const recMat = recipe && Array.isArray(recipe.materials)
+                ? recipe.materials.find(m => String(m.name || '').trim().toLowerCase() === String(f.name || '').trim().toLowerCase())
+                : null;
+            if (recMat && Number.isFinite(parseFloat(recMat.ratePerMeter))) {
+                rate = parseFloat(recMat.ratePerMeter);
+            } else if (recipe && Array.isArray(recipe.materials) && recipe.materials.length === 1 && Number.isFinite(parseFloat(recipe.materials[0].ratePerMeter))) {
+                rate = parseFloat(recipe.materials[0].ratePerMeter);
+            } else {
+                rate = 0;
+            }
+        }
+        const meters = parseFloat(f.meters) || 0;
+        const itemCost = meters * rate;
+        totalFabricCost += itemCost;
+        return {
+            name: f.name || 'Fabric',
+            meters,
+            ratePerMeter: rate,
+            totalCost: itemCost,
+            actualMetersPerPc: targetPcs > 0 ? (meters / targetPcs) : 0,
+            costPerPc: targetPcs > 0 ? (itemCost / targetPcs) : 0
+        };
+    });
+
+    const fabricCostPerPc = targetPcs > 0 ? (totalFabricCost / targetPcs) : 0;
+
+    // 4. Job costs
+    const jobCosts = (Array.isArray(lot.jobCosts) && lot.jobCosts.length > 0)
+        ? lot.jobCosts
+        : (recipe && Array.isArray(recipe.jobCosts) ? recipe.jobCosts : []);
+    const jobCostsPerPc = (jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
+
+    // 5. Total cost per piece and total batch expense
+    const costPerPc = fabricCostPerPc + silaiPrice + jobCostsPerPc;
+    const totalLotCost = targetPcs > 0 ? (costPerPc * targetPcs) : totalFabricCost;
+
+    return {
+        silaiPrice,
+        fabricDetails,
+        totalFabricCost,
+        fabricCostPerPc,
+        jobCosts,
+        jobCostsPerPc,
+        costPerPc,
+        totalLotCost
+    };
+}
+
+// ── Direct Dual Lot Slip Print (Office Copy with Pricing + Floor Copy without Pricing)
 function printDirectDualLotSlip(lot) {
     if (!lot) return;
     const companyName = (typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(lot.companyId || AppState.currentCompany) : '') || 'KRIMAA APPARELS';
@@ -10552,31 +10642,105 @@ function printDirectDualLotSlip(lot) {
     const targetPcs = parseInt(lot.targetPcs, 10) || 0;
     const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
     const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
+    const cost = resolveLotCostDetails(lot);
 
-    const fabricRows = (lot.fabricGiven || []).map((f, idx) => `
-        <tr>
-            <td style="text-align:center;width:32px;">${idx + 1}</td>
-            <td style="font-weight:700;">${esc(f.name || 'Fabric')}</td>
-            <td style="text-align:right;font-weight:800;font-size:12px;">${(parseFloat(f.meters) || 0).toFixed(2)} m</td>
-            <td style="text-align:right;color:#475569;">${stdRate} m/pc</td>
-            <td style="text-align:right;color:#475569;">${targetPcs ? (((parseFloat(f.meters) || 0) / targetPcs).toFixed(2)) + ' m/pc' : '-'}</td>
-        </tr>
-    `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">${stdRate} m/pc</td><td style="text-align:right;">-</td></tr>`;
+    const renderSlipHtml = (badgeText, badgeBg, isOffice) => {
+        let tableHeaderHtml = '';
+        let tableBodyHtml = '';
+        let totalRowHtml = '';
 
-    const renderSlipHtml = (badgeText, badgeBg, isOffice) => `
-        <div class="slip-card">
-            <div class="slip-header">
-                <div>
-                    <div class="design-label">DESIGN NUMBER</div>
-                    <div class="design-title">${safeDesign} <span class="design-subname">${safeDesignName && safeDesignName !== safeDesign ? `(${safeDesignName})` : ''}</span></div>
-                    <div class="slip-sub">${companyName.toUpperCase()} · DATE: ${safeDate}</div>
+        if (isOffice) {
+            // OFFICE COPY: Includes Rate (₹/m) and Fabric Cost (₹)
+            tableHeaderHtml = `
+                <tr>
+                    <th style="width:28px;text-align:center;">#</th>
+                    <th>FABRIC / MATERIAL ITEM</th>
+                    <th style="text-align:right;">ISSUED</th>
+                    <th style="text-align:right;">ACTUAL/PC</th>
+                    <th style="text-align:right;">RATE (₹/M)</th>
+                    <th style="text-align:right;">FABRIC COST (₹)</th>
+                </tr>
+            `;
+
+            tableBodyHtml = (cost.fabricDetails || []).map((f, idx) => `
+                <tr>
+                    <td style="text-align:center;width:28px;">${idx + 1}</td>
+                    <td style="font-weight:700;">${esc(f.name)}</td>
+                    <td style="text-align:right;font-weight:800;">${f.meters.toFixed(2)} m</td>
+                    <td style="text-align:right;color:#475569;">${f.actualMetersPerPc.toFixed(2)} m/pc</td>
+                    <td style="text-align:right;font-weight:700;">₹${f.ratePerMeter.toFixed(2)}</td>
+                    <td style="text-align:right;font-weight:900;color:#0f172a;">₹${f.totalCost.toFixed(2)}</td>
+                </tr>
+            `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">-</td><td style="text-align:right;">-</td><td style="text-align:right;">-</td></tr>`;
+
+            totalRowHtml = `
+                <tr class="total-row">
+                    <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
+                    <td style="text-align:right;font-size:12px;font-weight:900;">${totalMeters} m</td>
+                    <td style="text-align:right;color:#475569;font-size:10px;">${targetPcs ? (parseFloat(totalMeters)/targetPcs).toFixed(2) + ' m/pc' : ''}</td>
+                    <td style="text-align:right;font-size:10px;font-weight:800;color:#64748b;">SUBTOTAL:</td>
+                    <td style="text-align:right;font-size:13px;font-weight:900;color:#0f172a;">₹${cost.totalFabricCost.toFixed(2)}</td>
+                </tr>
+            `;
+        } else {
+            // FLOOR / MAAL COPY: Zero pricing / purely production parameters
+            tableHeaderHtml = `
+                <tr>
+                    <th style="width:32px;text-align:center;">#</th>
+                    <th>FABRIC / MATERIAL ITEM</th>
+                    <th style="text-align:right;">ISSUED METERS</th>
+                    <th style="text-align:right;">STD RECIPE</th>
+                    <th style="text-align:right;">ACTUAL/PC</th>
+                </tr>
+            `;
+
+            tableBodyHtml = (lot.fabricGiven || []).map((f, idx) => `
+                <tr>
+                    <td style="text-align:center;width:32px;">${idx + 1}</td>
+                    <td style="font-weight:700;">${esc(f.name || 'Fabric')}</td>
+                    <td style="text-align:right;font-weight:800;font-size:12px;">${(parseFloat(f.meters) || 0).toFixed(2)} m</td>
+                    <td style="text-align:right;color:#475569;">${stdRate} m/pc</td>
+                    <td style="text-align:right;color:#475569;">${targetPcs ? (((parseFloat(f.meters) || 0) / targetPcs).toFixed(2)) + ' m/pc' : '-'}</td>
+                </tr>
+            `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">${stdRate} m/pc</td><td style="text-align:right;">-</td></tr>`;
+
+            totalRowHtml = `
+                <tr class="total-row">
+                    <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
+                    <td style="text-align:right;font-size:13px;font-weight:900;">${totalMeters} m</td>
+                    <td colspan="2" style="text-align:right;color:#64748b;font-size:10px;">For ${targetPcs} pieces</td>
+                </tr>
+            `;
+        }
+
+        const statsHtml = isOffice ? `
+            <div class="stats-grid stats-grid-office">
+                <div class="stat-card">
+                    <div class="stat-label">DESIGN NO</div>
+                    <div class="stat-val text-primary" style="font-size:15px;">${safeDesign}</div>
                 </div>
-                <div style="text-align:right;">
-                    <div class="copy-badge" style="background:${badgeBg};">${badgeText}</div>
-                    <div class="header-lot-no">LOT: <strong>${safeLotNo}</strong></div>
+                <div class="stat-card">
+                    <div class="stat-label">LOT NUMBER</div>
+                    <div class="stat-val" style="font-size:12px;">${safeLotNo}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">TARGET QTY</div>
+                    <div class="stat-val">${targetPcs} Pcs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">TOTAL FABRIC</div>
+                    <div class="stat-val text-success">${totalMeters} Mtr</div>
+                </div>
+                <div class="stat-card stat-cost-card">
+                    <div class="stat-label">SILAI RATE</div>
+                    <div class="stat-val" style="color:#059669;font-size:13px;">₹${cost.silaiPrice.toFixed(2)}</div>
+                </div>
+                <div class="stat-card stat-cost-card">
+                    <div class="stat-label">EST. COST/PC</div>
+                    <div class="stat-val text-primary" style="font-size:13px;">₹${cost.costPerPc.toFixed(2)}</div>
                 </div>
             </div>
-
+        ` : `
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-label">DESIGN NO</div>
@@ -10595,33 +10759,67 @@ function printDirectDualLotSlip(lot) {
                     <div class="stat-val text-success">${totalMeters} Meters</div>
                 </div>
             </div>
+        `;
 
-            <table class="fabric-table">
-                <thead>
-                    <tr>
-                        <th style="width:32px;text-align:center;">#</th>
-                        <th>FABRIC / MATERIAL ITEM</th>
-                        <th style="text-align:right;">ISSUED METERS</th>
-                        <th style="text-align:right;">STD RECIPE</th>
-                        <th style="text-align:right;">ACTUAL/PC</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${fabricRows}
-                    <tr class="total-row">
-                        <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
-                        <td style="text-align:right;font-size:13px;font-weight:900;">${totalMeters} m</td>
-                        <td colspan="2" style="text-align:right;color:#64748b;font-size:10px;">For ${targetPcs} pieces</td>
-                    </tr>
-                </tbody>
-            </table>
-
-            <div class="slip-footer">
-                <span>${isOffice ? 'Office Copy — Keep in production issue register' : 'Floor Copy — Issue with goods to karigar / workshop'}</span>
-                <span>Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}</span>
+        const officeCostBarHtml = isOffice ? `
+            <div class="cost-summary-box">
+                <div class="cost-chip">
+                    <span class="chip-lbl">Cloth / Fabric:</span>
+                    <strong>₹${cost.fabricCostPerPc.toFixed(2)}/pc</strong> (Total ₹${cost.totalFabricCost.toFixed(2)})
+                </div>
+                <div class="cost-chip">
+                    <span class="chip-lbl">Silai Stitching:</span>
+                    <strong style="color:#059669;">₹${cost.silaiPrice.toFixed(2)}/pc</strong>
+                </div>
+                ${cost.jobCostsPerPc > 0 ? `
+                <div class="cost-chip">
+                    <span class="chip-lbl">Other Job Work:</span>
+                    <strong>₹${cost.jobCostsPerPc.toFixed(2)}/pc</strong>
+                </div>` : ''}
+                <div class="cost-chip cost-chip-highlight">
+                    <span class="chip-lbl">EST. COST / PC:</span>
+                    <strong style="color:#2563eb;font-size:12px;">₹${cost.costPerPc.toFixed(2)}</strong>
+                </div>
+                <div class="cost-chip cost-chip-highlight">
+                    <span class="chip-lbl">TOTAL LOT VALUE:</span>
+                    <strong style="color:#059669;font-size:12px;">₹${Math.round(cost.totalLotCost).toLocaleString('en-IN')}</strong>
+                </div>
             </div>
-        </div>
-    `;
+        ` : '';
+
+        return `
+            <div class="slip-card">
+                <div class="slip-header">
+                    <div>
+                        <div class="design-label">DESIGN NUMBER</div>
+                        <div class="design-title">${safeDesign} <span class="design-subname">${safeDesignName && safeDesignName !== safeDesign ? `(${safeDesignName})` : ''}</span></div>
+                        <div class="slip-sub">${companyName.toUpperCase()} · DATE: ${safeDate}</div>
+                    </div>
+                    <div style="text-align:right;">
+                        <div class="copy-badge" style="background:${badgeBg};">${badgeText}</div>
+                        <div class="header-lot-no">LOT: <strong>${safeLotNo}</strong></div>
+                    </div>
+                </div>
+
+                ${statsHtml}
+
+                <table class="fabric-table">
+                    <thead>${tableHeaderHtml}</thead>
+                    <tbody>
+                        ${tableBodyHtml}
+                        ${totalRowHtml}
+                    </tbody>
+                </table>
+
+                ${officeCostBarHtml}
+
+                <div class="slip-footer">
+                    <span>${isOffice ? 'Office Copy — Keep in production issue register · Confidentially contains internal rates & costing' : 'Floor Copy — Issue with goods to karigar / workshop'}</span>
+                    <span>Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}</span>
+                </div>
+            </div>
+        `;
+    };
 
     const html = `<!DOCTYPE html>
 <html>
@@ -10633,33 +10831,38 @@ function printDirectDualLotSlip(lot) {
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background: #fff; color: #0f172a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page-wrap { display: flex; flex-direction: column; justify-content: space-between; height: 280mm; max-height: 280mm; }
-    .slip-card { border: 2px solid #0f172a; border-radius: 8px; padding: 12px 14px; background: #fff; height: 133mm; display: flex; flex-direction: column; justify-content: flex-start; }
-    .slip-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 8px; }
+    .slip-card { border: 2px solid #0f172a; border-radius: 8px; padding: 10px 12px; background: #fff; height: 133mm; display: flex; flex-direction: column; justify-content: flex-start; }
+    .slip-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 6px; margin-bottom: 6px; }
     .design-label { font-size: 9px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
-    .design-title { font-size: 26px; font-weight: 900; line-height: 1.1; color: #0f172a; }
-    .design-subname { font-size: 14px; font-weight: 600; color: #475569; }
-    .slip-sub { font-size: 10px; color: #64748b; font-weight: 600; margin-top: 3px; }
+    .design-title { font-size: 24px; font-weight: 900; line-height: 1.1; color: #0f172a; }
+    .design-subname { font-size: 13px; font-weight: 600; color: #475569; }
+    .slip-sub { font-size: 9.5px; color: #64748b; font-weight: 600; margin-top: 2px; }
     .copy-badge { display: inline-block; padding: 3px 12px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
-    .header-lot-no { font-size: 11px; font-weight: 600; color: #475569; margin-top: 4px; }
-    .stats-grid { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr 1.2fr; gap: 6px; margin-bottom: 8px; }
-    .stat-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 8px; background: #f8fafc; }
-    .stat-label { font-size: 8.5px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
-    .stat-val { font-size: 13px; font-weight: 900; color: #0f172a; }
+    .header-lot-no { font-size: 11px; font-weight: 600; color: #475569; margin-top: 3px; }
+    .stats-grid { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr 1.2fr; gap: 5px; margin-bottom: 6px; }
+    .stats-grid-office { grid-template-columns: 1fr 1.3fr 0.9fr 1.1fr 1fr 1fr; }
+    .stat-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 7px; background: #f8fafc; }
+    .stat-label { font-size: 8px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
+    .stat-val { font-size: 12.5px; font-weight: 900; color: #0f172a; }
     .text-primary { color: #2563eb; }
     .text-success { color: #059669; }
-    .fabric-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
-    .fabric-table th, .fabric-table td { border: 1px solid #cbd5e1; padding: 5px 8px; }
-    .fabric-table th { background: #0f172a; color: #fff; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+    .fabric-table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 3px; }
+    .fabric-table th, .fabric-table td { border: 1px solid #cbd5e1; padding: 4px 6px; }
+    .fabric-table th { background: #0f172a; color: #fff; font-size: 8.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
     .fabric-table tbody tr:nth-child(even) { background: #f8fafc; }
     .total-row td { background: #e2e8f0 !important; font-weight: 800; }
-    .cut-line-wrap { text-align: center; margin: 4mm 0; position: relative; border-top: 1.5px dashed #94a3b8; }
+    .cost-summary-box { margin-top: 5px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 9.5px; }
+    .cost-chip { display: flex; align-items: center; gap: 4px; }
+    .cost-chip .chip-lbl { color: #64748b; font-weight: 700; text-transform: uppercase; font-size: 8px; }
+    .cost-chip-highlight { background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1; }
+    .cut-line-wrap { text-align: center; margin: 3mm 0; position: relative; border-top: 1.5px dashed #94a3b8; }
     .cut-label { position: relative; top: -8px; background: #fff; padding: 0 14px; font-size: 10px; font-weight: 800; color: #64748b; letter-spacing: 0.5px; display: inline-block; }
-    .slip-footer { margin-top: auto; display: flex; justify-content: space-between; font-size: 9px; color: #94a3b8; padding-top: 6px; border-top: 1px solid #f1f5f9; }
+    .slip-footer { margin-top: auto; display: flex; justify-content: space-between; font-size: 8.5px; color: #94a3b8; padding-top: 4px; border-top: 1px solid #f1f5f9; }
 </style>
 </head>
 <body>
     <div class="page-wrap">
-        ${renderSlipHtml('OFFICE COPY (FOR RECORD)', '#0f172a', true)}
+        ${renderSlipHtml('OFFICE COPY (FOR RECORD & COSTING)', '#0f172a', true)}
         <div class="cut-line-wrap">
             <span class="cut-label">✂ - - - - - CUT HERE (TOP: OFFICE COPY  |  BOTTOM: FLOOR / MAAL COPY) - - - - - ✂</span>
         </div>
@@ -10702,6 +10905,9 @@ function downloadDualLotSlipPdf(lot) {
         });
 
         const companyName = (typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(lot.companyId || AppState.currentCompany) : '') || 'KRIMAA APPARELS';
+        const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
+        const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
+        const cost = resolveLotCostDetails(lot);
 
         // Helper to render one copy on the page
         const renderSingleCopy = (startY, badgeText, isOffice) => {
@@ -10747,118 +10953,228 @@ function downloadDualLotSlipPdf(lot) {
             } else {
                 doc.setFillColor(5, 150, 105); // emerald-600
             }
-            doc.roundedRect(126, startY + 4, 68, 7.5, 2, 2, 'F');
+            doc.roundedRect(118, startY + 4, 76, 7.5, 2, 2, 'F');
             doc.setFont('helvetica', 'bold');
-            doc.setFontSize(7.5);
+            doc.setFontSize(6.8);
             doc.setTextColor(255, 255, 255);
-            doc.text(badgeText, 160, startY + 9, { align: 'center' });
+            doc.text(badgeText, 156, startY + 9, { align: 'center' });
 
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(8);
             doc.setTextColor(71, 85, 105);
             doc.text(`LOT: ${lot.lotNumber || '-'}`, 194, startY + 17, { align: 'right' });
 
-            // 4 Summary statistic boxes: W: 36, 62, 38, 38 mm -> 174mm total + 6mm gaps = 180mm
-            // Starts at X = 15. Ends at 15 + 36 + 2 + 62 + 2 + 38 + 2 + 38 = 195mm (Leaves clean 4mm inner margin from border at 199mm)
+            // Statistics Boxes
             const boxY = startY + 23;
-            const boxes = [
-                { label: 'DESIGN NO', val: String(lot.designNo || '-'), w: 36, highlight: true },
-                { label: 'LOT NUMBER', val: String(lot.lotNumber || '-'), w: 62 },
-                { label: 'TARGET PCS', val: `${lot.targetPcs || 0} Pcs`, w: 38 },
-                { label: 'TOTAL KAPAD', val: `${(parseFloat(lot.totalMetersGiven) || 0).toFixed(2)} Mtr`, w: 38, highlight: true }
-            ];
-
             let curX = 15;
-            boxes.forEach(b => {
-                doc.setFillColor(248, 250, 252);
-                doc.setDrawColor(226, 232, 240);
-                doc.roundedRect(curX, boxY, b.w, 13.5, 1.5, 1.5, 'FD');
 
-                doc.setFont('helvetica', 'bold');
-                doc.setFontSize(6.5);
-                doc.setTextColor(100, 116, 139);
-                doc.text(b.label, curX + 2.5, boxY + 4.5);
+            if (isOffice) {
+                // 5 Boxes for Office Copy (Includes Cost/Pc)
+                const officeBoxes = [
+                    { label: 'DESIGN NO', val: String(lot.designNo || '-'), w: 32, highlight: true },
+                    { label: 'LOT NUMBER', val: String(lot.lotNumber || '-'), w: 50 },
+                    { label: 'TARGET PCS', val: `${lot.targetPcs || 0} Pcs`, w: 28 },
+                    { label: 'TOTAL KAPAD', val: `${totalMeters} Mtr`, w: 32, highlight: true },
+                    { label: 'EST. COST/PC', val: `₹${cost.costPerPc.toFixed(2)}`, w: 34, highlight: true }
+                ];
+                officeBoxes.forEach(b => {
+                    doc.setFillColor(248, 250, 252);
+                    doc.setDrawColor(226, 232, 240);
+                    doc.roundedRect(curX, boxY, b.w, 13.5, 1.5, 1.5, 'FD');
 
-                doc.setFont('helvetica', 'bold');
-                doc.setFontSize(b.highlight ? 9.5 : 8.5);
-                if (b.highlight) {
-                    if (isOffice) doc.setTextColor(37, 99, 235);
-                    else doc.setTextColor(5, 150, 105);
-                } else {
-                    doc.setTextColor(15, 23, 42);
-                }
-                doc.text(String(b.val), curX + 2.5, boxY + 10.5);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(100, 116, 139);
+                    doc.text(b.label, curX + 2.5, boxY + 4.5);
 
-                curX += b.w + 2;
-            });
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(b.highlight ? 9.5 : 8.5);
+                    if (b.highlight) doc.setTextColor(37, 99, 235);
+                    else doc.setTextColor(15, 23, 42);
+                    doc.text(String(b.val), curX + 2.5, boxY + 10.5);
 
-            // Fabric Breakdown Table
-            const tableY = startY + 39;
-            const fabricRows = (lot.fabricGiven || []).map((f, idx) => [
-                String(idx + 1),
-                f.name || 'Fabric',
-                `${(parseFloat(f.meters) || 0).toFixed(2)} m`,
-                `${(parseFloat(lot.standardMetersPerPc) || 0).toFixed(2)} m/pc`,
-                lot.targetPcs ? `${Math.round(((parseFloat(f.meters) || 0) / lot.targetPcs) * 100) / 100} m/pc` : '-'
-            ]);
+                    curX += b.w + 1.5;
+                });
+            } else {
+                // 4 Boxes for Floor Copy (Strictly no financial figures)
+                const floorBoxes = [
+                    { label: 'DESIGN NO', val: String(lot.designNo || '-'), w: 36, highlight: true },
+                    { label: 'LOT NUMBER', val: String(lot.lotNumber || '-'), w: 62 },
+                    { label: 'TARGET PCS', val: `${lot.targetPcs || 0} Pcs`, w: 38 },
+                    { label: 'TOTAL KAPAD', val: `${totalMeters} Mtr`, w: 38, highlight: true }
+                ];
+                floorBoxes.forEach(b => {
+                    doc.setFillColor(248, 250, 252);
+                    doc.setDrawColor(226, 232, 240);
+                    doc.roundedRect(curX, boxY, b.w, 13.5, 1.5, 1.5, 'FD');
 
-            if (fabricRows.length === 0) {
-                fabricRows.push(['1', 'Main Fabric', `${(parseFloat(lot.totalMetersGiven) || 0).toFixed(2)} m`, `${(parseFloat(lot.standardMetersPerPc) || 0).toFixed(2)} m/pc`, '-']);
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(100, 116, 139);
+                    doc.text(b.label, curX + 2.5, boxY + 4.5);
+
+                    doc.setFont('helvetica', 'bold');
+                    doc.setFontSize(b.highlight ? 9.5 : 8.5);
+                    if (b.highlight) doc.setTextColor(5, 150, 105);
+                    else doc.setTextColor(15, 23, 42);
+                    doc.text(String(b.val), curX + 2.5, boxY + 10.5);
+
+                    curX += b.w + 2;
+                });
             }
 
-            fabricRows.push([
-                '',
-                'TOTAL FABRIC ISSUED',
-                `${(parseFloat(lot.totalMetersGiven) || 0).toFixed(2)} m`,
-                '',
-                `For ${lot.targetPcs || 0} pcs`
-            ]);
+            // Table
+            const tableY = startY + 39;
 
-            doc.autoTable({
-                startY: tableY,
-                margin: { left: 15, right: 15 },
-                head: [['#', 'Fabric / Material Item', 'Issued Meters', 'Std Recipe', 'Actual/Pc']],
-                body: fabricRows,
-                theme: 'grid',
-                styles: {
-                    font: 'helvetica',
-                    fontSize: 7.5,
-                    cellPadding: 1.8,
-                    lineColor: [203, 213, 225],
-                    lineWidth: 0.2
-                },
-                headStyles: {
-                    fillColor: [15, 23, 42],
-                    textColor: [255, 255, 255],
-                    fontStyle: 'bold',
-                    halign: 'left'
-                },
-                columnStyles: {
-                    0: { cellWidth: 10, halign: 'center' },
-                    1: { cellWidth: 78 },
-                    2: { cellWidth: 32, fontStyle: 'bold', halign: 'right' },
-                    3: { cellWidth: 30, halign: 'right' },
-                    4: { cellWidth: 30, halign: 'right' }
-                },
-                didParseCell: (data) => {
-                    if (data.row.index === fabricRows.length - 1) {
-                        data.cell.styles.fontStyle = 'bold';
-                        data.cell.styles.fillColor = [226, 232, 240];
-                    }
+            if (isOffice) {
+                // OFFICE COPY TABLE: Includes Rate & Cost
+                const officeTableHead = [['#', 'Fabric / Material Item', 'Issued Meters', 'Actual/Pc', 'Rate (₹/m)', 'Cost (₹)']];
+                const officeTableRows = (cost.fabricDetails || []).map((f, idx) => [
+                    String(idx + 1),
+                    f.name || 'Fabric',
+                    `${f.meters.toFixed(2)} m`,
+                    lot.targetPcs ? `${f.actualMetersPerPc.toFixed(2)} m/pc` : '-',
+                    `₹${f.ratePerMeter.toFixed(2)}`,
+                    `₹${f.totalCost.toFixed(2)}`
+                ]);
+                if (officeTableRows.length === 0) {
+                    officeTableRows.push(['1', 'Main Fabric', `${totalMeters} m`, '-', '-', '-']);
                 }
-            });
+                officeTableRows.push([
+                    '',
+                    'TOTAL FABRIC ISSUED',
+                    `${totalMeters} m`,
+                    lot.targetPcs ? `For ${lot.targetPcs} pcs` : '',
+                    'SUBTOTAL:',
+                    `₹${cost.totalFabricCost.toFixed(2)}`
+                ]);
 
-            // NO SIGNATURES! Clean bottom footer note only
+                doc.autoTable({
+                    startY: tableY,
+                    margin: { left: 15, right: 15 },
+                    head: officeTableHead,
+                    body: officeTableRows,
+                    theme: 'grid',
+                    styles: {
+                        font: 'helvetica',
+                        fontSize: 7.2,
+                        cellPadding: 1.6,
+                        lineColor: [203, 213, 225],
+                        lineWidth: 0.2
+                    },
+                    headStyles: {
+                        fillColor: [15, 23, 42],
+                        textColor: [255, 255, 255],
+                        fontStyle: 'bold',
+                        halign: 'left'
+                    },
+                    columnStyles: {
+                        0: { cellWidth: 10, halign: 'center' },
+                        1: { cellWidth: 64 },
+                        2: { cellWidth: 26, fontStyle: 'bold', halign: 'right' },
+                        3: { cellWidth: 26, halign: 'right' },
+                        4: { cellWidth: 24, halign: 'right' },
+                        5: { cellWidth: 30, fontStyle: 'bold', halign: 'right' }
+                    },
+                    didParseCell: (data) => {
+                        if (data.row.index === officeTableRows.length - 1) {
+                            data.cell.styles.fontStyle = 'bold';
+                            data.cell.styles.fillColor = [226, 232, 240];
+                        }
+                    }
+                });
+
+                // Office Cost Breakdown Card below table
+                const finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY + 3 : tableY + 35;
+                doc.setFillColor(248, 250, 252);
+                doc.setDrawColor(203, 213, 225);
+                doc.roundedRect(15, finalY, 180, 12, 1.5, 1.5, 'FD');
+
+                // Row 1 of breakdown
+                doc.setFont('helvetica', 'normal');
+                doc.setFontSize(6.8);
+                doc.setTextColor(71, 85, 105);
+                doc.text(`Fabric: ₹${cost.fabricCostPerPc.toFixed(2)}/pc (₹${cost.totalFabricCost.toFixed(2)})`, 18, finalY + 4.5);
+                doc.text(`Silai Stitching: ₹${cost.silaiPrice.toFixed(2)}/pc`, 78, finalY + 4.5);
+                if (cost.jobCostsPerPc > 0) {
+                    doc.text(`Other Work: ₹${cost.jobCostsPerPc.toFixed(2)}/pc`, 135, finalY + 4.5);
+                }
+
+                // Row 2: Totals
+                doc.setFont('helvetica', 'bold');
+                doc.setFontSize(7.5);
+                doc.setTextColor(37, 99, 235); // primary blue
+                doc.text(`EST. COST / PC: ₹${cost.costPerPc.toFixed(2)}`, 18, finalY + 9.5);
+
+                doc.setTextColor(5, 150, 105); // emerald green
+                doc.text(`TOTAL LOT EXPENSE: ₹${Math.round(cost.totalLotCost).toLocaleString('en-IN')}`, 105, finalY + 9.5);
+            } else {
+                // FLOOR COPY TABLE: Strictly quantities and pieces only
+                const floorTableHead = [['#', 'Fabric / Material Item', 'Issued Meters', 'Std Recipe', 'Actual/Pc']];
+                const floorTableRows = (lot.fabricGiven || []).map((f, idx) => [
+                    String(idx + 1),
+                    f.name || 'Fabric',
+                    `${(parseFloat(f.meters) || 0).toFixed(2)} m`,
+                    `${stdRate} m/pc`,
+                    lot.targetPcs ? `${Math.round(((parseFloat(f.meters) || 0) / lot.targetPcs) * 100) / 100} m/pc` : '-'
+                ]);
+                if (floorTableRows.length === 0) {
+                    floorTableRows.push(['1', 'Main Fabric', `${totalMeters} m`, `${stdRate} m/pc`, '-']);
+                }
+                floorTableRows.push([
+                    '',
+                    'TOTAL FABRIC ISSUED',
+                    `${totalMeters} m`,
+                    '',
+                    `For ${lot.targetPcs || 0} pcs`
+                ]);
+
+                doc.autoTable({
+                    startY: tableY,
+                    margin: { left: 15, right: 15 },
+                    head: floorTableHead,
+                    body: floorTableRows,
+                    theme: 'grid',
+                    styles: {
+                        font: 'helvetica',
+                        fontSize: 7.5,
+                        cellPadding: 1.8,
+                        lineColor: [203, 213, 225],
+                        lineWidth: 0.2
+                    },
+                    headStyles: {
+                        fillColor: [15, 23, 42],
+                        textColor: [255, 255, 255],
+                        fontStyle: 'bold',
+                        halign: 'left'
+                    },
+                    columnStyles: {
+                        0: { cellWidth: 10, halign: 'center' },
+                        1: { cellWidth: 78 },
+                        2: { cellWidth: 32, fontStyle: 'bold', halign: 'right' },
+                        3: { cellWidth: 30, halign: 'right' },
+                        4: { cellWidth: 30, halign: 'right' }
+                    },
+                    didParseCell: (data) => {
+                        if (data.row.index === floorTableRows.length - 1) {
+                            data.cell.styles.fontStyle = 'bold';
+                            data.cell.styles.fillColor = [226, 232, 240];
+                        }
+                    }
+                });
+            }
+
+            // Footer note
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(6.5);
             doc.setTextColor(148, 163, 184);
-            const footerNote = isOffice ? 'Office Copy — Keep in production issue register' : 'Floor Copy — Give along with issued cutting fabric to karigar';
+            const footerNote = isOffice ? 'Office Copy — Keep in production issue register · Confidentially contains internal rates & costing' : 'Floor Copy — Give along with issued cutting fabric to karigar';
             doc.text(footerNote, 16, startY + 125);
             doc.text(`Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}`, 194, startY + 125, { align: 'right' });
         };
 
-        // Render Top Half: OFFICE COPY
-        renderSingleCopy(10, 'OFFICE COPY (FOR RECORD)', true);
+        // Render Top Half: OFFICE COPY (With Full Pricing & Costing)
+        renderSingleCopy(10, 'OFFICE COPY (FOR RECORD & COSTING)', true);
 
         // Center Dotted Cut Line (Y = 146)
         doc.setDrawColor(100, 116, 139);
@@ -10872,7 +11188,7 @@ function downloadDualLotSlipPdf(lot) {
         doc.setTextColor(100, 116, 139);
         doc.text('✂ - - - - - - - - - - CUT HERE (TOP: OFFICE COPY  |  BOTTOM: FLOOR / MAAL COPY) - - - - - - - - - - ✂', 105, 146.5, { align: 'center' });
 
-        // Render Bottom Half: FLOOR / MAAL COPY
+        // Render Bottom Half: FLOOR / MAAL COPY (Zero Pricing / Production Only)
         renderSingleCopy(152, 'FLOOR / MAAL COPY (WITH GOODS)', false);
 
         const safeLotNo = String(lot.lotNumber || 'LOT').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -11570,13 +11886,24 @@ async function saveCreateLotAction(downloadOnly = false) {
     const recipe = KapadState.recipes.find(r => r.designNo === designNo);
     if (!recipe) { showToast('Design recipe not found', 'error'); return; }
 
-    // Collect fabric
+    // Collect fabric with material rate per meter from recipe
     const fabricGiven = [];
     document.querySelectorAll('#lot-fabric-rows .lot-fabric-qty').forEach(inp => {
-        fabricGiven.push({ name: inp.dataset.name, meters: parseFloat(inp.value) || 0 });
+        const matName = inp.dataset.name;
+        const matObj = (recipe.materials || []).find(m => m.name === matName);
+        fabricGiven.push({
+            name: matName,
+            meters: parseFloat(inp.value) || 0,
+            ratePerMeter: matObj ? (parseFloat(matObj.ratePerMeter) || 0) : 0
+        });
     });
 
     if (fabricGiven.length === 0) { showToast('Fabric data missing — select design & pieces first', 'error'); return; }
+
+    const costDetails = {
+        jobCosts: recipe.jobCosts || [],
+        estimatedCostPerPc: recipe.estimatedCostPerPc || 0,
+    };
 
     showLoader(downloadOnly ? 'Creating lot & generating PDF...' : 'Creating lot & opening print...');
     try {
@@ -11589,7 +11916,8 @@ async function saveCreateLotAction(downloadOnly = false) {
             recipe.totalMetersPerPc || 0,
             customLotNumber,
             date,
-            recipe.silaiPrice || 0
+            recipe.silaiPrice || 0,
+            costDetails
         );
         closeCreateLotModal();
         showToast(`Lot ${res.lotNumber} created!`, 'success');
@@ -11613,6 +11941,8 @@ async function saveCreateLotAction(downloadOnly = false) {
             standardMetersPerPc: recipe.totalMetersPerPc || 0,
             silaiPrice: recipe.silaiPrice || 0,
             fabricGiven,
+            jobCosts: recipe.jobCosts || [],
+            estimatedCostPerPc: recipe.estimatedCostPerPc || 0,
             totalMetersGiven: fabricGiven.reduce((s, f) => s + (parseFloat(f.meters) || 0), 0),
             completedPcs: 0,
             consumedMeters: 0,

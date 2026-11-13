@@ -2695,7 +2695,7 @@ const FirebaseService = (() => {
         return seq;
     }
 
-    async function createProductionLot(companyId, designNo, designName, targetPcs, fabricGiven, standardMetersPerPc, customLotNumber = '', lotDate = '', silaiPrice = 0) {
+    async function createProductionLot(companyId, designNo, designName, targetPcs, fabricGiven, standardMetersPerPc, customLotNumber = '', lotDate = '', silaiPrice = 0, costDetails = null) {
         const db = getDb();
         const now = new Date();
         const safeDate = lotDate || now.toISOString().split('T')[0];
@@ -2726,7 +2726,13 @@ const FirebaseService = (() => {
             fabricGiven: (fabricGiven || []).map(f => ({
                 name: String(f.name || '').trim(),
                 meters: parseFloat(f.meters) || 0,
+                ratePerMeter: parseFloat(f.ratePerMeter) || 0,
             })),
+            jobCosts: (costDetails?.jobCosts || []).map(j => ({
+                name: String(j.name || '').trim(),
+                amountPerPc: parseFloat(j.amountPerPc) || 0,
+            })),
+            estimatedCostPerPc: parseFloat(costDetails?.estimatedCostPerPc) || 0,
             totalMetersGiven: Math.round(totalMetersGiven * 1000) / 1000,
             completedPcs: 0,
             consumedMeters: 0,
