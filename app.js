@@ -10901,6 +10901,17 @@ async function renderKapadLotPage() {
             lots = await FirebaseService.getProductionLots(companyId);
         } catch(e) { console.warn('[Kapad] getProductionLots error:', e); }
 
+        // Preload size prices into memory so matching and autofill are instant
+        try {
+            if (!AppState.designPrices || Object.keys(AppState.designPrices).length === 0) {
+                const pRes = await FirebaseService.getDesignPrices(DESIGN_PRICE_SCOPE);
+                if (pRes && pRes.success && pRes.data) {
+                    AppState.designPrices = pRes.data;
+                    AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = pRes.data;
+                }
+            }
+        } catch(e) { console.warn('[Kapad] preload size prices error:', e); }
+
         KapadState.recipes = recipes || [];
         KapadState.lots = lots || [];
 
@@ -10995,7 +11006,17 @@ function bindKapadEvents() {
     document.getElementById('btn-add-jobcost-row')?.addEventListener('click', () => addJobCostRow());
 
     document.getElementById('save-design-recipe-btn')?.addEventListener('click', saveDesignRecipeAction);
-    document.getElementById('recipe-silai-price')?.addEventListener('input', recalcRecipeTotals);
+    document.getElementById('recipe-silai-price')?.addEventListener('input', () => {
+        recalcRecipeTotals();
+        handleRecipeSilaiPriceManualEdit();
+    });
+
+    const recipeDesignNoInp = document.getElementById('recipe-design-no');
+    if (recipeDesignNoInp) {
+        recipeDesignNoInp.addEventListener('input', handleRecipeDesignNoInput);
+        recipeDesignNoInp.addEventListener('change', handleRecipeDesignNoInput);
+        recipeDesignNoInp.addEventListener('blur', handleRecipeDesignNoInput);
+    }
 
     // ── Create Lot Modal ───────────────────────────────────────────────
     document.getElementById('close-create-lot-modal')?.addEventListener('click', closeCreateLotModal);
@@ -11099,15 +11120,146 @@ function addJobCostRow(data = {}) {
     recalcRecipeTotals();
 }
 
+// ── Dynamic Design Suggestions & Live Silai Price Auto-Fill ───────────
+function populateRecipeDesignSuggestions() {
+    const datalist = document.getElementById('recipe-design-suggestions');
+    if (!datalist) return;
+    const designsSet = new Map();
+
+    // 1. From Size Prices (AppState.designPrices)
+    const pMap = AppState.designPrices || AppState.designPricesByCompany?.[DESIGN_PRICE_SCOPE] || {};
+    Object.entries(pMap).forEach(([k, v]) => {
+        const clean = String(k || '').trim().toUpperCase();
+        if (clean && Number.isFinite(parseFloat(v))) {
+            designsSet.set(clean, parseFloat(v));
+        }
+    });
+
+    // 2. From existing design recipes
+    (KapadState.recipes || []).forEach(r => {
+        const clean = String(r.designNo || '').trim().toUpperCase();
+        if (clean && !designsSet.has(clean) && Number.isFinite(parseFloat(r.silaiPrice))) {
+            designsSet.set(clean, parseFloat(r.silaiPrice));
+        }
+    });
+
+    datalist.innerHTML = Array.from(designsSet.entries()).map(([d, price]) => {
+        return `<option value="${esc(d)}">${esc(d)} — ₹${price.toFixed(2)} (Size Price)</option>`;
+    }).join('');
+}
+
+let _recipeDesignLookupTimer = null;
+function handleRecipeDesignNoInput() {
+    clearTimeout(_recipeDesignLookupTimer);
+    _recipeDesignLookupTimer = setTimeout(async () => {
+        const noInput = document.getElementById('recipe-design-no');
+        const silaiInput = document.getElementById('recipe-silai-price');
+        const badge = document.getElementById('recipe-silai-sync-badge');
+        const nameInput = document.getElementById('recipe-design-name');
+        if (!noInput || !silaiInput) return;
+
+        const val = noInput.value.trim();
+        if (!val) {
+            if (badge) {
+                badge.innerHTML = 'Links with Size &amp; Price';
+                badge.style.color = '#16a34a';
+                badge.style.fontWeight = '700';
+            }
+            return;
+        }
+
+        const cleanKey = val.toUpperCase();
+
+        // 1. Try in-memory price map
+        let priceMap = AppState.designPrices || AppState.designPricesByCompany?.[DESIGN_PRICE_SCOPE] || null;
+        let matchedPrice = null;
+        if (priceMap && Number.isFinite(parseFloat(priceMap[cleanKey]))) {
+            matchedPrice = parseFloat(priceMap[cleanKey]);
+        }
+
+        // 2. If not found in cache, fetch live design prices
+        if (matchedPrice === null) {
+            try {
+                const res = await FirebaseService.getDesignPrices(DESIGN_PRICE_SCOPE);
+                if (res && res.success && res.data) {
+                    AppState.designPrices = res.data;
+                    AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = res.data;
+                    priceMap = res.data;
+                    populateRecipeDesignSuggestions();
+                    if (Number.isFinite(parseFloat(res.data[cleanKey]))) {
+                        matchedPrice = parseFloat(res.data[cleanKey]);
+                    }
+                }
+            } catch (err) {
+                console.warn('[Kapad] getDesignPrices error:', err);
+            }
+        }
+
+        // 3. If still not in Size Prices, check existing recipes
+        if (matchedPrice === null) {
+            const existingRecipe = (KapadState.recipes || []).find(r => String(r.designNo || '').toUpperCase() === cleanKey);
+            if (existingRecipe && Number.isFinite(parseFloat(existingRecipe.silaiPrice))) {
+                matchedPrice = parseFloat(existingRecipe.silaiPrice);
+            }
+        }
+
+        // 4. Auto-fill Silai / Karigar Rate!
+        if (Number.isFinite(matchedPrice) && matchedPrice > 0) {
+            silaiInput.value = matchedPrice;
+            silaiInput.classList.remove('rainbow-autofill');
+            void silaiInput.offsetWidth; // re-trigger animation
+            silaiInput.classList.add('rainbow-autofill');
+            setTimeout(() => silaiInput.classList.remove('rainbow-autofill'), 2200);
+
+            if (badge) {
+                badge.innerHTML = `<i class='bx bx-check-double'></i> Auto-filled from Size Prices: ₹${matchedPrice.toFixed(2)}`;
+                badge.style.color = '#059669';
+                badge.style.fontWeight = '800';
+            }
+
+            // Autofill Design Name if currently blank
+            if (nameInput && !nameInput.value.trim()) {
+                const existingRecipe = (KapadState.recipes || []).find(r => String(r.designNo || '').toUpperCase() === cleanKey);
+                if (existingRecipe && existingRecipe.name) {
+                    nameInput.value = existingRecipe.name;
+                }
+            }
+
+            recalcRecipeTotals();
+        } else {
+            if (badge) {
+                badge.innerHTML = `<i class='bx bx-link-alt'></i> New design — floor rate will auto-link to Size Prices`;
+                badge.style.color = '#2563eb';
+                badge.style.fontWeight = '700';
+            }
+        }
+    }, 100);
+}
+
+function handleRecipeSilaiPriceManualEdit() {
+    const silaiInput = document.getElementById('recipe-silai-price');
+    const badge = document.getElementById('recipe-silai-sync-badge');
+    if (!silaiInput || !badge) return;
+    const val = parseFloat(silaiInput.value);
+    if (Number.isFinite(val) && val > 0) {
+        badge.innerHTML = `<i class='bx bx-sync'></i> Will update Size Price to ₹${val.toFixed(2)} on save`;
+        badge.style.color = '#0284c7';
+        badge.style.fontWeight = '800';
+    }
+}
+
 // ── Open Design Recipe Modal ───────────────────────────────────────────
 function openDesignRecipeModal(recipe = null) {
     document.getElementById('design-recipe-modal-title').textContent = recipe ? `Edit Design ${recipe.designNo}` : 'New Design Recipe';
     const noInput = document.getElementById('recipe-design-no');
     const nameInput = document.getElementById('recipe-design-name');
     const silaiInput = document.getElementById('recipe-silai-price');
+    const badge = document.getElementById('recipe-silai-sync-badge');
     noInput.value = recipe ? recipe.designNo : '';
     noInput.readOnly = !!recipe;
     nameInput.value = recipe ? (recipe.name || '') : '';
+
+    populateRecipeDesignSuggestions();
 
     let silaiVal = recipe ? (parseFloat(recipe.silaiPrice) || '') : '';
     if (!silaiVal && recipe) {
@@ -11117,6 +11269,18 @@ function openDesignRecipeModal(recipe = null) {
         }
     }
     if (silaiInput) silaiInput.value = silaiVal || '';
+
+    if (badge) {
+        if (silaiVal) {
+            badge.innerHTML = `<i class='bx bx-check-double'></i> Linked with Size Price: ₹${parseFloat(silaiVal).toFixed(2)}`;
+            badge.style.color = '#059669';
+            badge.style.fontWeight = '800';
+        } else {
+            badge.innerHTML = 'Links with Size &amp; Price';
+            badge.style.color = '#16a34a';
+            badge.style.fontWeight = '700';
+        }
+    }
 
     document.getElementById('recipe-materials-list').innerHTML = '';
     document.getElementById('recipe-jobcosts-list').innerHTML = '';
@@ -11133,6 +11297,10 @@ function openDesignRecipeModal(recipe = null) {
     recalcRecipeTotals();
     document.getElementById('save-design-recipe-btn').dataset.editNo = recipe ? recipe.designNo : '';
     document.getElementById('modal-design-recipe').style.display = 'flex';
+
+    if (!recipe && noInput) {
+        setTimeout(() => noInput.focus(), 60);
+    }
 }
 
 function closeDesignRecipeModal() {

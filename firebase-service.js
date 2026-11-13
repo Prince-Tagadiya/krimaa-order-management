@@ -2646,23 +2646,28 @@ const FirebaseService = (() => {
 
     async function updateRecipeSilaiPrice(companyId, designNo, silaiPrice) {
         const db = getDb();
-        const docId = `${companyId}__${String(designNo).trim().toUpperCase()}`;
-        const ref = db.collection('design_recipes').doc(docId);
-        const doc = await ref.get();
-        if (doc.exists) {
-            const data = doc.data();
-            const numSilai = parseFloat(silaiPrice) || 0;
-            const materialsCost = (data.materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
-            const otherJobCost = (data.jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
-            const estimatedCostPerPc = materialsCost + numSilai + otherJobCost;
-            await ref.update({
-                silaiPrice: Math.round(numSilai * 100) / 100,
-                estimatedCostPerPc: Math.round(estimatedCostPerPc * 100) / 100,
-                updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            });
-            return { success: true, updated: true };
+        const cleanDesign = String(designNo).trim().toUpperCase();
+        const companiesToTry = (companyId && companyId !== 'global') ? [companyId] : ['client1', 'client2'];
+        let updatedCount = 0;
+        for (const cid of companiesToTry) {
+            const docId = `${cid}__${cleanDesign}`;
+            const ref = db.collection('design_recipes').doc(docId);
+            const doc = await ref.get();
+            if (doc.exists) {
+                const data = doc.data();
+                const numSilai = parseFloat(silaiPrice) || 0;
+                const materialsCost = (data.materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
+                const otherJobCost = (data.jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
+                const estimatedCostPerPc = materialsCost + numSilai + otherJobCost;
+                await ref.update({
+                    silaiPrice: Math.round(numSilai * 100) / 100,
+                    estimatedCostPerPc: Math.round(estimatedCostPerPc * 100) / 100,
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                });
+                updatedCount++;
+            }
         }
-        return { success: true, updated: false };
+        return { success: true, updatedCount };
     }
 
     async function getDesignRecipes(companyId) {
