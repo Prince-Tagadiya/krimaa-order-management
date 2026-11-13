@@ -624,90 +624,97 @@
 
                 <!-- Design Recipe Modal -->
                 <div id="modal-design-recipe" class="modal kapad-modal" style="display:none;">
-                    <div class="modal-content kapad-modal-content" style="max-width:640px;">
-                        <div class="flex-between mb-3" style="border-bottom:1px solid #e2e8f0;padding-bottom:10px;">
+                    <div class="modal-content kapad-modal-content recipe-modal-content">
+                        <!-- Header -->
+                        <div class="flex-between" style="border-bottom:1.5px solid #e2e8f0;padding-bottom:14px;margin-bottom:1.5rem;">
                             <div>
-                                <h3 class="font-bold text-lg" id="design-recipe-modal-title" style="margin:0;">New Design Recipe</h3>
-                                <div class="text-xs text-muted">Define fabric consumption and Karigar silai rates</div>
+                                <h3 class="font-bold" id="design-recipe-modal-title" style="margin:0;font-size:1.35rem;color:#0f172a;letter-spacing:-0.3px;">New Design Recipe</h3>
+                                <div class="text-muted" style="font-size:0.82rem;margin-top:3px;">Define fabric consumption, stitching rates, and additional job costs</div>
                             </div>
-                            <button class="btn-icon" id="close-design-recipe-modal"><i class='bx bx-x'></i></button>
+                            <button class="btn-icon" id="close-design-recipe-modal" type="button" style="width:36px;height:36px;border-radius:8px;"><i class='bx bx-x' style="font-size:1.4rem;"></i></button>
                         </div>
 
-                        <div class="mb-3" style="display:flex;gap:12px;flex-wrap:wrap;">
-                            <div style="flex:1;min-width:140px;">
-                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Design No *</label>
-                                <input type="text" id="recipe-design-no" placeholder="e.g. 1128" style="width:100%;padding:0.6rem 0.75rem;border:1.5px solid #cbd5e1;border-radius:8px;font-weight:800;font-size:1.05rem;">
+                        <!-- 1. Basic Info Row -->
+                        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:1.5rem;">
+                            <div style="flex:1;min-width:160px;">
+                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:6px;letter-spacing:0.4px;">Design No *</label>
+                                <input type="text" id="recipe-design-no" placeholder="e.g. 1128" style="width:100%;height:44px;padding:0.6rem 0.9rem;border:1.5px solid #cbd5e1;border-radius:10px;font-weight:800;font-size:1.1rem;color:#0f172a;">
                             </div>
-                            <div style="flex:2;min-width:200px;">
-                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:4px;">Design Name / Description</label>
-                                <input type="text" id="recipe-design-name" placeholder="e.g. Design 1128" style="width:100%;padding:0.6rem 0.75rem;border:1px solid #cbd5e1;border-radius:8px;">
+                            <div style="flex:2.2;min-width:240px;">
+                                <label class="text-xs font-bold text-muted uppercase" style="display:block;margin-bottom:6px;letter-spacing:0.4px;">Design Name / Description</label>
+                                <input type="text" id="recipe-design-name" placeholder="e.g. Design 1128" style="width:100%;height:44px;padding:0.6rem 0.9rem;border:1.5px solid #cbd5e1;border-radius:10px;font-size:0.95rem;">
                             </div>
                         </div>
 
-                        <!-- Compulsory Silai / Karigar Rate (Linked with Size & Price) -->
-                        <div class="recipe-silai-group mb-3" style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;padding:12px 14px;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                                <label class="text-xs font-bold text-success uppercase" style="display:flex;align-items:center;gap:6px;margin:0;">
-                                    <i class='bx bx-check-shield'></i> Silai / Karigar Rate (₹/pc) * (Compulsory)
+                        <!-- 2. Compulsory Silai / Karigar Rate (Linked with Size & Price) -->
+                        <div class="recipe-silai-group" style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:12px;padding:16px 20px;margin-bottom:1.75rem;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                <label class="text-xs font-bold text-success uppercase" style="display:flex;align-items:center;gap:6px;margin:0;letter-spacing:0.4px;">
+                                    <i class='bx bx-check-shield' style="font-size:1rem;"></i> Silai / Karigar Rate (₹/pc) * (Compulsory)
                                 </label>
-                                <span style="font-size:0.72rem;color:#16a34a;font-weight:700;">Links with Size &amp; Price</span>
+                                <span style="font-size:0.75rem;color:#16a34a;font-weight:700;">Links with Size &amp; Price</span>
                             </div>
-                            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-                                <div style="position:relative;width:160px;min-width:140px;">
-                                    <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-weight:800;color:#059669;font-size:1.1rem;">₹</span>
-                                    <input type="number" id="recipe-silai-price" step="0.5" min="0" required placeholder="e.g. 75.00" style="width:100%;padding:0.6rem 0.75rem 0.6rem 1.9rem;border:1.5px solid #10b981;border-radius:8px;font-weight:800;font-size:1.05rem;color:#065f46;background:#fff;">
+                            <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+                                <div style="position:relative;width:170px;min-width:150px;">
+                                    <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);font-weight:800;color:#059669;font-size:1.2rem;">₹</span>
+                                    <input type="number" id="recipe-silai-price" step="0.5" min="0" required placeholder="e.g. 75.00" style="width:100%;height:46px;padding:0.6rem 0.9rem 0.6rem 2.2rem;border:1.5px solid #10b981;border-radius:10px;font-weight:900;font-size:1.2rem;color:#065f46;background:#fff;">
                                 </div>
-                                <div style="font-size:0.75rem;color:#475569;flex:1;min-width:180px;line-height:1.35;">
+                                <div style="font-size:0.8rem;color:#475569;flex:1;min-width:220px;line-height:1.45;">
                                     Compulsory floor rate for karigar stitching. Auto-syncs to <strong>Size Prices</strong> and auto-fills <strong>Price Per Pic</strong> on Maal (Jama).
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Materials Section -->
-                        <div class="kapad-section-label" style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:0.85rem;color:#1e293b;margin-bottom:4px;">
-                            <i class='bx bx-scissors text-primary'></i> Fabric / Materials (Consumption)
-                        </div>
-                        <div style="font-size:0.72rem;color:#64748b;margin-bottom:8px;">Item name, meters per piece, and cloth rate per meter</div>
-                        <div class="dynamic-row-header-materials" style="display:flex;gap:8px;font-size:0.7rem;font-weight:800;color:#64748b;text-transform:uppercase;padding:0 8px 4px 8px;letter-spacing:0.4px;">
-                            <span style="flex:2.2;min-width:110px;">Material Item</span>
-                            <span style="flex:1;min-width:65px;">Meters/pc</span>
-                            <span style="flex:1;min-width:65px;">Rate (₹/m)</span>
-                            <span style="flex:1;min-width:65px;">Cost (₹/pc)</span>
-                            <span style="width:28px;"></span>
-                        </div>
-                        <div id="recipe-materials-list" class="dynamic-rows-list">
-                            <!-- JS injected rows -->
-                        </div>
-                        <button class="btn btn-outline btn-sm mt-2" id="btn-add-material-row" type="button" style="border-style:dashed;">
-                            <i class='bx bx-plus'></i> Add Material
-                        </button>
-
-                        <!-- Job Costs Section -->
-                        <div class="kapad-section-label mt-3" style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:0.85rem;color:#1e293b;margin-bottom:4px;">
-                            <i class='bx bx-wrench text-primary'></i> Additional Job Work (Optional)
-                        </div>
-                        <div style="font-size:0.72rem;color:#64748b;margin-bottom:8px;">Extra process charges per piece (embroidery, handwork, washing, etc.)</div>
-                        <div class="dynamic-row-header-jobcosts" style="display:flex;gap:8px;font-size:0.7rem;font-weight:800;color:#64748b;text-transform:uppercase;padding:0 8px 4px 8px;letter-spacing:0.4px;">
-                            <span style="flex:3;min-width:120px;">Job / Work Name</span>
-                            <span style="flex:1.2;min-width:80px;">Rate (₹/pc)</span>
-                            <span style="width:28px;"></span>
-                        </div>
-                        <div id="recipe-jobcosts-list" class="dynamic-rows-list">
-                            <!-- JS injected rows -->
-                        </div>
-                        <button class="btn btn-outline btn-sm mt-2" id="btn-add-jobcost-row" type="button" style="border-style:dashed;">
-                            <i class='bx bx-plus'></i> Add Other Job Cost
-                        </button>
-
-                        <!-- Live Totals -->
-                        <div class="recipe-totals-bar mt-3" id="recipe-totals-bar" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;">
-                            <span style="font-size:0.85rem;">Total Meters/Pc: <strong id="recipe-total-meters" style="color:#2563eb;font-size:1rem;">0.00</strong> m</span>
-                            <span style="font-size:0.85rem;">Total Est. Cost/Pc: <strong id="recipe-total-cost" style="color:#059669;font-size:1.15rem;">₹0.00</strong></span>
+                        <!-- 3. Materials Section -->
+                        <div style="margin-bottom:1.75rem;">
+                            <div style="display:flex;align-items:center;gap:8px;font-weight:800;font-size:0.95rem;color:#0f172a;margin-bottom:4px;">
+                                <i class='bx bx-scissors text-primary' style="font-size:1.2rem;"></i> Fabric / Materials (Consumption)
+                            </div>
+                            <div style="font-size:0.78rem;color:#64748b;margin-bottom:10px;">Item name, meters per piece, and cloth rate per meter</div>
+                            <div class="dynamic-row-header-materials">
+                                <span>Material Item</span>
+                                <span>Meters / Pc</span>
+                                <span>Rate (₹/m)</span>
+                                <span>Cost (₹/pc)</span>
+                                <span></span>
+                            </div>
+                            <div id="recipe-materials-list" class="dynamic-rows-list">
+                                <!-- JS injected rows -->
+                            </div>
+                            <button class="btn btn-outline btn-sm mt-2" id="btn-add-material-row" type="button" style="border:1.5px dashed #3b82f6;color:#2563eb;background:#eff6ff;padding:0.5rem 1rem;font-weight:700;border-radius:8px;">
+                                <i class='bx bx-plus'></i> Add Material
+                            </button>
                         </div>
 
-                        <div class="flex-between mt-3" style="gap:0.75rem;padding-top:10px;border-top:1px solid #f1f5f9;">
-                            <button class="btn btn-outline" id="cancel-design-recipe-modal" type="button">Cancel</button>
-                            <button class="btn btn-primary" id="save-design-recipe-btn" type="button" style="background:#2563eb;border-color:#2563eb;padding:0.55rem 1.25rem;">
+                        <!-- 4. Job Costs Section -->
+                        <div style="margin-bottom:1.75rem;">
+                            <div style="display:flex;align-items:center;gap:8px;font-weight:800;font-size:0.95rem;color:#0f172a;margin-bottom:4px;">
+                                <i class='bx bx-wrench text-primary' style="font-size:1.2rem;"></i> Additional Job Work (Optional)
+                            </div>
+                            <div style="font-size:0.78rem;color:#64748b;margin-bottom:10px;">Extra process charges per piece (embroidery, handwork, washing, etc.)</div>
+                            <div class="dynamic-row-header-jobcosts">
+                                <span>Job / Work Name</span>
+                                <span>Rate (₹/pc)</span>
+                                <span></span>
+                            </div>
+                            <div id="recipe-jobcosts-list" class="dynamic-rows-list">
+                                <!-- JS injected rows -->
+                            </div>
+                            <button class="btn btn-outline btn-sm mt-2" id="btn-add-jobcost-row" type="button" style="border:1.5px dashed #8b5cf6;color:#7c3aed;background:#f5f3ff;padding:0.5rem 1rem;font-weight:700;border-radius:8px;">
+                                <i class='bx bx-plus'></i> Add Other Job Cost
+                            </button>
+                        </div>
+
+                        <!-- 5. Live Totals -->
+                        <div class="recipe-totals-bar" id="recipe-totals-bar" style="background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:12px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+                            <span style="font-size:0.95rem;color:#334155;font-weight:600;">Total Fabric: <strong id="recipe-total-meters" style="color:#2563eb;font-size:1.15rem;font-weight:900;">0.00</strong> m / pc</span>
+                            <span style="font-size:0.95rem;color:#334155;font-weight:600;">Total Est. Cost: <strong id="recipe-total-cost" style="color:#059669;font-size:1.35rem;font-weight:900;">₹0.00</strong> / pc</span>
+                        </div>
+
+                        <!-- 6. Footer Buttons -->
+                        <div class="flex-between" style="gap:1rem;padding-top:14px;border-top:1.5px solid #f1f5f9;">
+                            <button class="btn btn-outline" id="cancel-design-recipe-modal" type="button" style="padding:0.65rem 1.4rem;font-weight:600;border-radius:10px;">Cancel</button>
+                            <button class="btn btn-primary" id="save-design-recipe-btn" type="button" style="background:#2563eb;border-color:#2563eb;padding:0.65rem 1.75rem;font-size:0.95rem;font-weight:800;border-radius:10px;">
                                 <i class='bx bx-check'></i> Save Recipe
                             </button>
                         </div>
