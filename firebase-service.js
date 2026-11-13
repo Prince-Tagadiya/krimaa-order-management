@@ -266,9 +266,7 @@ const FirebaseService = (() => {
         return local.toISOString().slice(0, 19);
     }
 
-    function getCompanyDisplayName(companyId) {
-        return String(companyId || '').trim() === 'company2' ? 'Company 2' : 'Company 1';
-    }
+    function getCompanyDisplayName() { return 'SHREE SAI'; }
 
     function buildDailyOrdersDocId(companyId, dateStr) {
         const safeCompanyId = String(companyId || 'company1').trim() || 'company1';

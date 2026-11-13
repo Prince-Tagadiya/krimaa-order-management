@@ -7,7 +7,7 @@ function refreshUsersFromEnv() {
         .map((u) => ({
             username: String(u?.username || '').trim(),
             password: String(u?.password || ''),
-            role: String(u?.role || '').trim(),
+            role: String(u?.role || '').trim() === 'order_c2' ? 'order' : String(u?.role || '').trim(),
             displayName: String(u?.displayName || u?.username || '').trim(),
             allowedCompanies: Array.isArray(u?.allowedCompanies) && u.allowedCompanies.length
                 ? u.allowedCompanies.map(c => String(c || '').trim()).filter(Boolean)
@@ -277,23 +277,12 @@ function getRechargeText(rawDate) {
 }
 
 function getCompanyDisplayName(companyId = AppState.currentCompany) {
-    const singleMode = String(APP_CONFIG?.clientMode || window.CLIENT_MODE || '').trim().toLowerCase() === 'single_company';
-    const singleName = String(APP_CONFIG?.clientCompanyName || window.CLIENT_COMPANY_NAME || '').trim();
-    if (singleMode && singleName && (companyId === 'company1' || companyId === 'company2')) return singleName;
-    const btn = document.querySelector(`.company-btn[data-company="${companyId}"]`);
-    if (btn && btn.textContent) return btn.textContent.trim();
-    if (companyId === 'company1') return 'Company 1';
-    if (companyId === 'company2') return 'Company 2';
-    return companyId;
+    return companyId === 'company1' || companyId === 'company2' ? 'SHREE SAI' : companyId;
 }
 
-function isSingleCompanyMode() {
-    return String(APP_CONFIG?.clientMode || window.CLIENT_MODE || '').trim().toLowerCase() === 'single_company';
-}
+function isSingleCompanyMode() { return true; }
 
-function getSingleCompanyName() {
-    return String(APP_CONFIG?.clientCompanyName || window.CLIENT_COMPANY_NAME || '').trim() || 'Company';
-}
+function getSingleCompanyName() { return 'SHREE SAI'; }
 
 function applyClientModeUI() {
     const singleMode = isSingleCompanyMode();
@@ -746,24 +735,15 @@ function showFolderSetupScreen() { showLoginScreen(); }
 
 // ===== PROFILE HELPERS =====
 
-function _isDhyanHash() {
-    return window.location.hash.replace('#', '').toLowerCase() === 'dhyan';
-}
+function _isDhyanHash() { return false; }
 
 /** Updates the folder setup screen title/text to reflect the active profile */
 
 
 /** Shows/hides the "Switch Profile" button in the sidebar (admin only) */
 function updateProfileSwitchBtn() {
-    const btn = document.getElementById('profile-switch-btn');
-    if (!btn) return;
-    const role = AppState.currentUser?.role;
-    const isAdminOrDev = role === 'admin' || role === 'dev';
-    btn.style.display = isAdminOrDev ? '' : 'none';
-    const isDhyan = _isDhyanHash();
-    btn.innerHTML = isDhyan
-        ? '<i class=\'bx bx-transfer\'></i> Switch to Krimaa Profile'
-        : '<i class=\'bx bx-transfer\'></i> Switch to Dhyan Profile';
+    const button = document.getElementById('profile-switch-btn');
+    if (button) button.style.display = 'none';
 }
 
 /** Switches the active profile: clears session, sets hash, reloads */
@@ -4391,6 +4371,15 @@ async function renderDataSheet() {
     headerRow1 += '</tr>';
     headerRow2 += '</tr>';
 
+    // Explicit column widths keep frozen totals aligned at every screen size.
+    const sheetTable = thead.closest('table');
+    sheetTable.querySelector('colgroup')?.remove();
+    const accountCols = accounts.map(acc => {
+        const channels = Number(acc.hasM) + Number(acc.hasF);
+        return `<col span="${channels}" style="width:${112 / channels}px">`;
+    }).join('');
+    sheetTable.insertAdjacentHTML('afterbegin', `<colgroup><col style="width:var(--sheet-date-width)">${accountCols}<col span="3" style="width:var(--sheet-total-width)"><col style="width:var(--sheet-remarks-width)"></colgroup>`);
+    sheetTable.style.width = `calc(var(--sheet-date-width) + ${accounts.length * 112}px + 3 * var(--sheet-total-width) + var(--sheet-remarks-width))`;
     thead.innerHTML = headerRow1 + headerRow2;
 
     // === BODY ===
@@ -4433,7 +4422,7 @@ async function renderDataSheet() {
         if (monthKey !== activeMonth) {
             activeMonth = monthKey;
             const monthSummary = monthTotals[monthKey] || { meesho: 0, flipkart: 0, both: 0 };
-            bodyHtml += `<tr class="sheet-month-row" data-month="${monthKey}"><td colspan="${fullColspan}"><span>${getMonthLabelFromKey(monthKey)}</span><strong>Total Orders: <b class="sheet-month-total">${monthSummary.both}</b> <span class="sheet-month-sub">(M: <b class="sheet-month-m">${monthSummary.meesho}</b> | F: <b class="sheet-month-f">${monthSummary.flipkart}</b>)</span></strong></td></tr>`;
+            bodyHtml += `<tr class="sheet-month-row" data-month="${monthKey}"><td colspan="${fullColspan}"><div class="sheet-month-label"><span>${getMonthLabelFromKey(monthKey)}</span><strong>Total Orders: <b class="sheet-month-total">${monthSummary.both}</b> <span class="sheet-month-sub">(M: <b class="sheet-month-m">${monthSummary.meesho}</b> | F: <b class="sheet-month-f">${monthSummary.flipkart}</b>)</span></strong></div></td></tr>`;
         }
         const dateObj = new Date(parseInt(y), parseInt(m)-1, parseInt(d));
         const dayName = dayNames[dateObj.getDay()];
