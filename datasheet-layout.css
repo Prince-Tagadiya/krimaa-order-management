@@ -86,3 +86,14 @@
 }
 #sheet-table .sheet-month-label { position: sticky; left: 12px; width: max-content; display: flex; align-items: center; gap: 16px; }
 #sheet-table .sheet-month-row td { overflow: visible; }
+
+/* Opaque bottom-right corner covers scrolling account totals beneath Remarks. */
+#sheet-table tbody tr.sheet-grand-row > td.sheet-grand-remarks {
+    position: sticky;
+    right: 0;
+    bottom: 0;
+    z-index: 46;
+    background: #fff !important;
+    empty-cells: show;
+    box-shadow: inset 1px 0 0 #cbd5e1;
+}

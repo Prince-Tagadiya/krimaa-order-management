@@ -4151,6 +4151,8 @@ async function renderDataSheet() {
         if (companyFilterEl) companyFilterEl.value = companyFilter;
     }
     const monthFilterEl = document.getElementById('sheet-month-filter');
+    // Initialize the selected month before the first render, including async navigation.
+    if (monthFilterEl && !monthFilterEl.dataset.initialized) populateSheetMonthFilter();
     const rawMonthFilter = monthFilterEl ? String(monthFilterEl.value || '').trim() : '';
     const monthFilter = rawMonthFilter || 'all';
     if (monthFilterEl && !rawMonthFilter) monthFilterEl.value = 'all';
@@ -4485,7 +4487,7 @@ async function renderDataSheet() {
         bodyHtml += `<td class="sheet-total-cell sheet-m-total sheet-grand-m" title="Meesho Grand Total: ${grandTotals.meesho.toLocaleString()}">${grandTotals.meesho}</td>`;
         bodyHtml += `<td class="sheet-total-cell sheet-f-total sheet-grand-f" title="Flipkart Grand Total: ${grandTotals.flipkart.toLocaleString()}">${grandTotals.flipkart}</td>`;
         bodyHtml += `<td class="sheet-total-cell sheet-both-total sheet-grand-both" title="Grand Total: ${grandTotals.both.toLocaleString()}">${grandTotals.both}</td>`;
-        bodyHtml += '<td></td>';
+        bodyHtml += '<td class="sheet-grand-remarks" aria-label="Remarks footer">&nbsp;</td>';
         bodyHtml += '</tr>';
     }
 
