@@ -2704,17 +2704,38 @@ const FirebaseService = (() => {
         const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
         const totalMetersGiven = (fabricGiven || []).reduce((s, f) => s + (parseFloat(f.meters) || 0), 0);
         const roundedMeters = Math.round(totalMetersGiven);
+        const cleanDesign = String(designNo || 'LOT').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+        // Fetch existing lots to guarantee 100% unique lot number and determine max sequence
+        const snap = await db.collection('production_lots').where('companyId', '==', companyId).get();
+        const existingLotNumbers = new Set();
+        let maxSeq = 0;
+        snap.forEach(d => {
+            const data = d.data();
+            const lNo = String(data.lotNumber || '').trim();
+            if (lNo) existingLotNumbers.add(lNo.toUpperCase());
+            const m = lNo.match(/SEQ[-_]?(\d+)/i) || lNo.match(/LOT[-_](\d+)/i) || lNo.match(/[-_](\d+)$/);
+            if (m) {
+                const num = parseInt(m[1], 10);
+                if (num > maxSeq) maxSeq = num;
+            }
+        });
 
         let lotNumber = String(customLotNumber || '').trim();
-        if (!lotNumber) {
-            let seq = 1;
-            try { seq = await _nextLotSequence(companyId); } catch(e) { seq = (Date.now() % 1000) + 1; }
-            const seqStr = String(seq).padStart(3, '0');
-            const cleanDesign = String(designNo || 'LOT').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-            lotNumber = `LOT-SEQ-${seqStr}-${cleanDesign}-${dd}${mm}-${roundedMeters}M`;
+        // If empty OR if the provided lotNumber already exists in Firestore, automatically generate next sequence
+        if (!lotNumber || existingLotNumbers.has(lotNumber.toUpperCase())) {
+            let nextSeq = maxSeq + 1;
+            do {
+                const seqStr = String(nextSeq).padStart(3, '0');
+                lotNumber = `LOT-SEQ-${seqStr}-${cleanDesign}-${dd}${mm}-${roundedMeters}M`;
+                nextSeq++;
+            } while (existingLotNumbers.has(lotNumber.toUpperCase()));
         }
 
-        const docRef = await db.collection('production_lots').add({
+        const safeDocId = `${companyId}__${lotNumber.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+        const docRef = db.collection('production_lots').doc(safeDocId);
+
+        await docRef.set({
             companyId,
             lotNumber,
             date: safeDate,
@@ -2741,7 +2762,7 @@ const FirebaseService = (() => {
             mismatchMeters: 0,
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         });
-        return { success: true, id: docRef.id, lotNumber };
+        return { success: true, id: safeDocId, lotNumber };
     }
 
     async function getProductionLots(companyId) {

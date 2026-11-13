@@ -11249,6 +11249,8 @@ async function renderKapadLotPage() {
 
 // ── Bind all Kapad events (once) ──────────────────────────────────────
 function bindKapadEvents() {
+    if (KapadState._eventsBound) return;
+    KapadState._eventsBound = true;
     // Sub-tabs
     document.querySelectorAll('.kapad-subtab').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -11654,6 +11656,9 @@ async function saveDesignRecipeAction() {
 
     if (materials.length === 0) { showToast('Add at least one material', 'error'); return; }
 
+    const saveBtn = document.getElementById('save-design-recipe-btn');
+    if (saveBtn) saveBtn.disabled = true;
+
     showLoader('Saving design recipe & syncing silai rate...');
     try {
         await FirebaseService.saveDesignRecipe(AppState.currentCompany, designNo, name, materials, jobCosts, silaiPrice);
@@ -11674,12 +11679,12 @@ async function saveDesignRecipeAction() {
 
         closeDesignRecipeModal();
         showToast(`Design ${designNo} saved! Silai rate ₹${silaiPrice.toFixed(2)} synced to Size Prices`, 'success');
-        KapadState._bindsDone = false; // reset so sub-tab state is kept but recipes refresh
         await renderKapadLotPage();
     } catch(e) {
         console.error(e);
         showToast('Error saving recipe: ' + e.message, 'error');
     } finally {
+        if (saveBtn) saveBtn.disabled = false;
         hideLoader();
     }
 }
@@ -11690,7 +11695,6 @@ async function deleteDesignRecipeAction(designNo) {
     try {
         await FirebaseService.deleteDesignRecipe(AppState.currentCompany, designNo);
         showToast(`Design ${designNo} deleted`, 'success');
-        KapadState._bindsDone = false;
         await renderKapadLotPage();
     } catch(e) {
         showToast('Error deleting recipe: ' + e.message, 'error');
@@ -11875,10 +11879,13 @@ function updateGeneratedLotNumberPreview() {
 
 // ── Save Create Lot ────────────────────────────────────────────────────
 async function saveCreateLotAction(downloadOnly = false) {
+    if (KapadState._isCreatingLot) return;
     const designNo = document.getElementById('lot-design-select').value;
     const targetPcs = parseInt(document.getElementById('lot-target-pcs').value) || 0;
     const date = document.getElementById('lot-date').value;
-    const customLotNumber = document.getElementById('lot-number-input')?.value.trim();
+    const lotInput = document.getElementById('lot-number-input');
+    const isUserEdited = lotInput?.dataset.userEdited === 'true';
+    const customLotNumber = isUserEdited ? (lotInput?.value.trim() || '') : '';
 
     if (!designNo) { showToast('Select a design', 'error'); return; }
     if (targetPcs < 1) { showToast('Enter target pieces', 'error'); return; }
@@ -11904,6 +11911,12 @@ async function saveCreateLotAction(downloadOnly = false) {
         jobCosts: recipe.jobCosts || [],
         estimatedCostPerPc: recipe.estimatedCostPerPc || 0,
     };
+
+    KapadState._isCreatingLot = true;
+    const saveBtn = document.getElementById('save-create-lot-btn');
+    const downloadBtn = document.getElementById('save-create-lot-download-btn');
+    if (saveBtn) saveBtn.disabled = true;
+    if (downloadBtn) downloadBtn.disabled = true;
 
     showLoader(downloadOnly ? 'Creating lot & generating PDF...' : 'Creating lot & opening print...');
     try {
@@ -11957,12 +11970,14 @@ async function saveCreateLotAction(downloadOnly = false) {
             printDirectDualLotSlip(newLotObj);
         }
 
-        KapadState._bindsDone = false;
         await renderKapadLotPage();
     } catch(e) {
         console.error(e);
         showToast('Error creating lot: ' + e.message, 'error');
     } finally {
+        KapadState._isCreatingLot = false;
+        if (saveBtn) saveBtn.disabled = false;
+        if (downloadBtn) downloadBtn.disabled = false;
         hideLoader();
     }
 }
@@ -12045,7 +12060,7 @@ function closeLotDetailModal() {
     KapadState._currentLotId = null;
 }
 
-// ── Close Lot ────────────────────────────────────────────────────────────
+// ── Close Lot ────────────────────────────────────────────────────
 async function closeLotAction() {
     if (!KapadState._currentLotId) return;
     if (!confirm('Mark this lot as closed? This cannot be undone.')) return;
@@ -12054,7 +12069,6 @@ async function closeLotAction() {
         await FirebaseService.closeLot(KapadState._currentLotId);
         closeLotDetailModal();
         showToast('Lot closed', 'success');
-        KapadState._bindsDone = false;
         await renderKapadLotPage();
     } catch(e) {
         showToast('Error: ' + e.message, 'error');
@@ -12145,6 +12159,7 @@ function updateSubmitPreview() {
 
 // ── Save Submission ────────────────────────────────────────────────────
 async function saveSubmitKarigarAction() {
+    if (KapadState._isSubmittingWork) return;
     const lotId = document.getElementById('submit-lot-id').value;
     const sel = document.getElementById('submit-karigar-select');
     const karigarId = sel.value;
@@ -12156,17 +12171,22 @@ async function saveSubmitKarigarAction() {
     if (pcs < 1) { showToast('Enter pieces completed', 'error'); return; }
     if (!lotId) { showToast('Lot ID missing', 'error'); return; }
 
+    KapadState._isSubmittingWork = true;
+    const submitBtn = document.getElementById('save-submit-karigar-btn');
+    if (submitBtn) submitBtn.disabled = true;
+
     showLoader('Recording submission...');
     try {
         await FirebaseService.submitLotWork(lotId, karigarId, karigarName, pcs, date);
         closeSubmitKarigarModal();
         showToast(`Recorded ${pcs} pcs from ${karigarName}`, 'success');
-        KapadState._bindsDone = false;
         await renderKapadLotPage();
     } catch(e) {
         console.error(e);
         showToast('Error: ' + e.message, 'error');
     } finally {
+        KapadState._isSubmittingWork = false;
+        if (submitBtn) submitBtn.disabled = false;
         hideLoader();
     }
 }
