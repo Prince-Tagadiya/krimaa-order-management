@@ -19,81 +19,6 @@ function refreshUsersFromEnv() {
 
 const DESIGN_PRICE_SCOPE = 'global';
 
-// ── Fake / seed data for local testing ────────────────────────────────
-const FAKE_KARIGAR_LIST = [
-    { id: 'kar_fake_01', name: '14 JAKIR' },
-    { id: 'kar_fake_02', name: '3 ALAMIN' },
-    { id: 'kar_fake_03', name: '4 RABIKUL' },
-    { id: 'kar_fake_04', name: '5 SABIR' },
-    { id: 'kar_fake_05', name: '2 ASMAUN' },
-];
-
-const FAKE_DESIGN_RECIPES = [
-    {
-        designNo: '1128', name: 'Design 1128',
-        silaiPrice: 75.00,
-        materials: [
-            { name: 'Embroidery Kapad', metersPerPc: 1.20, ratePerMeter: 60 },
-            { name: 'Silai Kapad', metersPerPc: 2.00, ratePerMeter: 45 },
-        ],
-        jobCosts: [
-            { name: 'Embroidery Work', amountPerPc: 35 },
-        ],
-        totalMetersPerPc: 3.20,
-        estimatedCostPerPc: 272.00,
-    },
-    {
-        designNo: '1130', name: 'Design 1130',
-        silaiPrice: 70.00,
-        materials: [
-            { name: 'Net Kapad', metersPerPc: 1.50, ratePerMeter: 55 },
-            { name: 'Lining', metersPerPc: 1.80, ratePerMeter: 40 },
-        ],
-        jobCosts: [
-            { name: 'Hand Work', amountPerPc: 50 },
-        ],
-        totalMetersPerPc: 3.30,
-        estimatedCostPerPc: 274.50,
-    },
-    {
-        designNo: '357', name: 'Design 357',
-        silaiPrice: 65.00,
-        materials: [
-            { name: 'Cotton Kapad', metersPerPc: 2.00, ratePerMeter: 50 },
-        ],
-        jobCosts: [],
-        totalMetersPerPc: 2.00,
-        estimatedCostPerPc: 165.00,
-    },
-    {
-        designNo: '360', name: 'Design 360',
-        silaiPrice: 80.00,
-        materials: [
-            { name: 'Georgette', metersPerPc: 1.75, ratePerMeter: 70 },
-            { name: 'Inner Lining', metersPerPc: 1.50, ratePerMeter: 35 },
-        ],
-        jobCosts: [
-            { name: 'Embroidery', amountPerPc: 60 },
-        ],
-        totalMetersPerPc: 3.25,
-        estimatedCostPerPc: 315.00,
-    },
-];
-
-// Ensure fallback / seed prices exist in AppState
-function seedDesignRecipePricesIntoAppState() {
-    AppState.designPrices = AppState.designPrices || {};
-    AppState.designPricesByCompany = AppState.designPricesByCompany || {};
-    AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] = AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] || {};
-    FAKE_DESIGN_RECIPES.forEach(r => {
-        if (!AppState.designPrices[r.designNo] && r.silaiPrice) {
-            AppState.designPrices[r.designNo] = r.silaiPrice;
-            AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][r.designNo] = r.silaiPrice;
-        }
-    });
-}
-try { seedDesignRecipePricesIntoAppState(); } catch(e) {}
-
 function round2(n) {
     return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 }
@@ -6244,10 +6169,7 @@ function getEffectiveKarigarList() {
         }
     }
     const active = (AppState.karigars || []).filter(k => !k.isDeleted && !k.deleted && (!k.companyId || k.companyId === AppState.currentCompany));
-    if (active.length > 0) {
-        return active.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    }
-    return FAKE_KARIGAR_LIST.map(k => ({ ...k, companyId: AppState.currentCompany }));
+    return active.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
 // ── Karigar Archive Summary Recompute & Storage ──
@@ -7172,8 +7094,7 @@ function setupKarigarListeners() {
                 resolved = getPriceForDateTime(up, dateValue, timeValue);
             }
             if (!Number.isFinite(resolved)) {
-                const rec = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes) ? KapadState.recipes : []).find(r => r.designNo === up)
-                    || FAKE_DESIGN_RECIPES.find(r => r.designNo === up);
+                const rec = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes) ? KapadState.recipes : []).find(r => r.designNo === up);
                 if (rec && Number.isFinite(parseFloat(rec.silaiPrice))) {
                     resolved = parseFloat(rec.silaiPrice);
                 }
@@ -8062,8 +7983,7 @@ function openKarigarJamaModal(id, name) {
                     } else if (AppState.designPricesByCompany && AppState.designPricesByCompany[DESIGN_PRICE_SCOPE] && Number.isFinite(parseFloat(AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][cleanKey]))) {
                         resolvedPrice = parseFloat(AppState.designPricesByCompany[DESIGN_PRICE_SCOPE][cleanKey]);
                     } else {
-                        const rec = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes) ? KapadState.recipes : []).find(r => r.designNo === cleanKey)
-                            || FAKE_DESIGN_RECIPES.find(r => r.designNo === cleanKey);
+                        const rec = (typeof KapadState !== 'undefined' && Array.isArray(KapadState.recipes) ? KapadState.recipes : []).find(r => r.designNo === cleanKey);
                         if (rec && Number.isFinite(parseFloat(rec.silaiPrice))) {
                             resolvedPrice = parseFloat(rec.silaiPrice);
                         }
@@ -10437,11 +10357,10 @@ const KapadState = {
     _currentLotId: null,   // for detail modal
 };
 
-// ── Helper: get effective karigar list (live + fake fallback) ──────────
+// ── Helper: get effective karigar list ─────────────────────────────────
 function getEffectiveKarigarListForKapad() {
-    const live = (AppState.karigars || []).filter(k => !k.isDeleted && !k.deleted && k.companyId === AppState.currentCompany);
-    if (live.length > 0) return live;
-    return FAKE_KARIGAR_LIST;
+    const live = (AppState.karigars || []).filter(k => !k.isDeleted && !k.deleted && (!k.companyId || k.companyId === AppState.currentCompany));
+    return live.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
 // ── Escape HTML ────────────────────────────────────────────────────────
@@ -10972,26 +10891,21 @@ async function renderKapadLotPage() {
     // Load data
     showLoader('Loading Kapad & Lot data...');
     try {
-        // Try Firestore first; fall back to fake data for designs if Firestore is empty
         let recipes = [];
         let lots = [];
         try {
             recipes = await FirebaseService.getDesignRecipes(companyId);
         } catch(e) { console.warn('[Kapad] getDesignRecipes error:', e); }
-        if (recipes.length === 0) {
-            // Seed fake recipes for testing (in-memory only, tagged with companyId)
-            recipes = FAKE_DESIGN_RECIPES.map(r => ({ ...r, companyId, id: `${companyId}__${r.designNo}`, _isFake: true }));
-        }
 
         try {
             lots = await FirebaseService.getProductionLots(companyId);
         } catch(e) { console.warn('[Kapad] getProductionLots error:', e); }
 
-        KapadState.recipes = recipes;
-        KapadState.lots = lots;
+        KapadState.recipes = recipes || [];
+        KapadState.lots = lots || [];
 
-        renderKapadMetrics(lots);
-        renderDesignMasterTab(recipes);
+        renderKapadMetrics(KapadState.lots);
+        renderDesignMasterTab(KapadState.recipes);
         filterAndRenderLots();
 
         if (!KapadState._bindsDone) {
