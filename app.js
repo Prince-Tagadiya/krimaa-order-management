@@ -10483,7 +10483,12 @@ function renderLotsGrid(lots, containerId) {
                     <div style="font-size:0.75rem;color:#64748b;margin-top:2px;">${esc(l.designNo)} · ${esc(l.designName)}</div>
                     <div style="font-size:0.72rem;color:#94a3b8;">${esc(l.date || '')}</div>
                 </div>
-                <span class="lot-card-status">${statusLabel}</span>
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span class="lot-card-status">${statusLabel}</span>
+                    <button class="btn-icon btn-delete-lot" data-lot-id="${esc(l.id)}" data-lot-no="${esc(l.lotNumber)}" title="Delete Lot" style="color:#ef4444;padding:3px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:1.1rem;cursor:pointer;">
+                        <i class='bx bx-trash'></i>
+                    </button>
+                </div>
             </div>
             <div class="lot-card-body">
                 <div class="lot-card-row">
@@ -11440,8 +11445,15 @@ function bindKapadEvents() {
             const pdfBtn = e.target.closest('.btn-lot-download-pdf');
             const detailBtn = e.target.closest('.btn-lot-detail');
             const submitBtn = e.target.closest('.btn-lot-submit');
-            const lotId = (printBtn || pdfBtn || detailBtn || submitBtn)?.dataset.lotId;
+            const deleteBtn = e.target.closest('.btn-delete-lot');
+            const lotId = (printBtn || pdfBtn || detailBtn || submitBtn || deleteBtn)?.dataset.lotId;
             if (!lotId) return;
+
+            if (deleteBtn) {
+                const lotNo = deleteBtn.dataset.lotNo;
+                deleteLotAction(lotId, lotNo);
+                return;
+            }
 
             const lot = KapadState.lots.find(x => x.id === lotId);
             if (printBtn && lot) {
@@ -11510,6 +11522,11 @@ function bindKapadEvents() {
         if (KapadState._currentLotId) openSubmitKarigarModal(KapadState._currentLotId);
     });
     document.getElementById('lot-detail-close-btn')?.addEventListener('click', closeLotAction);
+    document.getElementById('lot-detail-delete-btn')?.addEventListener('click', () => {
+        if (KapadState._currentLotId) {
+            deleteLotAction(KapadState._currentLotId);
+        }
+    });
 
     // ── Submit Karigar Modal ────────────────────────────────────────────
     document.getElementById('close-submit-karigar-modal')?.addEventListener('click', closeSubmitKarigarModal);
@@ -12233,6 +12250,31 @@ async function closeLotAction() {
         await renderKapadLotPage();
     } catch(e) {
         showToast('Error: ' + e.message, 'error');
+    } finally {
+        hideLoader();
+    }
+}
+
+// ── Delete Lot ────────────────────────────────────────────────────────────
+async function deleteLotAction(lotId, lotNumber) {
+    if (!lotId) return;
+    const targetLot = KapadState.lots.find(l => l.id === lotId);
+    const dispNo = lotNumber || targetLot?.lotNumber || 'this lot';
+    if (!confirm(`Are you sure you want to permanently delete lot ${dispNo}?\n\nThis will remove it from production records and cannot be undone.`)) {
+        return;
+    }
+
+    showLoader(`Deleting lot ${dispNo}...`);
+    try {
+        await FirebaseService.deleteProductionLot(lotId);
+        if (KapadState._currentLotId === lotId) {
+            closeLotDetailModal();
+        }
+        showToast(`Lot ${dispNo} deleted`, 'success');
+        await renderKapadLotPage();
+    } catch(e) {
+        console.error(e);
+        showToast('Error deleting lot: ' + e.message, 'error');
     } finally {
         hideLoader();
     }

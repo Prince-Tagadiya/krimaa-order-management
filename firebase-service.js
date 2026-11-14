@@ -2818,6 +2818,12 @@ const FirebaseService = (() => {
         return { success: true };
     }
 
+    async function deleteProductionLot(lotId) {
+        const db = getDb();
+        await db.collection('production_lots').doc(lotId).delete();
+        return { success: true };
+    }
+
     // ───── PUBLIC API ─────
     return {
         init, getDb, getGlobalReport,
@@ -2852,6 +2858,7 @@ const FirebaseService = (() => {
         getProductionLots,
         submitLotWork,
         closeLot,
+        deleteProductionLot,
         // Write buffer
         bufferWrite, flushWrites, getPendingCount,
         // Integrity Fix
