@@ -10610,10 +10610,14 @@ function resolveLotCostDetails(lot) {
     const fabricCostPerPc = targetPcs > 0 ? (totalFabricCost / targetPcs) : 0;
 
     // 4. Job costs
-    const jobCosts = (Array.isArray(lot.jobCosts) && lot.jobCosts.length > 0)
+    const rawJobCosts = (Array.isArray(lot.jobCosts) && lot.jobCosts.length > 0)
         ? lot.jobCosts
         : (recipe && Array.isArray(recipe.jobCosts) ? recipe.jobCosts : []);
-    const jobCostsPerPc = (jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
+    const jobCosts = (rawJobCosts || []).map(j => ({
+        name: String(j.name || '').trim(),
+        amountPerPc: parseFloat(j.amountPerPc) || 0
+    })).filter(j => j.name && j.amountPerPc > 0);
+    const jobCostsPerPc = jobCosts.reduce((s, j) => s + j.amountPerPc, 0);
 
     // 5. Total cost per piece and total batch expense
     const costPerPc = fabricCostPerPc + silaiPrice + jobCostsPerPc;
@@ -10771,10 +10775,11 @@ function printDirectDualLotSlip(lot) {
                     <span class="chip-lbl">Silai Stitching:</span>
                     <strong style="color:#059669;">₹${cost.silaiPrice.toFixed(2)}/pc</strong>
                 </div>
-                ${cost.jobCostsPerPc > 0 ? `
+                ${cost.jobCosts.length > 0 ? `
                 <div class="cost-chip">
                     <span class="chip-lbl">Other Job Work:</span>
-                    <strong>₹${cost.jobCostsPerPc.toFixed(2)}/pc</strong>
+                    <strong style="color:#2563eb;">₹${cost.jobCostsPerPc.toFixed(2)}/pc</strong>
+                    <span style="color:#64748b;font-size:8px;">(${cost.jobCosts.map(j => `${esc(j.name)} ₹${j.amountPerPc.toFixed(0)}`).join(', ')})</span>
                 </div>` : ''}
                 <div class="cost-chip cost-chip-highlight">
                     <span class="chip-lbl">EST. COST / PC:</span>
@@ -10786,6 +10791,67 @@ function printDirectDualLotSlip(lot) {
                 </div>
             </div>
         ` : '';
+
+        // Dedicated Job Work & Labour Table for Office Copy
+        let officeJobWorkTableHtml = '';
+        if (isOffice) {
+            let jobIdx = 1;
+            const jobRows = [];
+            if (cost.silaiPrice > 0) {
+                const silaiBatchTotal = (cost.silaiPrice || 0) * targetPcs;
+                jobRows.push(`
+                    <tr>
+                        <td style="text-align:center;width:28px;">${jobIdx++}</td>
+                        <td style="font-weight:700;">Silai / Karigar Stitching Rate</td>
+                        <td style="text-align:right;font-weight:700;color:#059669;">₹${cost.silaiPrice.toFixed(2)}/pc</td>
+                        <td style="text-align:right;font-weight:800;color:#0f172a;">₹${silaiBatchTotal.toFixed(2)}</td>
+                    </tr>
+                `);
+            }
+            (cost.jobCosts || []).forEach(j => {
+                const jRate = parseFloat(j.amountPerPc) || 0;
+                const jBatchTotal = jRate * targetPcs;
+                jobRows.push(`
+                    <tr>
+                        <td style="text-align:center;width:28px;">${jobIdx++}</td>
+                        <td style="font-weight:700;">${esc(j.name || 'Job Work')} <span style="font-size:8px;font-weight:600;color:#64748b;">(Other Job Work)</span></td>
+                        <td style="text-align:right;font-weight:700;color:#2563eb;">₹${jRate.toFixed(2)}/pc</td>
+                        <td style="text-align:right;font-weight:800;color:#0f172a;">₹${jBatchTotal.toFixed(2)}</td>
+                    </tr>
+                `);
+            });
+
+            const totalJobRate = (cost.silaiPrice || 0) + (cost.jobCostsPerPc || 0);
+            const totalJobBatch = totalJobRate * targetPcs;
+
+            if (jobRows.length === 0) {
+                jobRows.push(`<tr><td colspan="4" style="text-align:center;color:#64748b;font-size:9px;padding:3px;">No job work charges defined</td></tr>`);
+            }
+
+            officeJobWorkTableHtml = `
+                <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;margin:4px 0 2px;letter-spacing:0.4px;">
+                    Job Work &amp; Labour Charges (Stitching &amp; Other Processes)
+                </div>
+                <table class="fabric-table job-table">
+                    <thead>
+                        <tr>
+                            <th style="width:28px;text-align:center;">#</th>
+                            <th>JOB WORK / PROCESS NAME</th>
+                            <th style="text-align:right;width:120px;">RATE / PC</th>
+                            <th style="text-align:right;width:140px;">TOTAL FOR ${targetPcs} PCS</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${jobRows.join('')}
+                        <tr class="total-row">
+                            <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL LABOUR &amp; JOB WORK</td>
+                            <td style="text-align:right;font-size:11px;font-weight:900;color:#059669;">₹${totalJobRate.toFixed(2)}/pc</td>
+                            <td style="text-align:right;font-size:12px;font-weight:900;color:#0f172a;">₹${totalJobBatch.toFixed(2)}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            `;
+        }
 
         return `
             <div class="slip-card">
@@ -10803,6 +10869,9 @@ function printDirectDualLotSlip(lot) {
 
                 ${statsHtml}
 
+                <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;margin:2px 0 1px;letter-spacing:0.4px;">
+                    ${isOffice ? 'Fabric &amp; Raw Materials Issued' : 'Fabric Issued'}
+                </div>
                 <table class="fabric-table">
                     <thead>${tableHeaderHtml}</thead>
                     <tbody>
@@ -10810,6 +10879,8 @@ function printDirectDualLotSlip(lot) {
                         ${totalRowHtml}
                     </tbody>
                 </table>
+
+                ${officeJobWorkTableHtml}
 
                 ${officeCostBarHtml}
 
@@ -10831,27 +10902,28 @@ function printDirectDualLotSlip(lot) {
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background: #fff; color: #0f172a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page-wrap { display: flex; flex-direction: column; justify-content: space-between; height: 280mm; max-height: 280mm; }
-    .slip-card { border: 2px solid #0f172a; border-radius: 8px; padding: 10px 12px; background: #fff; height: 133mm; display: flex; flex-direction: column; justify-content: flex-start; }
-    .slip-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 6px; margin-bottom: 6px; }
+    .slip-card { border: 2px solid #0f172a; border-radius: 8px; padding: 9px 12px; background: #fff; height: 133mm; display: flex; flex-direction: column; justify-content: flex-start; }
+    .slip-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 5px; margin-bottom: 5px; }
     .design-label { font-size: 9px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
-    .design-title { font-size: 24px; font-weight: 900; line-height: 1.1; color: #0f172a; }
+    .design-title { font-size: 23px; font-weight: 900; line-height: 1.1; color: #0f172a; }
     .design-subname { font-size: 13px; font-weight: 600; color: #475569; }
-    .slip-sub { font-size: 9.5px; color: #64748b; font-weight: 600; margin-top: 2px; }
+    .slip-sub { font-size: 9px; color: #64748b; font-weight: 600; margin-top: 2px; }
     .copy-badge { display: inline-block; padding: 3px 12px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
     .header-lot-no { font-size: 11px; font-weight: 600; color: #475569; margin-top: 3px; }
-    .stats-grid { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr 1.2fr; gap: 5px; margin-bottom: 6px; }
+    .stats-grid { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr 1.2fr; gap: 5px; margin-bottom: 5px; }
     .stats-grid-office { grid-template-columns: 1fr 1.3fr 0.9fr 1.1fr 1fr 1fr; }
-    .stat-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 7px; background: #f8fafc; }
-    .stat-label { font-size: 8px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
-    .stat-val { font-size: 12.5px; font-weight: 900; color: #0f172a; }
+    .stat-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 3px 7px; background: #f8fafc; }
+    .stat-label { font-size: 7.5px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
+    .stat-val { font-size: 12px; font-weight: 900; color: #0f172a; }
     .text-primary { color: #2563eb; }
     .text-success { color: #059669; }
-    .fabric-table { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 3px; }
-    .fabric-table th, .fabric-table td { border: 1px solid #cbd5e1; padding: 4px 6px; }
-    .fabric-table th { background: #0f172a; color: #fff; font-size: 8.5px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+    .fabric-table { width: 100%; border-collapse: collapse; font-size: 9px; margin-top: 2px; }
+    .fabric-table th, .fabric-table td { border: 1px solid #cbd5e1; padding: 2.4px 5px; }
+    .fabric-table th { background: #0f172a; color: #fff; font-size: 8px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+    .job-table th { background: #1e293b; }
     .fabric-table tbody tr:nth-child(even) { background: #f8fafc; }
     .total-row td { background: #e2e8f0 !important; font-weight: 800; }
-    .cost-summary-box { margin-top: 5px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 9.5px; }
+    .cost-summary-box { margin-top: 4px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 3px 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; font-size: 9px; }
     .cost-chip { display: flex; align-items: center; gap: 4px; }
     .cost-chip .chip-lbl { color: #64748b; font-weight: 700; text-transform: uppercase; font-size: 8px; }
     .cost-chip-highlight { background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1; }
@@ -11084,8 +11156,77 @@ function downloadDualLotSlipPdf(lot) {
                     }
                 });
 
+                // OFFICE JOB WORK & LABOUR CHARGES TABLE (INCLUDES OTHER JOB WORK)
+                const jobTableHead = [['#', 'Job Work & Labour Charges (Other Processes)', 'Rate / Pc', `Total For ${lot.targetPcs || 0} Pcs`]];
+                const jobTableRows = [];
+                let jIdx = 1;
+                if (cost.silaiPrice > 0) {
+                    const silaiBatch = (lot.targetPcs || 0) * cost.silaiPrice;
+                    jobTableRows.push([
+                        String(jIdx++),
+                        'Silai (Karigar Stitching Rate)',
+                        `₹${cost.silaiPrice.toFixed(2)}/pc`,
+                        `₹${silaiBatch.toFixed(2)}`
+                    ]);
+                }
+                (cost.jobCosts || []).forEach(j => {
+                    const jAmt = parseFloat(j.amountPerPc) || 0;
+                    const jBatch = (lot.targetPcs || 0) * jAmt;
+                    jobTableRows.push([
+                        String(jIdx++),
+                        `${String(j.name || 'Job Work')} (Other Job Work)`,
+                        `₹${jAmt.toFixed(2)}/pc`,
+                        `₹${jBatch.toFixed(2)}`
+                    ]);
+                });
+                const totalJobRate = (cost.silaiPrice || 0) + (cost.jobCostsPerPc || 0);
+                const totalJobBatch = (lot.targetPcs || 0) * totalJobRate;
+                if (jobTableRows.length === 0) {
+                    jobTableRows.push(['-', 'No job work charges recorded', '-', '-']);
+                } else {
+                    jobTableRows.push([
+                        '',
+                        'TOTAL LABOUR & JOB WORK',
+                        `₹${totalJobRate.toFixed(2)}/pc`,
+                        `₹${totalJobBatch.toFixed(2)}`
+                    ]);
+                }
+
+                doc.autoTable({
+                    startY: doc.lastAutoTable.finalY + 2.5,
+                    margin: { left: 15, right: 15 },
+                    head: jobTableHead,
+                    body: jobTableRows,
+                    theme: 'grid',
+                    styles: {
+                        font: 'helvetica',
+                        fontSize: 6.8,
+                        cellPadding: 1.3,
+                        lineColor: [203, 213, 225],
+                        lineWidth: 0.2
+                    },
+                    headStyles: {
+                        fillColor: [30, 41, 59],
+                        textColor: [255, 255, 255],
+                        fontStyle: 'bold',
+                        halign: 'left'
+                    },
+                    columnStyles: {
+                        0: { cellWidth: 10, halign: 'center' },
+                        1: { cellWidth: 90 },
+                        2: { cellWidth: 38, fontStyle: 'bold', halign: 'right' },
+                        3: { cellWidth: 42, fontStyle: 'bold', halign: 'right' }
+                    },
+                    didParseCell: (data) => {
+                        if (data.row.index === jobTableRows.length - 1 && jobTableRows.length > 1) {
+                            data.cell.styles.fontStyle = 'bold';
+                            data.cell.styles.fillColor = [226, 232, 240];
+                        }
+                    }
+                });
+
                 // Office Cost Breakdown Card below table
-                const finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY + 3 : tableY + 35;
+                const finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY + 2.5 : tableY + 50;
                 doc.setFillColor(248, 250, 252);
                 doc.setDrawColor(203, 213, 225);
                 doc.roundedRect(15, finalY, 180, 12, 1.5, 1.5, 'FD');
@@ -11097,7 +11238,8 @@ function downloadDualLotSlipPdf(lot) {
                 doc.text(`Fabric: ₹${cost.fabricCostPerPc.toFixed(2)}/pc (₹${cost.totalFabricCost.toFixed(2)})`, 18, finalY + 4.5);
                 doc.text(`Silai Stitching: ₹${cost.silaiPrice.toFixed(2)}/pc`, 78, finalY + 4.5);
                 if (cost.jobCostsPerPc > 0) {
-                    doc.text(`Other Work: ₹${cost.jobCostsPerPc.toFixed(2)}/pc`, 135, finalY + 4.5);
+                    const jobNames = (cost.jobCosts || []).map(j => `${j.name}: ₹${(parseFloat(j.amountPerPc)||0).toFixed(0)}`).join(', ');
+                    doc.text(`Other Work: ₹${cost.jobCostsPerPc.toFixed(2)}/pc (${jobNames})`, 128, finalY + 4.5);
                 }
 
                 // Row 2: Totals
@@ -12009,15 +12151,34 @@ function openLotDetailModal(lotId) {
     `;
 
     // Fabric
+    const cost = resolveLotCostDetails(lot);
     const fabricHtml = (lot.fabricGiven || []).map(f =>
         `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #f1f5f9;font-size:0.82rem;">
             <span>${esc(f.name)}</span><strong>${(parseFloat(f.meters)||0).toFixed(2)} m</strong>
         </div>`
     ).join('') || '<div class="text-muted text-xs">No fabric recorded</div>';
+
+    const jobWorkDetailHtml = (cost.silaiPrice > 0 || (cost.jobCosts && cost.jobCosts.length > 0)) ? `
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid #e2e8f0;">
+            <div style="font-weight:700;font-size:0.8rem;color:#475569;margin-bottom:4px;text-transform:uppercase;">Job Work &amp; Stitching Rates</div>
+            ${cost.silaiPrice > 0 ? `
+            <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem;">
+                <span>Silai (Stitching Rate)</span><strong style="color:#059669;">₹${cost.silaiPrice.toFixed(2)}/pc</strong>
+            </div>` : ''}
+            ${(cost.jobCosts || []).map(j => `
+            <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:0.82rem;">
+                <span>${esc(j.name)} (Other Job Work)</span><strong style="color:#2563eb;">₹${(parseFloat(j.amountPerPc)||0).toFixed(2)}/pc</strong>
+            </div>`).join('')}
+            <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:0.82rem;font-weight:700;border-top:1px dashed #cbd5e1;margin-top:2px;">
+                <span>Total Labour &amp; Job Work</span><span>₹${(cost.silaiPrice + cost.jobCostsPerPc).toFixed(2)}/pc</span>
+            </div>
+        </div>
+    ` : '';
+
     document.getElementById('lot-detail-fabric').innerHTML = fabricHtml +
         `<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:0.85rem;font-weight:700;">
             <span>Consumed</span><span>${(parseFloat(lot.consumedMeters)||0).toFixed(2)} m</span>
-        </div>`;
+        </div>` + jobWorkDetailHtml;
 
     // Submissions
     const subs = lot.submissions || [];
