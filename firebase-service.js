@@ -2614,14 +2614,17 @@ const FirebaseService = (() => {
 
     // ───── KAPAD & LOT MANAGEMENT ─────
 
-    async function saveDesignRecipe(companyId, designNo, name, materials, jobCosts, silaiPrice = 0) {
+    async function saveDesignRecipe(companyId, designNo, name, materials, jobCosts, silaiPrice = 0, embroidery = []) {
         const db = getDb();
         const docId = `${companyId}__${String(designNo).trim().toUpperCase()}`;
         const numSilaiPrice = parseFloat(silaiPrice) || 0;
-        const totalMetersPerPc = (materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0), 0);
+        const totalFabricMeters = (materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0), 0);
+        const totalEmbroideryMeters = (embroidery || []).reduce((s, e) => s + (parseFloat(e.metersPerPc) || 0), 0);
+        const totalMetersPerPc = totalFabricMeters + totalEmbroideryMeters;
         const materialsCost = (materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
+        const embroideryCost = (embroidery || []).reduce((s, e) => s + (parseFloat(e.metersPerPc) || 0) * (parseFloat(e.ratePerMeter) || 0), 0);
         const otherJobCost = (jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
-        const estimatedCostPerPc = materialsCost + numSilaiPrice + otherJobCost;
+        const estimatedCostPerPc = materialsCost + embroideryCost + numSilaiPrice + otherJobCost;
 
         await db.collection('design_recipes').doc(docId).set({
             companyId,
@@ -2632,6 +2635,11 @@ const FirebaseService = (() => {
                 name: String(m.name || '').trim(),
                 metersPerPc: parseFloat(m.metersPerPc) || 0,
                 ratePerMeter: parseFloat(m.ratePerMeter) || 0,
+            })),
+            embroidery: (embroidery || []).map(e => ({
+                name: String(e.name || '').trim(),
+                metersPerPc: parseFloat(e.metersPerPc) || 0,
+                ratePerMeter: parseFloat(e.ratePerMeter) || 0,
             })),
             jobCosts: (jobCosts || []).map(j => ({
                 name: String(j.name || '').trim(),
@@ -2659,8 +2667,9 @@ const FirebaseService = (() => {
                 const data = doc.data();
                 const numSilai = parseFloat(silaiPrice) || 0;
                 const materialsCost = (data.materials || []).reduce((s, m) => s + (parseFloat(m.metersPerPc) || 0) * (parseFloat(m.ratePerMeter) || 0), 0);
+                const embroideryCost = (data.embroidery || []).reduce((s, e) => s + (parseFloat(e.metersPerPc) || 0) * (parseFloat(e.ratePerMeter) || 0), 0);
                 const otherJobCost = (data.jobCosts || []).reduce((s, j) => s + (parseFloat(j.amountPerPc) || 0), 0);
-                const estimatedCostPerPc = materialsCost + numSilai + otherJobCost;
+                const estimatedCostPerPc = materialsCost + embroideryCost + numSilai + otherJobCost;
                 await ref.update({
                     silaiPrice: Math.round(numSilai * 100) / 100,
                     estimatedCostPerPc: Math.round(estimatedCostPerPc * 100) / 100,

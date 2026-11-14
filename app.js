@@ -8766,7 +8766,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         format: 'a4'
     });
 
-    const companyRaw = getCompanyDisplayName(AppState.currentCompany || 'company1') || 'SHREE SAI';
+    const companyRaw = getBillBrandTitle(AppState.currentCompany || 'company1');
     const companyName = companyRaw.toUpperCase();
     let periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
     const todayFormatted = formatISODateForDisplay(getTodayISODate());
@@ -9199,7 +9199,7 @@ function renderMasterSummaryPayrollSheet(doc, karigars, txs, options = {}) {
     };
 
     const currentCompany = AppState.currentCompany || 'company1';
-    const companyName = getCompanyDisplayName(currentCompany);
+    const companyName = getBillBrandTitle(currentCompany);
     let periodLabel = options.periodLabel;
     if (!periodLabel) {
         if (AppState.viewingKarigarBackupId) {
@@ -9473,7 +9473,7 @@ async function exportKarigarMasterSummaryPayrollPDF(options = {}) {
             printPDFViaHiddenIframe(doc, 'Master Karigar Payroll Summary');
         } else {
             const currentCompany = AppState.currentCompany || 'company1';
-            const companyName = getCompanyDisplayName(currentCompany);
+            const companyName = getBillBrandTitle(currentCompany);
             const periodSafe = (periodLabel || 'Current_Month').replace(/[^a-zA-Z0-9_-]/g, '_');
             const cleanComp = companyName.replace(/[^a-zA-Z0-9_-]/g, '_');
             const filename = `Master_Karigar_Payroll_Summary_${cleanComp}_${periodSafe}_${getTodayISODate()}.pdf`;
@@ -9803,7 +9803,7 @@ function generateCompanyMonthlyReportPDF(companyId, rawTxs, options = {}) {
     });
 
     const safeCompany = companyId || AppState.currentCompany || 'company1';
-    const compName = (getCompanyDisplayName(safeCompany) || 'SHREE SAI').toUpperCase();
+    const compName = getBillBrandTitle(safeCompany).toUpperCase();
     const periodLabel = options.periodLabel || getKarigarCurrentCycleLabel();
 
     const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
@@ -10421,6 +10421,11 @@ function renderDesignMasterTab(recipes) {
                 <span>${esc(m.name)}</span>
                 <span>${(parseFloat(m.metersPerPc)||0).toFixed(2)} m × ₹${(parseFloat(m.ratePerMeter)||0).toFixed(0)} = <strong>₹${((parseFloat(m.metersPerPc)||0)*(parseFloat(m.ratePerMeter)||0)).toFixed(0)}</strong></span>
             </div>`).join('');
+        const embroideryRows = (r.embroidery || []).map(e => `
+            <div class="design-recipe-material-row" style="color:#7c3aed">
+                <span>${esc(e.name)}</span>
+                <span>${(parseFloat(e.metersPerPc)||0).toFixed(2)} m × ₹${(parseFloat(e.ratePerMeter)||0).toFixed(0)} = <strong>₹${((parseFloat(e.metersPerPc)||0)*(parseFloat(e.ratePerMeter)||0)).toFixed(0)}</strong></span>
+            </div>`).join('');
         const jobRows = jobCosts.map(j => {
             const q = parseFloat(j.qtyPerPc) || 1;
             const r = parseFloat(j.rate) || (parseFloat(j.amountPerPc) || 0);
@@ -10449,6 +10454,7 @@ function renderDesignMasterTab(recipes) {
                 <div style="font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:3px;">Materials</div>
                 ${materialRows || '<div style="font-size:0.78rem;color:#94a3b8;">No materials added</div>'}
             </div>
+            ${embroideryRows ? `<div class="mt-1"><div style="font-size:0.7rem;font-weight:700;color:#7c3aed;text-transform:uppercase;margin-bottom:3px;">Embroidered Work</div>${embroideryRows}</div>` : ''}
             ${jobRows ? `<div class="mt-1"><div style="font-size:0.7rem;font-weight:700;color:#94a3b8;text-transform:uppercase;margin-bottom:3px;">Other Job Work</div>${jobRows}</div>` : ''}
             <div class="design-recipe-totals">
                 <span>Total: ${(parseFloat(r.totalMetersPerPc)||0).toFixed(2)} m/pc</span>
@@ -10459,6 +10465,15 @@ function renderDesignMasterTab(recipes) {
             </button>
         </div>`;
     }).join('');
+}
+
+// ── Bill & Slip Brand Name Helper (Guarantees KRIMAA on every bill and copy) ──
+function getBillBrandTitle(companyId = AppState.currentCompany) {
+    const raw = typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(companyId) : '';
+    const clean = String(raw || '').trim().toUpperCase();
+    if (!clean || clean === 'KRIMAA') return 'KRIMAA APPARELS';
+    if (clean.includes('KRIMAA')) return clean;
+    return `KRIMAA APPARELS · ${clean}`;
 }
 
 // ── Format Lot Date & Time Helper ─────────────────────────────────────
@@ -10643,8 +10658,12 @@ function resolveLotCostDetails(lot) {
             const recMat = recipe && Array.isArray(recipe.materials)
                 ? recipe.materials.find(m => String(m.name || '').trim().toLowerCase() === String(f.name || '').trim().toLowerCase())
                 : null;
-            if (recMat && Number.isFinite(parseFloat(recMat.ratePerMeter))) {
-                rate = parseFloat(recMat.ratePerMeter);
+            const recEmb = !recMat && recipe && Array.isArray(recipe.embroidery)
+                ? recipe.embroidery.find(e => String(e.name || '').trim().toLowerCase() === String(f.name || '').trim().toLowerCase())
+                : null;
+            const foundItem = recMat || recEmb;
+            if (foundItem && Number.isFinite(parseFloat(foundItem.ratePerMeter))) {
+                rate = parseFloat(foundItem.ratePerMeter);
             } else if (recipe && Array.isArray(recipe.materials) && recipe.materials.length === 1 && Number.isFinite(parseFloat(recipe.materials[0].ratePerMeter))) {
                 rate = parseFloat(recipe.materials[0].ratePerMeter);
             } else {
@@ -10695,7 +10714,7 @@ function resolveLotCostDetails(lot) {
 // ── Direct Dual Lot Slip Print (Office Copy with Pricing + Floor Copy without Pricing)
 function printDirectDualLotSlip(lot) {
     if (!lot) return;
-    const companyName = (typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(lot.companyId || AppState.currentCompany) : '') || 'KRIMAA APPARELS';
+    const companyName = getBillBrandTitle(lot.companyId || AppState.currentCompany);
     const safeLotNo = esc(lot.lotNumber || '-');
     const safeDesign = esc(lot.designNo || '-');
     const safeDesignName = esc(lot.designName || lot.designNo || '');
@@ -10744,14 +10763,14 @@ function printDirectDualLotSlip(lot) {
                 </tr>
             `;
         } else {
-            // FLOOR / MAAL COPY: Zero pricing / purely production parameters
+            // FLOOR / MAAL COPY: Zero pricing / purely production parameters with Remark column
             tableHeaderHtml = `
                 <tr>
                     <th style="width:32px;text-align:center;">#</th>
                     <th>FABRIC / MATERIAL ITEM</th>
-                    <th style="text-align:right;">ISSUED METERS</th>
-                    <th style="text-align:right;">STD RECIPE</th>
-                    <th style="text-align:right;">ACTUAL/PC</th>
+                    <th style="text-align:right;width:130px;">ISSUED METERS</th>
+                    <th style="text-align:right;width:110px;">ACTUAL/PC</th>
+                    <th style="width:190px;text-align:left;">REMARK</th>
                 </tr>
             `;
 
@@ -10760,16 +10779,17 @@ function printDirectDualLotSlip(lot) {
                     <td style="text-align:center;width:32px;">${idx + 1}</td>
                     <td style="font-weight:700;">${esc(f.name || 'Fabric')}</td>
                     <td style="text-align:right;font-weight:800;font-size:12px;">${(parseFloat(f.meters) || 0).toFixed(2)} m</td>
-                    <td style="text-align:right;color:#475569;">${stdRate} m/pc</td>
                     <td style="text-align:right;color:#475569;">${targetPcs ? (((parseFloat(f.meters) || 0) / targetPcs).toFixed(2)) + ' m/pc' : '-'}</td>
+                    <td style="background:#fff;height:26px;"></td>
                 </tr>
-            `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">${stdRate} m/pc</td><td style="text-align:right;">-</td></tr>`;
+            `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">-</td><td style="background:#fff;height:26px;"></td></tr>`;
 
             totalRowHtml = `
                 <tr class="total-row">
                     <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
                     <td style="text-align:right;font-size:13px;font-weight:900;">${totalMeters} m</td>
-                    <td colspan="2" style="text-align:right;color:#64748b;font-size:10px;">For ${targetPcs} pieces</td>
+                    <td style="text-align:right;color:#64748b;font-size:10px;">${targetPcs ? (parseFloat(totalMeters)/targetPcs).toFixed(2) + ' m/pc' : ''}</td>
+                    <td style="background:#e2e8f0;font-size:9.5px;color:#475569;font-weight:700;">For ${targetPcs} pieces</td>
                 </tr>
             `;
         }
@@ -11033,7 +11053,7 @@ function downloadDualLotSlipPdf(lot) {
             format: 'a4'
         });
 
-        const companyName = (typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(lot.companyId || AppState.currentCompany) : '') || 'KRIMAA APPARELS';
+        const companyName = getBillBrandTitle(lot.companyId || AppState.currentCompany);
         const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
         const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
         const cost = resolveLotCostDetails(lot);
@@ -11308,23 +11328,23 @@ function downloadDualLotSlipPdf(lot) {
                 doc.setTextColor(5, 150, 105); // emerald green
                 doc.text(`TOTAL LOT EXPENSE: ₹${Math.round(cost.totalLotCost).toLocaleString('en-IN')}`, 105, finalY + 9.5);
             } else {
-                // FLOOR COPY TABLE: Strictly quantities and pieces only
-                const floorTableHead = [['#', 'Fabric / Material Item', 'Issued Meters', 'Std Recipe', 'Actual/Pc']];
+                // FLOOR COPY TABLE: Strictly quantities and pieces with empty Remark column
+                const floorTableHead = [['#', 'Fabric / Material Item', 'Issued Meters', 'Actual/Pc', 'Remark']];
                 const floorTableRows = (lot.fabricGiven || []).map((f, idx) => [
                     String(idx + 1),
                     f.name || 'Fabric',
                     `${(parseFloat(f.meters) || 0).toFixed(2)} m`,
-                    `${stdRate} m/pc`,
-                    lot.targetPcs ? `${Math.round(((parseFloat(f.meters) || 0) / lot.targetPcs) * 100) / 100} m/pc` : '-'
+                    lot.targetPcs ? `${Math.round(((parseFloat(f.meters) || 0) / lot.targetPcs) * 100) / 100} m/pc` : '-',
+                    ''
                 ]);
                 if (floorTableRows.length === 0) {
-                    floorTableRows.push(['1', 'Main Fabric', `${totalMeters} m`, `${stdRate} m/pc`, '-']);
+                    floorTableRows.push(['1', 'Main Fabric', `${totalMeters} m`, '-', '']);
                 }
                 floorTableRows.push([
                     '',
                     'TOTAL FABRIC ISSUED',
                     `${totalMeters} m`,
-                    '',
+                    lot.targetPcs ? `${(parseFloat(totalMeters)/lot.targetPcs).toFixed(2)} m/pc` : '',
                     `For ${lot.targetPcs || 0} pcs`
                 ]);
 
@@ -11337,7 +11357,7 @@ function downloadDualLotSlipPdf(lot) {
                     styles: {
                         font: 'helvetica',
                         fontSize: 7.5,
-                        cellPadding: 1.8,
+                        cellPadding: 2.2,
                         lineColor: [203, 213, 225],
                         lineWidth: 0.2
                     },
@@ -11349,10 +11369,10 @@ function downloadDualLotSlipPdf(lot) {
                     },
                     columnStyles: {
                         0: { cellWidth: 10, halign: 'center' },
-                        1: { cellWidth: 78 },
-                        2: { cellWidth: 32, fontStyle: 'bold', halign: 'right' },
-                        3: { cellWidth: 30, halign: 'right' },
-                        4: { cellWidth: 30, halign: 'right' }
+                        1: { cellWidth: 64 },
+                        2: { cellWidth: 28, fontStyle: 'bold', halign: 'right' },
+                        3: { cellWidth: 28, halign: 'right' },
+                        4: { cellWidth: 50, halign: 'left' }
                     },
                     didParseCell: (data) => {
                         if (data.row.index === floorTableRows.length - 1) {
@@ -11527,6 +11547,7 @@ function bindKapadEvents() {
     document.getElementById('modal-design-recipe')?.addEventListener('click', e => { if (e.target === document.getElementById('modal-design-recipe')) closeDesignRecipeModal(); });
 
     document.getElementById('btn-add-material-row')?.addEventListener('click', () => addMaterialRow());
+    document.getElementById('btn-add-embroidery-row')?.addEventListener('click', () => addEmbroideryRow());
     document.getElementById('btn-add-jobcost-row')?.addEventListener('click', () => addJobCostRow());
 
     document.getElementById('save-design-recipe-btn')?.addEventListener('click', saveDesignRecipeAction);
@@ -11601,6 +11622,17 @@ function recalcRecipeTotals() {
         if (costField) costField.value = cost > 0 ? cost.toFixed(2) : (m > 0 || r > 0 ? '0.00' : '');
     });
 
+    // Embroidered Work Consumption (Meters * Rate)
+    document.querySelectorAll('#recipe-embroidery-list .dynamic-material-row').forEach(row => {
+        const m = parseFloat(row.querySelector('.row-meters')?.value) || 0;
+        const r = parseFloat(row.querySelector('.row-rate')?.value) || 0;
+        const cost = m * r;
+        totalMeters += m;
+        totalCost += cost;
+        const costField = row.querySelector('.row-cost');
+        if (costField) costField.value = cost > 0 ? cost.toFixed(2) : (m > 0 || r > 0 ? '0.00' : '');
+    });
+
     // Compulsory Silai Rate
     const silaiVal = parseFloat(document.getElementById('recipe-silai-price')?.value) || 0;
     totalCost += silaiVal;
@@ -11620,17 +11652,39 @@ function recalcRecipeTotals() {
     document.getElementById('recipe-total-cost').textContent = `₹${totalCost.toFixed(2)}`;
 }
 
-// ── Material / job cost rows ───────────────────────────────────────────
+// ── Material / embroidery / job cost rows ──────────────────────────────
 function addMaterialRow(data = {}) {
     const list = document.getElementById('recipe-materials-list');
     if (!list) return;
     const row = document.createElement('div');
     row.className = 'dynamic-material-row';
     row.innerHTML = `
-        <input class="row-name" type="text" placeholder="Material item name (e.g. Embroidery)" value="${esc(data.name || '')}">
+        <input class="row-name" type="text" placeholder="Material item name (e.g. Main Fabric, Enar)" value="${esc(data.name || '')}">
         <input class="row-meters" type="number" step="0.01" min="0" placeholder="0.00" value="${data.metersPerPc || ''}">
         <input class="row-rate" type="number" step="0.01" min="0" placeholder="0.00" value="${data.ratePerMeter || ''}">
         <input class="row-cost" type="number" readonly placeholder="0.00" value="${data.metersPerPc && data.ratePerMeter ? ((parseFloat(data.metersPerPc)||0)*(parseFloat(data.ratePerMeter)||0)).toFixed(2) : ''}">
+        <button class="row-delete-btn" type="button" title="Remove"><i class='bx bx-trash'></i></button>
+    `;
+    row.querySelector('.row-delete-btn').addEventListener('click', () => { row.remove(); recalcRecipeTotals(); });
+    row.querySelector('.row-meters').addEventListener('input', recalcRecipeTotals);
+    row.querySelector('.row-rate').addEventListener('input', recalcRecipeTotals);
+    list.appendChild(row);
+    recalcRecipeTotals();
+}
+
+function addEmbroideryRow(data = {}) {
+    const list = document.getElementById('recipe-embroidery-list');
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'dynamic-material-row';
+    const mVal = parseFloat(data.metersPerPc) || 0;
+    const rVal = parseFloat(data.ratePerMeter) || 0;
+    const costVal = (mVal > 0 && rVal > 0) ? (mVal * rVal).toFixed(2) : '';
+    row.innerHTML = `
+        <input class="row-name" type="text" placeholder="Embroidery work item (e.g. Work, Dori, Sequins)" value="${esc(data.name || '')}">
+        <input class="row-meters" type="number" step="0.01" min="0" placeholder="0.00" value="${data.metersPerPc || ''}">
+        <input class="row-rate" type="number" step="0.01" min="0" placeholder="0.00" value="${data.ratePerMeter || ''}">
+        <input class="row-cost" type="number" readonly placeholder="0.00" value="${costVal}">
         <button class="row-delete-btn" type="button" title="Remove"><i class='bx bx-trash'></i></button>
     `;
     row.querySelector('.row-delete-btn').addEventListener('click', () => { row.remove(); recalcRecipeTotals(); });
@@ -11828,12 +11882,15 @@ function openDesignRecipeModal(recipe = null) {
     }
 
     document.getElementById('recipe-materials-list').innerHTML = '';
+    const embList = document.getElementById('recipe-embroidery-list');
+    if (embList) embList.innerHTML = '';
     document.getElementById('recipe-jobcosts-list').innerHTML = '';
     document.getElementById('recipe-total-meters').textContent = '0.00';
     document.getElementById('recipe-total-cost').textContent = '₹0.00';
 
     if (recipe) {
         (recipe.materials || []).forEach(m => addMaterialRow(m));
+        (recipe.embroidery || []).forEach(e => addEmbroideryRow(e));
         (recipe.jobCosts || []).forEach(j => addJobCostRow(j));
     } else {
         addMaterialRow({ name: 'Main Fabric', metersPerPc: '', ratePerMeter: '' });
@@ -11874,6 +11931,14 @@ async function saveDesignRecipeAction() {
         if (n) materials.push({ name: n, metersPerPc: m, ratePerMeter: r });
     });
 
+    const embroidery = [];
+    document.querySelectorAll('#recipe-embroidery-list .dynamic-material-row').forEach(row => {
+        const n = row.querySelector('.row-name')?.value.trim();
+        const m = parseFloat(row.querySelector('.row-meters')?.value) || 0;
+        const r = parseFloat(row.querySelector('.row-rate')?.value) || 0;
+        if (n) embroidery.push({ name: n, metersPerPc: m, ratePerMeter: r });
+    });
+
     const jobCosts = [];
     document.querySelectorAll('#recipe-jobcosts-list .dynamic-jobcost-row').forEach(row => {
         const n = row.querySelector('.row-name')?.value.trim();
@@ -11892,14 +11957,14 @@ async function saveDesignRecipeAction() {
         }
     });
 
-    if (materials.length === 0) { showToast('Add at least one material', 'error'); return; }
+    if (materials.length === 0 && embroidery.length === 0) { showToast('Add at least one material or embroidered work', 'error'); return; }
 
     const saveBtn = document.getElementById('save-design-recipe-btn');
     if (saveBtn) saveBtn.disabled = true;
 
     showLoader('Saving design recipe & syncing silai rate...');
     try {
-        await FirebaseService.saveDesignRecipe(AppState.currentCompany, designNo, name, materials, jobCosts, silaiPrice);
+        await FirebaseService.saveDesignRecipe(AppState.currentCompany, designNo, name, materials, jobCosts, silaiPrice, embroidery);
 
         // Sync into Size Prices immediately so it shows automatically in size and price!
         try {
@@ -12050,12 +12115,17 @@ function onLotDesignChange() {
 
     previewDiv?.classList.remove('hidden');
 
-    // Build editable fabric rows
-    rowsDiv.innerHTML = (recipe.materials || []).map((m, i) => {
+    // Build editable fabric & embroidery rows
+    const allFabrics = [
+        ...(recipe.materials || []).map(m => ({ ...m, type: 'material' })),
+        ...(recipe.embroidery || []).map(e => ({ ...e, type: 'embroidery' }))
+    ];
+    rowsDiv.innerHTML = allFabrics.map((m, i) => {
         const qty = Math.ceil((m.metersPerPc || 0) * targetPcs * 100) / 100;
+        const tag = m.type === 'embroidery' ? ' <span style="font-size:0.72rem;color:#7c3aed;font-weight:700;">(Embroidery)</span>' : '';
         return `<div class="lot-fabric-row">
-            <label>${esc(m.name)}</label>
-            <input type="number" step="0.01" min="0" class="lot-fabric-qty" data-idx="${i}" data-name="${esc(m.name)}" value="${qty}">
+            <label>${esc(m.name)}${tag}</label>
+            <input type="number" step="0.01" min="0" class="lot-fabric-qty" data-idx="${i}" data-name="${esc(m.name)}" data-type="${m.type}" value="${qty}">
             <span class="fabric-unit">m</span>
         </div>`;
     }).join('');
@@ -12131,11 +12201,16 @@ async function saveCreateLotAction(downloadOnly = false) {
     const recipe = KapadState.recipes.find(r => r.designNo === designNo);
     if (!recipe) { showToast('Design recipe not found', 'error'); return; }
 
-    // Collect fabric with material rate per meter from recipe
+    // Collect fabric & embroidery with rate per meter from recipe
     const fabricGiven = [];
     document.querySelectorAll('#lot-fabric-rows .lot-fabric-qty').forEach(inp => {
         const matName = inp.dataset.name;
-        const matObj = (recipe.materials || []).find(m => m.name === matName);
+        const matType = inp.dataset.type;
+        const pool = matType === 'embroidery' ? (recipe.embroidery || []) : (recipe.materials || []);
+        let matObj = pool.find(m => m.name === matName);
+        if (!matObj) {
+            matObj = (recipe.materials || []).find(m => m.name === matName) || (recipe.embroidery || []).find(m => m.name === matName);
+        }
         fabricGiven.push({
             name: matName,
             meters: parseFloat(inp.value) || 0,
@@ -12146,6 +12221,7 @@ async function saveCreateLotAction(downloadOnly = false) {
     if (fabricGiven.length === 0) { showToast('Fabric data missing — select design & pieces first', 'error'); return; }
 
     const costDetails = {
+        embroidery: recipe.embroidery || [],
         jobCosts: recipe.jobCosts || [],
         estimatedCostPerPc: recipe.estimatedCostPerPc || 0,
     };
