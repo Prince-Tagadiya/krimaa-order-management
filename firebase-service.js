@@ -2737,10 +2737,13 @@ const FirebaseService = (() => {
         const safeDocId = `${companyId}__${lotNumber.replace(/[^A-Za-z0-9_-]/g, '_')}`;
         const docRef = db.collection('production_lots').doc(safeDocId);
 
+        const currentTimeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
         await docRef.set({
             companyId,
             lotNumber,
             date: safeDate,
+            createdAtTime: currentTimeStr,
             designNo: String(designNo).trim().toUpperCase(),
             designName: String(designName || designNo).trim(),
             targetPcs: parseInt(targetPcs) || 0,

@@ -10461,6 +10461,48 @@ function renderDesignMasterTab(recipes) {
     }).join('');
 }
 
+// ── Format Lot Date & Time Helper ─────────────────────────────────────
+function formatLotDateTime(lot) {
+    if (!lot) return '';
+    let dateStr = lot.date || '';
+    let timeStr = lot.createdAtTime || '';
+
+    if (!timeStr && lot.createdAt) {
+        try {
+            let dateObj = null;
+            if (typeof lot.createdAt.toDate === 'function') {
+                dateObj = lot.createdAt.toDate();
+            } else if (lot.createdAt.seconds) {
+                dateObj = new Date(lot.createdAt.seconds * 1000);
+            } else if (lot.createdAt._seconds) {
+                dateObj = new Date(lot.createdAt._seconds * 1000);
+            } else if (lot.createdAt instanceof Date) {
+                dateObj = lot.createdAt;
+            } else if (typeof lot.createdAt === 'string' || typeof lot.createdAt === 'number') {
+                const parsed = new Date(lot.createdAt);
+                if (!isNaN(parsed.getTime())) dateObj = parsed;
+            }
+
+            if (dateObj) {
+                if (!dateStr) {
+                    const y = dateObj.getFullYear();
+                    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+                    const d = String(dateObj.getDate()).padStart(2, '0');
+                    dateStr = `${y}-${m}-${d}`;
+                }
+                timeStr = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
+        } catch (e) {
+            console.warn('[Kapad] formatLotDateTime error:', e);
+        }
+    }
+
+    if (dateStr && timeStr) {
+        return `${dateStr} · ${timeStr}`;
+    }
+    return dateStr || timeStr || '';
+}
+
 // ── Render Active/Closed Lots ──────────────────────────────────────────
 function renderLotsGrid(lots, containerId) {
     const grid = document.getElementById(containerId);
@@ -10480,6 +10522,7 @@ function renderLotsGrid(lots, containerId) {
         const mismatch = parseFloat(l.mismatchMeters) || 0;
         const mismatchClass = Math.abs(mismatch) < 0.01 ? 'ok' : (mismatch > 0 ? 'warning' : 'danger');
         const mismatchLabel = Math.abs(mismatch) < 0.01 ? '✓ No mismatch' : (mismatch > 0 ? `+${mismatch.toFixed(2)} m surplus` : `${mismatch.toFixed(2)} m shortage`);
+        const dateTimeFormatted = formatLotDateTime(l);
 
         return `
         <div class="lot-card ${statusClass}" data-lot-id="${esc(l.id)}">
@@ -10487,7 +10530,10 @@ function renderLotsGrid(lots, containerId) {
                 <div>
                     <div class="lot-card-number">${esc(l.lotNumber)}</div>
                     <div style="font-size:0.75rem;color:#64748b;margin-top:2px;">${esc(l.designNo)} · ${esc(l.designName)}</div>
-                    <div style="font-size:0.72rem;color:#94a3b8;">${esc(l.date || '')}</div>
+                    <div style="font-size:0.72rem;color:#94a3b8;margin-top:2px;display:flex;align-items:center;gap:4px;">
+                        <i class='bx bx-time-five' style="font-size:0.78rem;"></i>
+                        <span>${esc(dateTimeFormatted)}</span>
+                    </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;">
                     <span class="lot-card-status">${statusLabel}</span>
@@ -10541,7 +10587,7 @@ function filterAndRenderLots() {
 
     const matchesQuery = (l, q) => {
         if (!q) return true;
-        const str = `${l.lotNumber || ''} ${l.designNo || ''} ${l.designName || ''} ${l.date || ''}`.toLowerCase();
+        const str = `${l.lotNumber || ''} ${l.designNo || ''} ${l.designName || ''} ${l.date || ''} ${formatLotDateTime(l)}`.toLowerCase();
         return str.includes(q);
     };
 
@@ -10653,7 +10699,7 @@ function printDirectDualLotSlip(lot) {
     const safeLotNo = esc(lot.lotNumber || '-');
     const safeDesign = esc(lot.designNo || '-');
     const safeDesignName = esc(lot.designName || lot.designNo || '');
-    const safeDate = esc(lot.date || '');
+    const safeDate = esc(formatLotDateTime(lot) || lot.date || '');
     const targetPcs = parseInt(lot.targetPcs, 10) || 0;
     const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
     const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
@@ -11028,7 +11074,7 @@ function downloadDualLotSlipPdf(lot) {
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(7.5);
             doc.setTextColor(100, 116, 139);
-            doc.text(`${companyName.toUpperCase()} · DATE: ${lot.date || '-'}`, 16, startY + 18);
+            doc.text(`${companyName.toUpperCase()} · DATE: ${formatLotDateTime(lot) || lot.date || '-'}`, 16, startY + 18);
 
             // Copy Badge (Top-Right)
             if (isOffice) {
@@ -12135,11 +12181,15 @@ async function saveCreateLotAction(downloadOnly = false) {
         const activePanel = document.getElementById('kapad-subtab-active-lots');
         if (activePanel) activePanel.style.display = 'block';
 
+        const now = new Date();
+        const currentTimeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const newLotObj = {
             id: res.id,
             lotNumber: res.lotNumber,
             companyId: AppState.currentCompany,
             date,
+            createdAtTime: currentTimeStr,
+            createdAt: now,
             designNo: String(designNo).trim().toUpperCase(),
             designName: String(recipe.name || designNo).trim(),
             targetPcs,
@@ -12181,7 +12231,7 @@ function openLotDetailModal(lotId) {
     KapadState._currentLotId = lotId;
 
     document.getElementById('lot-detail-title').textContent = lot.lotNumber;
-    document.getElementById('lot-detail-subtitle').textContent = `${lot.designNo} — ${lot.designName} · ${lot.targetPcs} pcs target`;
+    document.getElementById('lot-detail-subtitle').textContent = `${lot.designNo} — ${lot.designName} · ${lot.targetPcs} pcs target${formatLotDateTime(lot) ? ` · ${formatLotDateTime(lot)}` : ''}`;
 
     // Stats
     const pct = lot.targetPcs > 0 ? Math.round((lot.completedPcs / lot.targetPcs) * 100) : 0;
