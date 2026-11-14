@@ -2635,6 +2635,8 @@ const FirebaseService = (() => {
             })),
             jobCosts: (jobCosts || []).map(j => ({
                 name: String(j.name || '').trim(),
+                qtyPerPc: parseFloat(j.qtyPerPc) || (parseFloat(j.amountPerPc) ? 1 : 0),
+                rate: parseFloat(j.rate) || (parseFloat(j.amountPerPc) || 0),
                 amountPerPc: parseFloat(j.amountPerPc) || 0,
             })),
             totalMetersPerPc: Math.round(totalMetersPerPc * 1000) / 1000,
@@ -2751,6 +2753,8 @@ const FirebaseService = (() => {
             })),
             jobCosts: (costDetails?.jobCosts || []).map(j => ({
                 name: String(j.name || '').trim(),
+                qtyPerPc: parseFloat(j.qtyPerPc) || (parseFloat(j.amountPerPc) ? 1 : 0),
+                rate: parseFloat(j.rate) || (parseFloat(j.amountPerPc) || 0),
                 amountPerPc: parseFloat(j.amountPerPc) || 0,
             })),
             estimatedCostPerPc: parseFloat(costDetails?.estimatedCostPerPc) || 0,

@@ -10421,17 +10421,23 @@ function renderDesignMasterTab(recipes) {
                 <span>${esc(m.name)}</span>
                 <span>${(parseFloat(m.metersPerPc)||0).toFixed(2)} m × ₹${(parseFloat(m.ratePerMeter)||0).toFixed(0)} = <strong>₹${((parseFloat(m.metersPerPc)||0)*(parseFloat(m.ratePerMeter)||0)).toFixed(0)}</strong></span>
             </div>`).join('');
-        const jobRows = jobCosts.map(j => `
-            <div class="design-recipe-material-row" style="color:#7c3aed">
+        const jobRows = jobCosts.map(j => {
+            const q = parseFloat(j.qtyPerPc) || 1;
+            const r = parseFloat(j.rate) || (parseFloat(j.amountPerPc) || 0);
+            const amt = (parseFloat(j.amountPerPc) || 0).toFixed(0);
+            const detailText = q !== 1 && r > 0 ? `${q.toFixed(2)} × ₹${r.toFixed(0)} = <strong>₹${amt}</strong>` : `₹${amt}/pc`;
+            return `
+            <div class="design-recipe-material-row" style="color:#2563eb">
                 <span>${esc(j.name)}</span>
-                <span>₹${(parseFloat(j.amountPerPc)||0).toFixed(0)}/pc</span>
-            </div>`).join('');
+                <span>${detailText}</span>
+            </div>`;
+        }).join('');
         return `
         <div class="design-recipe-card" data-design-no="${esc(r.designNo)}">
             <div class="design-recipe-card-header">
                 <div>
                     <div class="design-recipe-card-no">${esc(r.designNo)}</div>
-                    <div class="design-recipe-card-name">${esc(r.name || r.designNo)}</div>
+                    ${r.name && r.name !== r.designNo ? `<div class="design-recipe-card-name">${esc(r.name)}</div>` : ''}
                 </div>
                 <div class="design-recipe-card-actions">
                     <button class="btn-icon btn-edit-recipe" data-no="${esc(r.designNo)}" title="Edit"><i class='bx bx-edit'></i></button>
@@ -11546,16 +11552,23 @@ function recalcRecipeTotals() {
         totalMeters += m;
         totalCost += cost;
         const costField = row.querySelector('.row-cost');
-        if (costField) costField.value = cost.toFixed(2);
+        if (costField) costField.value = cost > 0 ? cost.toFixed(2) : (m > 0 || r > 0 ? '0.00' : '');
     });
 
     // Compulsory Silai Rate
     const silaiVal = parseFloat(document.getElementById('recipe-silai-price')?.value) || 0;
     totalCost += silaiVal;
 
-    // Additional Job Costs
+    // Additional Job Costs (matches material calculation: Qty * Rate)
     document.querySelectorAll('#recipe-jobcosts-list .dynamic-jobcost-row').forEach(row => {
-        totalCost += parseFloat(row.querySelector('.row-amount')?.value) || 0;
+        const qRaw = row.querySelector('.row-qty')?.value;
+        const rRaw = row.querySelector('.row-rate')?.value;
+        const r = parseFloat(rRaw) || 0;
+        const q = (qRaw !== '' && !isNaN(parseFloat(qRaw))) ? parseFloat(qRaw) : (r > 0 ? 1 : 0);
+        const cost = q * r;
+        totalCost += cost;
+        const costField = row.querySelector('.row-cost');
+        if (costField) costField.value = cost > 0 ? cost.toFixed(2) : (r > 0 || q > 0 ? '0.00' : '');
     });
     document.getElementById('recipe-total-meters').textContent = totalMeters.toFixed(2);
     document.getElementById('recipe-total-cost').textContent = `₹${totalCost.toFixed(2)}`;
@@ -11586,13 +11599,32 @@ function addJobCostRow(data = {}) {
     if (!list) return;
     const row = document.createElement('div');
     row.className = 'dynamic-jobcost-row';
+    const initQty = (data.qtyPerPc !== undefined && data.qtyPerPc !== null && data.qtyPerPc !== '')
+        ? data.qtyPerPc
+        : (data.amountPerPc ? '1' : '');
+    const initRate = (data.rate !== undefined && data.rate !== null && data.rate !== '')
+        ? data.rate
+        : (data.amountPerPc || '');
+
+    const qVal = parseFloat(initQty);
+    const rVal = parseFloat(initRate);
+    let costVal = '';
+    if (Number.isFinite(qVal) && Number.isFinite(rVal)) {
+        costVal = (qVal * rVal).toFixed(2);
+    } else if (data.amountPerPc) {
+        costVal = parseFloat(data.amountPerPc).toFixed(2);
+    }
+
     row.innerHTML = `
-        <input class="row-name" type="text" placeholder="Work name (e.g. Hand Work, Washing)" value="${esc(data.name || '')}">
-        <input class="row-amount" type="number" step="0.01" min="0" placeholder="0.00" value="${data.amountPerPc || ''}">
+        <input class="row-name" type="text" placeholder="Work item (e.g. Kating, Lees, Washing)" value="${esc(data.name || '')}">
+        <input class="row-qty" type="number" step="0.01" min="0" placeholder="1.00" value="${initQty}">
+        <input class="row-rate" type="number" step="0.01" min="0" placeholder="0.00" value="${initRate}">
+        <input class="row-cost" type="number" readonly placeholder="0.00" value="${costVal}">
         <button class="row-delete-btn" type="button" title="Remove"><i class='bx bx-trash'></i></button>
     `;
     row.querySelector('.row-delete-btn').addEventListener('click', () => { row.remove(); recalcRecipeTotals(); });
-    row.querySelector('.row-amount').addEventListener('input', recalcRecipeTotals);
+    row.querySelector('.row-qty').addEventListener('input', recalcRecipeTotals);
+    row.querySelector('.row-rate').addEventListener('input', recalcRecipeTotals);
     list.appendChild(row);
     recalcRecipeTotals();
 }
@@ -11632,7 +11664,6 @@ function handleRecipeDesignNoInput() {
         const noInput = document.getElementById('recipe-design-no');
         const silaiInput = document.getElementById('recipe-silai-price');
         const badge = document.getElementById('recipe-silai-sync-badge');
-        const nameInput = document.getElementById('recipe-design-name');
         if (!noInput || !silaiInput) return;
 
         const val = noInput.value.trim();
@@ -11694,14 +11725,6 @@ function handleRecipeDesignNoInput() {
                 badge.style.fontWeight = '800';
             }
 
-            // Autofill Design Name if currently blank
-            if (nameInput && !nameInput.value.trim()) {
-                const existingRecipe = (KapadState.recipes || []).find(r => String(r.designNo || '').toUpperCase() === cleanKey);
-                if (existingRecipe && existingRecipe.name) {
-                    nameInput.value = existingRecipe.name;
-                }
-            }
-
             recalcRecipeTotals();
         } else {
             if (badge) {
@@ -11729,13 +11752,12 @@ function handleRecipeSilaiPriceManualEdit() {
 function openDesignRecipeModal(recipe = null) {
     document.getElementById('design-recipe-modal-title').textContent = recipe ? `Edit Design ${recipe.designNo}` : 'New Design Recipe';
     const noInput = document.getElementById('recipe-design-no');
-    const nameInput = document.getElementById('recipe-design-name');
     const silaiInput = document.getElementById('recipe-silai-price');
     const badge = document.getElementById('recipe-silai-sync-badge');
-    noInput.value = recipe ? recipe.designNo : '';
-    noInput.readOnly = !!recipe;
-    nameInput.value = recipe ? (recipe.name || '') : '';
-
+    if (noInput) {
+        noInput.value = recipe ? recipe.designNo : '';
+        noInput.readOnly = !!recipe;
+    }
     populateRecipeDesignSuggestions();
 
     let silaiVal = recipe ? (parseFloat(recipe.silaiPrice) || '') : '';
@@ -11787,7 +11809,7 @@ function closeDesignRecipeModal() {
 // ── Save Design Recipe ────────────────────────────────────────────────
 async function saveDesignRecipeAction() {
     const designNo = document.getElementById('recipe-design-no').value.trim().toUpperCase();
-    const name = document.getElementById('recipe-design-name').value.trim() || `Design ${designNo}`;
+    const name = designNo;
     if (!designNo) { showToast('Design No is required', 'error'); return; }
 
     const silaiInput = document.getElementById('recipe-silai-price');
@@ -11809,8 +11831,19 @@ async function saveDesignRecipeAction() {
     const jobCosts = [];
     document.querySelectorAll('#recipe-jobcosts-list .dynamic-jobcost-row').forEach(row => {
         const n = row.querySelector('.row-name')?.value.trim();
-        const a = parseFloat(row.querySelector('.row-amount')?.value) || 0;
-        if (n) jobCosts.push({ name: n, amountPerPc: a });
+        const qRaw = row.querySelector('.row-qty')?.value;
+        const rRaw = row.querySelector('.row-rate')?.value;
+        const r = parseFloat(rRaw) || 0;
+        const q = (qRaw !== '' && !isNaN(parseFloat(qRaw))) ? parseFloat(qRaw) : (r > 0 ? 1 : 0);
+        const cost = Math.round(q * r * 100) / 100;
+        if (n && cost > 0) {
+            jobCosts.push({
+                name: n,
+                qtyPerPc: q,
+                rate: r,
+                amountPerPc: cost
+            });
+        }
     });
 
     if (materials.length === 0) { showToast('Add at least one material', 'error'); return; }

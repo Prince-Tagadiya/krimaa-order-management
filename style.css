@@ -2317,10 +2317,10 @@ body.lan-read-only .sheet-cell-input {
     cursor: default;
 }
 
-/* Job Costs Header & Row */
+/* Job Costs Header & Row (Identical table layout to materials) */
 .dynamic-row-header-jobcosts {
     display: grid;
-    grid-template-columns: minmax(200px, 3.5fr) 140px 40px;
+    grid-template-columns: minmax(180px, 2.5fr) 110px 110px 110px 40px;
     gap: 12px;
     align-items: center;
     padding: 0 12px 6px 12px;
@@ -2331,13 +2331,15 @@ body.lan-read-only .sheet-cell-input {
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
-.dynamic-row-header-jobcosts span:nth-child(2) {
+.dynamic-row-header-jobcosts span:nth-child(2),
+.dynamic-row-header-jobcosts span:nth-child(3),
+.dynamic-row-header-jobcosts span:nth-child(4) {
     text-align: right;
 }
 
 .dynamic-jobcost-row {
     display: grid;
-    grid-template-columns: minmax(200px, 3.5fr) 140px 40px;
+    grid-template-columns: minmax(180px, 2.5fr) 110px 110px 110px 40px;
     gap: 12px;
     align-items: center;
     background: #ffffff;
@@ -2350,6 +2352,39 @@ body.lan-read-only .sheet-cell-input {
 .dynamic-jobcost-row:hover {
     border-color: #cbd5e1;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+}
+.dynamic-jobcost-row:focus-within {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+.dynamic-jobcost-row input {
+    height: 42px;
+    padding: 0.5rem 0.75rem;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: #0f172a;
+    background: #fff;
+    width: 100%;
+}
+.dynamic-jobcost-row input:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
+.dynamic-jobcost-row .row-qty,
+.dynamic-jobcost-row .row-rate {
+    text-align: right;
+    font-family: inherit;
+    font-weight: 700;
+}
+.dynamic-jobcost-row .row-cost {
+    background: #f1f5f9;
+    color: #0f172a;
+    font-weight: 800;
+    text-align: right;
+    border-color: #e2e8f0;
+    cursor: default;
 }
 
 /* Row Action Buttons */
@@ -2380,14 +2415,10 @@ body.lan-read-only .sheet-cell-input {
         padding: 1.25rem 1rem;
     }
     .dynamic-row-header-materials,
-    .dynamic-material-row {
-        grid-template-columns: minmax(130px, 2fr) 75px 75px 75px 34px;
-        gap: 6px;
-        padding: 6px 8px;
-    }
+    .dynamic-material-row,
     .dynamic-row-header-jobcosts,
     .dynamic-jobcost-row {
-        grid-template-columns: minmax(130px, 2fr) 90px 34px;
+        grid-template-columns: minmax(130px, 2fr) 75px 75px 75px 34px;
         gap: 6px;
         padding: 6px 8px;
     }
