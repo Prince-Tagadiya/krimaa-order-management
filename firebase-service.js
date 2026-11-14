@@ -2760,6 +2760,7 @@ const FirebaseService = (() => {
             silaiPrice: parseFloat(silaiPrice) || 0,
             fabricGiven: (fabricGiven || []).map(f => ({
                 name: String(f.name || '').trim(),
+                type: f.type === 'embroidery' ? 'embroidery' : 'material',
                 meters: parseFloat(f.meters) || 0,
                 ratePerMeter: parseFloat(f.ratePerMeter) || 0,
             })),
@@ -2768,6 +2769,11 @@ const FirebaseService = (() => {
                 qtyPerPc: parseFloat(j.qtyPerPc) || (parseFloat(j.amountPerPc) ? 1 : 0),
                 rate: parseFloat(j.rate) || (parseFloat(j.amountPerPc) || 0),
                 amountPerPc: parseFloat(j.amountPerPc) || 0,
+            })),
+            embroidery: (costDetails?.embroidery || []).map(item => ({
+                name: String(item.name || '').trim(),
+                metersPerPc: parseFloat(item.metersPerPc) || 0,
+                ratePerMeter: parseFloat(item.ratePerMeter) || 0,
             })),
             estimatedCostPerPc: parseFloat(costDetails?.estimatedCostPerPc) || 0,
             totalMetersGiven: Math.round(totalMetersGiven * 1000) / 1000,

@@ -10711,712 +10711,165 @@ function resolveLotCostDetails(lot) {
     };
 }
 
-// ── Direct Dual Lot Slip Print (Office Copy with Pricing + Floor Copy without Pricing)
-function printDirectDualLotSlip(lot) {
-    if (!lot) return;
-    const companyName = getBillBrandTitle(lot.companyId || AppState.currentCompany);
-    const safeLotNo = esc(lot.lotNumber || '-');
-    const safeDesign = esc(lot.designNo || '-');
-    const safeDesignName = esc(lot.designName || lot.designNo || '');
-    const safeDate = esc(formatLotDateTime(lot) || lot.date || '');
-    const targetPcs = parseInt(lot.targetPcs, 10) || 0;
-    const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
-    const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
+// Shared categories keep direct printing and PDF downloads consistent.
+function getLotSlipPrintModel(lot) {
     const cost = resolveLotCostDetails(lot);
-
-    const renderSlipHtml = (badgeText, badgeBg, isOffice) => {
-        let tableHeaderHtml = '';
-        let tableBodyHtml = '';
-        let totalRowHtml = '';
-
-        if (isOffice) {
-            // OFFICE COPY: Includes Rate (₹/m) and Fabric Cost (₹)
-            tableHeaderHtml = `
-                <tr>
-                    <th style="width:28px;text-align:center;">#</th>
-                    <th>FABRIC / MATERIAL ITEM</th>
-                    <th style="text-align:right;">ISSUED</th>
-                    <th style="text-align:right;">ACTUAL/PC</th>
-                    <th style="text-align:right;">RATE (₹/M)</th>
-                    <th style="text-align:right;">FABRIC COST (₹)</th>
-                </tr>
-            `;
-
-            tableBodyHtml = (cost.fabricDetails || []).map((f, idx) => `
-                <tr>
-                    <td style="text-align:center;width:28px;">${idx + 1}</td>
-                    <td style="font-weight:700;">${esc(f.name)}</td>
-                    <td style="text-align:right;font-weight:800;">${f.meters.toFixed(2)} m</td>
-                    <td style="text-align:right;color:#475569;">${f.actualMetersPerPc.toFixed(2)} m/pc</td>
-                    <td style="text-align:right;font-weight:700;">₹${f.ratePerMeter.toFixed(2)}</td>
-                    <td style="text-align:right;font-weight:900;color:#0f172a;">₹${f.totalCost.toFixed(2)}</td>
-                </tr>
-            `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">-</td><td style="text-align:right;">-</td><td style="text-align:right;">-</td></tr>`;
-
-            totalRowHtml = `
-                <tr class="total-row">
-                    <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
-                    <td style="text-align:right;font-size:12px;font-weight:900;">${totalMeters} m</td>
-                    <td style="text-align:right;color:#475569;font-size:10px;">${targetPcs ? (parseFloat(totalMeters)/targetPcs).toFixed(2) + ' m/pc' : ''}</td>
-                    <td style="text-align:right;font-size:10px;font-weight:800;color:#64748b;">SUBTOTAL:</td>
-                    <td style="text-align:right;font-size:13px;font-weight:900;color:#0f172a;">₹${cost.totalFabricCost.toFixed(2)}</td>
-                </tr>
-            `;
-        } else {
-            // FLOOR / MAAL COPY: Zero pricing / purely production parameters with Remark column
-            tableHeaderHtml = `
-                <tr>
-                    <th style="width:32px;text-align:center;">#</th>
-                    <th>FABRIC / MATERIAL ITEM</th>
-                    <th style="text-align:right;width:130px;">ISSUED METERS</th>
-                    <th style="text-align:right;width:110px;">ACTUAL/PC</th>
-                    <th style="width:190px;text-align:left;">REMARK</th>
-                </tr>
-            `;
-
-            tableBodyHtml = (lot.fabricGiven || []).map((f, idx) => `
-                <tr>
-                    <td style="text-align:center;width:32px;">${idx + 1}</td>
-                    <td style="font-weight:700;">${esc(f.name || 'Fabric')}</td>
-                    <td style="text-align:right;font-weight:800;font-size:12px;">${(parseFloat(f.meters) || 0).toFixed(2)} m</td>
-                    <td style="text-align:right;color:#475569;">${targetPcs ? (((parseFloat(f.meters) || 0) / targetPcs).toFixed(2)) + ' m/pc' : '-'}</td>
-                    <td style="background:#fff;height:26px;"></td>
-                </tr>
-            `).join('') || `<tr><td>1</td><td>Main Fabric</td><td style="text-align:right;">${totalMeters} m</td><td style="text-align:right;">-</td><td style="background:#fff;height:26px;"></td></tr>`;
-
-            totalRowHtml = `
-                <tr class="total-row">
-                    <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL FABRIC ISSUED</td>
-                    <td style="text-align:right;font-size:13px;font-weight:900;">${totalMeters} m</td>
-                    <td style="text-align:right;color:#64748b;font-size:10px;">${targetPcs ? (parseFloat(totalMeters)/targetPcs).toFixed(2) + ' m/pc' : ''}</td>
-                    <td style="background:#e2e8f0;font-size:9.5px;color:#475569;font-weight:700;">For ${targetPcs} pieces</td>
-                </tr>
-            `;
-        }
-
-        const statsHtml = isOffice ? `
-            <div class="stats-grid stats-grid-office">
-                <div class="stat-card">
-                    <div class="stat-label">DESIGN NO</div>
-                    <div class="stat-val text-primary" style="font-size:15px;">${safeDesign}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">LOT NUMBER</div>
-                    <div class="stat-val" style="font-size:12px;">${safeLotNo}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">TARGET QTY</div>
-                    <div class="stat-val">${targetPcs} Pcs</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">TOTAL FABRIC</div>
-                    <div class="stat-val text-success">${totalMeters} Mtr</div>
-                </div>
-                <div class="stat-card stat-cost-card">
-                    <div class="stat-label">SILAI RATE</div>
-                    <div class="stat-val" style="color:#059669;font-size:13px;">₹${cost.silaiPrice.toFixed(2)}</div>
-                </div>
-                <div class="stat-card stat-cost-card">
-                    <div class="stat-label">EST. COST/PC</div>
-                    <div class="stat-val text-primary" style="font-size:13px;">₹${cost.costPerPc.toFixed(2)}</div>
-                </div>
-            </div>
-        ` : `
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">DESIGN NO</div>
-                    <div class="stat-val text-primary" style="font-size:16px;">${safeDesign}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">LOT NUMBER</div>
-                    <div class="stat-val">${safeLotNo}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">TARGET QUANTITY</div>
-                    <div class="stat-val">${targetPcs} Pieces</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">TOTAL KAPAD</div>
-                    <div class="stat-val text-success">${totalMeters} Meters</div>
-                </div>
-            </div>
-        `;
-
-        const officeCostBarHtml = isOffice ? `
-            <div class="cost-summary-box">
-                <div class="cost-chip">
-                    <span class="chip-lbl">Cloth / Fabric:</span>
-                    <strong>₹${cost.fabricCostPerPc.toFixed(2)}/pc</strong> (Total ₹${cost.totalFabricCost.toFixed(2)})
-                </div>
-                <div class="cost-chip">
-                    <span class="chip-lbl">Silai Stitching:</span>
-                    <strong style="color:#059669;">₹${cost.silaiPrice.toFixed(2)}/pc</strong>
-                </div>
-                ${cost.jobCosts.length > 0 ? `
-                <div class="cost-chip">
-                    <span class="chip-lbl">Other Job Work:</span>
-                    <strong style="color:#2563eb;">₹${cost.jobCostsPerPc.toFixed(2)}/pc</strong>
-                    <span style="color:#64748b;font-size:8px;">(${cost.jobCosts.map(j => `${esc(j.name)} ₹${j.amountPerPc.toFixed(0)}`).join(', ')})</span>
-                </div>` : ''}
-                <div class="cost-chip cost-chip-highlight">
-                    <span class="chip-lbl">EST. COST / PC:</span>
-                    <strong style="color:#2563eb;font-size:12px;">₹${cost.costPerPc.toFixed(2)}</strong>
-                </div>
-                <div class="cost-chip cost-chip-highlight">
-                    <span class="chip-lbl">TOTAL LOT VALUE:</span>
-                    <strong style="color:#059669;font-size:12px;">₹${Math.round(cost.totalLotCost).toLocaleString('en-IN')}</strong>
-                </div>
-            </div>
-        ` : '';
-
-        // Dedicated Job Work & Labour Table for Office Copy
-        let officeJobWorkTableHtml = '';
-        if (isOffice) {
-            let jobIdx = 1;
-            const jobRows = [];
-            if (cost.silaiPrice > 0) {
-                const silaiBatchTotal = (cost.silaiPrice || 0) * targetPcs;
-                jobRows.push(`
-                    <tr>
-                        <td style="text-align:center;width:28px;">${jobIdx++}</td>
-                        <td style="font-weight:700;">Silai / Karigar Stitching Rate</td>
-                        <td style="text-align:right;font-weight:700;color:#059669;">₹${cost.silaiPrice.toFixed(2)}/pc</td>
-                        <td style="text-align:right;font-weight:800;color:#0f172a;">₹${silaiBatchTotal.toFixed(2)}</td>
-                    </tr>
-                `);
-            }
-            (cost.jobCosts || []).forEach(j => {
-                const jRate = parseFloat(j.amountPerPc) || 0;
-                const jBatchTotal = jRate * targetPcs;
-                jobRows.push(`
-                    <tr>
-                        <td style="text-align:center;width:28px;">${jobIdx++}</td>
-                        <td style="font-weight:700;">${esc(j.name || 'Job Work')} <span style="font-size:8px;font-weight:600;color:#64748b;">(Other Job Work)</span></td>
-                        <td style="text-align:right;font-weight:700;color:#2563eb;">₹${jRate.toFixed(2)}/pc</td>
-                        <td style="text-align:right;font-weight:800;color:#0f172a;">₹${jBatchTotal.toFixed(2)}</td>
-                    </tr>
-                `);
-            });
-
-            const totalJobRate = (cost.silaiPrice || 0) + (cost.jobCostsPerPc || 0);
-            const totalJobBatch = totalJobRate * targetPcs;
-
-            if (jobRows.length === 0) {
-                jobRows.push(`<tr><td colspan="4" style="text-align:center;color:#64748b;font-size:9px;padding:3px;">No job work charges defined</td></tr>`);
-            }
-
-            officeJobWorkTableHtml = `
-                <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;margin:4px 0 2px;letter-spacing:0.4px;">
-                    Job Work &amp; Labour Charges (Stitching &amp; Other Processes)
-                </div>
-                <table class="fabric-table job-table">
-                    <thead>
-                        <tr>
-                            <th style="width:28px;text-align:center;">#</th>
-                            <th>JOB WORK / PROCESS NAME</th>
-                            <th style="text-align:right;width:120px;">RATE / PC</th>
-                            <th style="text-align:right;width:140px;">TOTAL FOR ${targetPcs} PCS</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${jobRows.join('')}
-                        <tr class="total-row">
-                            <td colspan="2" style="font-weight:800;letter-spacing:0.5px;">TOTAL LABOUR &amp; JOB WORK</td>
-                            <td style="text-align:right;font-size:11px;font-weight:900;color:#059669;">₹${totalJobRate.toFixed(2)}/pc</td>
-                            <td style="text-align:right;font-size:12px;font-weight:900;color:#0f172a;">₹${totalJobBatch.toFixed(2)}</td>
-                        </tr>
-                    </tbody>
-                </table>
-            `;
-        }
-
-        return `
-            <div class="slip-card">
-                <div class="slip-header">
-                    <div>
-                        <div class="design-label">DESIGN NUMBER</div>
-                        <div class="design-title">${safeDesign} <span class="design-subname">${safeDesignName && safeDesignName !== safeDesign ? `(${safeDesignName})` : ''}</span></div>
-                        <div class="slip-sub">${companyName.toUpperCase()} · DATE: ${safeDate}</div>
-                    </div>
-                    <div style="text-align:right;">
-                        <div class="copy-badge" style="background:${badgeBg};">${badgeText}</div>
-                        <div class="header-lot-no">LOT: <strong>${safeLotNo}</strong></div>
-                    </div>
-                </div>
-
-                ${statsHtml}
-
-                <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;margin:2px 0 1px;letter-spacing:0.4px;">
-                    ${isOffice ? 'Fabric &amp; Raw Materials Issued' : 'Fabric Issued'}
-                </div>
-                <table class="fabric-table">
-                    <thead>${tableHeaderHtml}</thead>
-                    <tbody>
-                        ${tableBodyHtml}
-                        ${totalRowHtml}
-                    </tbody>
-                </table>
-
-                ${officeJobWorkTableHtml}
-
-                ${officeCostBarHtml}
-
-                <div class="slip-footer">
-                    <span>${isOffice ? 'Office Copy — Keep in production issue register · Confidentially contains internal rates & costing' : 'Floor Copy — Issue with goods to karigar / workshop'}</span>
-                    <span>Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}</span>
-                </div>
-            </div>
-        `;
-    };
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Lot Slip - ${safeLotNo}</title>
-<style>
-    @page { size: A4 portrait; margin: 8mm 10mm; }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
-    body { background: #fff; color: #0f172a; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .page-wrap { display: flex; flex-direction: column; justify-content: space-between; height: 280mm; max-height: 280mm; }
-    .slip-card { border: 2px solid #0f172a; border-radius: 8px; padding: 9px 12px; background: #fff; height: 133mm; display: flex; flex-direction: column; justify-content: flex-start; }
-    .slip-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f172a; padding-bottom: 5px; margin-bottom: 5px; }
-    .design-label { font-size: 9px; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
-    .design-title { font-size: 23px; font-weight: 900; line-height: 1.1; color: #0f172a; }
-    .design-subname { font-size: 13px; font-weight: 600; color: #475569; }
-    .slip-sub { font-size: 9px; color: #64748b; font-weight: 600; margin-top: 2px; }
-    .copy-badge { display: inline-block; padding: 3px 12px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
-    .header-lot-no { font-size: 11px; font-weight: 600; color: #475569; margin-top: 3px; }
-    .stats-grid { display: grid; grid-template-columns: 1.2fr 1.6fr 1fr 1.2fr; gap: 5px; margin-bottom: 5px; }
-    .stats-grid-office { grid-template-columns: 1fr 1.3fr 0.9fr 1.1fr 1fr 1fr; }
-    .stat-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 3px 7px; background: #f8fafc; }
-    .stat-label { font-size: 7.5px; font-weight: 800; color: #64748b; text-transform: uppercase; margin-bottom: 2px; }
-    .stat-val { font-size: 12px; font-weight: 900; color: #0f172a; }
-    .text-primary { color: #2563eb; }
-    .text-success { color: #059669; }
-    .fabric-table { width: 100%; border-collapse: collapse; font-size: 9px; margin-top: 2px; }
-    .fabric-table th, .fabric-table td { border: 1px solid #cbd5e1; padding: 2.4px 5px; }
-    .fabric-table th { background: #0f172a; color: #fff; font-size: 8px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
-    .job-table th { background: #1e293b; }
-    .fabric-table tbody tr:nth-child(even) { background: #f8fafc; }
-    .total-row td { background: #e2e8f0 !important; font-weight: 800; }
-    .cost-summary-box { margin-top: 4px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 3px 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; font-size: 9px; }
-    .cost-chip { display: flex; align-items: center; gap: 4px; }
-    .cost-chip .chip-lbl { color: #64748b; font-weight: 700; text-transform: uppercase; font-size: 8px; }
-    .cost-chip-highlight { background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1; }
-    .cut-line-wrap { text-align: center; margin: 3mm 0; position: relative; border-top: 1.5px dashed #94a3b8; }
-    .cut-label { position: relative; top: -8px; background: #fff; padding: 0 14px; font-size: 10px; font-weight: 800; color: #64748b; letter-spacing: 0.5px; display: inline-block; }
-    .slip-footer { margin-top: auto; display: flex; justify-content: space-between; font-size: 8.5px; color: #94a3b8; padding-top: 4px; border-top: 1px solid #f1f5f9; }
-</style>
-</head>
-<body>
-    <div class="page-wrap">
-        ${renderSlipHtml('OFFICE COPY (FOR RECORD & COSTING)', '#0f172a', true)}
-        <div class="cut-line-wrap">
-            <span class="cut-label">✂ - - - - - CUT HERE (TOP: OFFICE COPY  |  BOTTOM: FLOOR / MAAL COPY) - - - - - ✂</span>
-        </div>
-        ${renderSlipHtml('FLOOR / MAAL COPY (WITH GOODS)', '#059669', false)}
-    </div>
-    <script>
-        window.addEventListener('load', () => {
-            setTimeout(() => {
-                window.print();
-            }, 120);
-        });
-    </script>
-</body>
-</html>`;
-
-    const printWin = window.open('', '_blank', 'width=800,height=900');
-    if (printWin) {
-        printWin.document.open();
-        printWin.document.write(html);
-        printWin.document.close();
-        printWin.focus();
-    } else {
-        showToast('Please allow popups to direct-print lot slip', 'error');
-    }
+    const pcs = Math.max(0, parseInt(lot.targetPcs, 10) || 0);
+    const recipe = (KapadState.recipes || []).find(r => String(r.designNo).trim().toUpperCase() === String(lot.designNo).trim().toUpperCase());
+    const embroidery = Array.isArray(lot.embroidery) ? lot.embroidery : (recipe?.embroidery || []);
+    const materials = recipe?.materials || [];
+    const key = name => String(name || '').trim().toLowerCase();
+    const seen = new Map();
+    const sections = [
+        { id: 'materials', title: 'Fabric / Materials (Consumption)', color: [29, 78, 216], tint: [239, 246, 255], rows: [] },
+        { id: 'embroidery', title: 'Embroidered Work Consumption', color: [109, 40, 217], tint: [245, 243, 255], rows: [] },
+        { id: 'jobwork', title: 'Additional Job Work', color: [180, 83, 9], tint: [255, 251, 235], rows: [] }
+    ];
+    (cost.fabricDetails || []).forEach((item, index) => {
+        const issued = (lot.fabricGiven || [])[index] || {};
+        const name = key(item.name);
+        const occurrence = seen.get(name) || 0;
+        seen.set(name, occurrence + 1);
+        const materialCount = materials.filter(m => key(m.name) === name).length;
+        const isEmbroidery = issued.type === 'embroidery' || (issued.type !== 'material' && embroidery.some(e => key(e.name) === name) && occurrence >= materialCount);
+        sections[isEmbroidery ? 1 : 0].rows.push({ ...item, quantity: item.meters, perPiece: item.actualMetersPerPc, rate: item.ratePerMeter });
+    });
+    const jobs = Array.isArray(lot.jobCosts) && lot.jobCosts.length ? lot.jobCosts : (recipe?.jobCosts || []);
+    (cost.jobCosts || []).forEach((item, index) => {
+        const raw = jobs.filter(j => String(j.name || '').trim() && (parseFloat(j.amountPerPc) || 0) > 0)[index] || {};
+        const qty = Number.isFinite(parseFloat(raw.qtyPerPc)) ? parseFloat(raw.qtyPerPc) : 1;
+        const rate = Number.isFinite(parseFloat(raw.rate)) ? parseFloat(raw.rate) : (qty ? item.amountPerPc / qty : 0);
+        sections[2].rows.push({ name: item.name, quantity: qty * pcs, perPiece: qty, rate, totalCost: item.amountPerPc * pcs });
+    });
+    sections.forEach(section => {
+        section.totalCost = section.rows.reduce((sum, row) => sum + row.totalCost, 0);
+        section.totalQuantity = section.rows.reduce((sum, row) => sum + row.quantity, 0);
+    });
+    return { lot, cost, pcs, sections };
 }
 
-// ── Download 2-in-1 Dual A4 PDF Slip ──────────────────────────────────
+function buildDualLotSlipHtml(lot) {
+    const { cost, pcs, sections } = getLotSlipPrintModel(lot);
+    const money = value => '₹' + Number(value || 0).toFixed(2);
+    const color = values => `rgb(${values.join(',')})`;
+    const renderCopy = isOffice => `<article class="slip-card">
+        <header><div><div class="eyebrow">${esc(getBillBrandTitle(lot.companyId || AppState.currentCompany))} · DESIGN NUMBER</div><h1>${esc(lot.designNo || '-')}</h1><div class="muted">${esc(formatLotDateTime(lot) || lot.date || '')}</div></div>
+        <div class="copy-info"><b class="badge ${isOffice ? 'office' : 'floor'}">${isOffice ? 'OFFICE COPY - RECORD & COSTING' : 'FLOOR / MAAL COPY - WITH GOODS'}</b><div>LOT: <strong>${esc(lot.lotNumber || '-')}</strong></div></div></header>
+        <div class="stats"><span>TARGET <strong>${pcs} pcs</strong></span><span>TOTAL ISSUED <strong>${Number(lot.totalMetersGiven || 0).toFixed(2)} m</strong></span>${isOffice ? `<span>SILAI <strong>${money(cost.silaiPrice)}/pc</strong></span><span>EST. COST <strong>${money(cost.costPerPc)}/pc</strong></span>` : ''}</div>
+        ${sections.map(section => {
+            const job = section.id === 'jobwork';
+            const headers = isOffice ? ['#', 'Item / Process', job ? 'Total Qty' : 'Issued (m)', job ? 'Qty / Pc' : 'Meters / Pc', job ? 'Rate (₹/unit)' : 'Rate (₹/m)', 'Total (₹)'] : ['#', 'Item / Process', job ? 'Total Qty' : 'Issued (m)', job ? 'Qty / Pc' : 'Meters / Pc', 'Remark'];
+            return `<table data-consumption="${section.id}" style="--section-color:${color(section.color)};--section-tint:${color(section.tint)}"><thead><tr><th colspan="${headers.length}" class="section-title">${section.title}</th></tr><tr>${headers.map((h, i) => `<th class="${i > 1 ? 'number' : ''}">${h}</th>`).join('')}</tr></thead><tbody>
+                ${section.rows.map((row, index) => `<tr><td>${index + 1}</td><td class="item">${esc(row.name)}</td><td class="number">${row.quantity.toFixed(2)}</td><td class="number">${row.perPiece.toFixed(2)}</td>${isOffice ? `<td class="number">${money(row.rate)}</td><td class="number">${money(row.totalCost)}</td>` : '<td class="remark">&nbsp;</td>'}</tr>`).join('') || `<tr><td colspan="${headers.length}">No ${job ? 'additional job work' : section.id === 'embroidery' ? 'embroidered work' : 'materials'} recorded</td></tr>`}
+                <tr class="subtotal"><td colspan="2">${job ? `${section.rows.length} PROCESSES` : 'SUBTOTAL'}</td><td class="number">${job ? '' : section.totalQuantity.toFixed(2) + ' m'}</td><td></td>${isOffice ? `<td></td><td class="number">${money(section.totalCost)}</td>` : '<td></td>'}</tr>
+            </tbody></table>`;
+        }).join('')}
+        ${isOffice ? `<div class="summary"><span>Materials: ${money(sections[0].totalCost)}</span><span>Embroidery: ${money(sections[1].totalCost)}</span><span>Job work: ${money(sections[2].totalCost)}</span><span>Silai: ${money(cost.silaiPrice * pcs)}</span><strong>Total lot expense: ${money(cost.totalLotCost)}</strong></div>` : ''}
+        <footer>${isOffice ? 'Office record - internal rates and costing' : 'Issue with goods to karigar / workshop. Use Remark for production notes.'}</footer>
+    </article>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Lot Slip - ${esc(lot.lotNumber || 'LOT')}</title><style>
+        @page { size:A4 portrait; margin:8mm 10mm; }
+        * { box-sizing:border-box; } body { margin:0; font-family:Arial,sans-serif; color:#0f172a; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        .slip-card { border:1.5px solid #334155; border-radius:6px; padding:9px 12px; min-height:132mm; display:flex; flex-direction:column; }
+        header { display:flex; justify-content:space-between; gap:12px; border-bottom:1px solid #cbd5e1; padding-bottom:5px; } h1 { font-size:23px; margin:2px 0; } .eyebrow { font-size:9px; font-weight:bold; } .muted { color:#64748b; font-size:9px; }
+        .copy-info { text-align:right; font-size:10px; line-height:20px; } .badge { color:white; padding:4px 8px; border-radius:3px; font-size:9px; } .office { background:#0f172a; } .floor { background:#047857; }
+        .stats { display:flex; justify-content:space-between; gap:8px; background:#f8fafc; border:1px solid #e2e8f0; padding:6px; margin:6px 0; font-size:9px; } .stats strong { display:block; font-size:12px; margin-top:2px; }
+        table { width:100%; border-collapse:collapse; font-size:9px; margin:3px 0; } thead { display:table-header-group; } tr { break-inside:avoid; } th,td { border:1px solid #cbd5e1; padding:3px 5px; } th { background:var(--section-tint); color:var(--section-color); text-align:left; font-size:8px; } th.section-title { background:var(--section-color); color:#fff; font-size:10px; letter-spacing:.15px; }
+        td.item { width:35%; overflow-wrap:anywhere; } .number { text-align:right; white-space:nowrap; } .remark { width:28%; background:white; height:20px; } .subtotal td { background:var(--section-tint); font-weight:bold; }
+        .summary { display:flex; flex-wrap:wrap; justify-content:space-between; gap:5px 12px; padding:6px; background:#f8fafc; border:1px solid #cbd5e1; font-size:9px; margin-top:4px; } .summary strong { color:#047857; } footer { margin-top:auto; padding-top:6px; color:#64748b; font-size:8px; }
+        .cut-line { border-top:1px dashed #94a3b8; text-align:center; margin:4mm 0; font-size:8px; color:#64748b; } @media print { .slip-card { break-inside:avoid; } }
+    </style></head><body>${renderCopy(true)}<div class="cut-line">CUT HERE - OFFICE COPY ABOVE / FLOOR COPY BELOW</div>${renderCopy(false)}</body></html>`;
+}
+
+function printDirectDualLotSlip(lot) {
+    if (!lot) return;
+    const printWin = window.open('', '_blank', 'width=800,height=900');
+    if (!printWin) return showToast('Please allow popups to print lot slips', 'error');
+    printWin.document.open();
+    printWin.document.write(buildDualLotSlipHtml(lot));
+    printWin.document.close();
+    printWin.focus();
+    printWin.addEventListener('load', () => setTimeout(() => printWin.print(), 120), { once: true });
+}
+
+function createDualLotSlipPdf(lot) {
+    const { cost, pcs, sections } = getLotSlipPrintModel(lot);
+    const money = value => 'Rs. ' + Number(value || 0).toFixed(2);
+    const makeDocument = compact => {
+        const doc = new window.jspdf.jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+        let overflow = false;
+        const renderCopy = (isOffice, startY) => {
+            const firstPage = doc.internal.getCurrentPageInfo().pageNumber;
+            const copyName = isOffice ? 'OFFICE COPY - RECORD & COSTING' : 'FLOOR / MAAL COPY - WITH GOODS';
+            doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(15,23,42);
+            doc.text(String(getBillBrandTitle(lot.companyId || AppState.currentCompany)).toUpperCase(),15,startY+5);
+            doc.setFontSize(7); doc.text(copyName,195,startY+5,{align:'right'});
+            doc.setFontSize(15); doc.text('DESIGN '+String(lot.designNo || '-'),15,startY+13);
+            doc.setFontSize(7.5); doc.text(doc.splitTextToSize('LOT: '+String(lot.lotNumber || '-'),82),195,startY+12,{align:'right'});
+            doc.setFont('helvetica','normal'); doc.setFontSize(7);
+            doc.text('Date: '+String(formatLotDateTime(lot) || lot.date || '-'),15,startY+19);
+            doc.text('Target: '+pcs+' pcs   |   Issued: '+Number(lot.totalMetersGiven || 0).toFixed(2)+' m',15,startY+25);
+            if(isOffice) doc.text('Silai: '+money(cost.silaiPrice)+'/pc   |   Est. cost: '+money(cost.costPerPc)+'/pc',195,startY+25,{align:'right'});
+            let y = startY+29;
+            for(const section of sections) {
+                const job = section.id==='jobwork';
+                const head = isOffice ? ['#','Item / Process',job?'Total Qty':'Issued (m)',job?'Qty / Pc':'Meters / Pc','Rate (Rs)','Total (Rs)'] : ['#','Item / Process',job?'Total Qty':'Issued (m)',job?'Qty / Pc':'Meters / Pc','Remark'];
+                const rows = section.rows.map((row,index)=> isOffice
+                    ? [String(index+1),row.name,row.quantity.toFixed(2),row.perPiece.toFixed(2),money(row.rate),money(row.totalCost)]
+                    : [String(index+1),row.name,row.quantity.toFixed(2),row.perPiece.toFixed(2),'']);
+                if(!rows.length) rows.push([{content:'No '+(job?'additional job work':section.id==='embroidery'?'embroidered work':'materials')+' recorded',colSpan:head.length}]);
+                const foot = isOffice ? ['',job?section.rows.length+' PROCESSES':'SUBTOTAL',job?'':section.totalQuantity.toFixed(2)+' m','','',money(section.totalCost)] : ['',job?section.rows.length+' PROCESSES':'SUBTOTAL',job?'':section.totalQuantity.toFixed(2)+' m','',''];
+                if(!compact && y>258) { doc.addPage(); y=24; }
+                doc.autoTable({ startY:y, margin:{left:15,right:15,top:24,bottom:18},
+                    head:[[{content:section.title,colSpan:head.length}],head],body:rows,foot:[foot],showFoot:'lastPage',theme:'grid',
+                    styles:{font:'helvetica',fontSize:6.8,cellPadding:.85,lineColor:[203,213,225],lineWidth:.15,textColor:[15,23,42],overflow:'linebreak'},
+                    headStyles:{fillColor:section.color,textColor:[255,255,255],fontStyle:'bold'},
+                    footStyles:{fillColor:section.tint,textColor:section.color,fontStyle:'bold'},
+                    columnStyles:isOffice?{0:{cellWidth:8},1:{cellWidth:56},2:{cellWidth:27,halign:'right'},3:{cellWidth:27,halign:'right'},4:{cellWidth:30,halign:'right'},5:{cellWidth:32,halign:'right'}}:{0:{cellWidth:8},1:{cellWidth:64},2:{cellWidth:30,halign:'right'},3:{cellWidth:30,halign:'right'},4:{cellWidth:48}},
+                });
+                y=doc.lastAutoTable.finalY+2;
+            }
+            if(isOffice) {
+                if(!compact && y+15>278) { doc.addPage(); y=24; }
+                doc.setFillColor(248,250,252); doc.setDrawColor(203,213,225); doc.rect(15,y,180,14,'FD');
+                doc.setFont('helvetica','normal'); doc.setFontSize(6.8); doc.setTextColor(71,85,105);
+                doc.text('Materials: '+money(sections[0].totalCost)+'   |   Embroidery: '+money(sections[1].totalCost),18,y+4);
+                doc.text('Job work: '+money(sections[2].totalCost)+'   |   Silai: '+money(cost.silaiPrice*pcs),18,y+8);
+                doc.setFont('helvetica','bold'); doc.setTextColor(4,120,87); doc.text('TOTAL LOT EXPENSE: '+money(cost.totalLotCost),18,y+12);
+                y+=17;
+            }
+            const lastPage=doc.internal.getCurrentPageInfo().pageNumber;
+            if(compact && (lastPage!==firstPage || y>startY+125)) overflow=true;
+            for(let page=firstPage;page<=lastPage;page++) {
+                doc.setPage(page); doc.setDrawColor(148,163,184);doc.setLineWidth(.25);
+                doc.roundedRect(10,compact?startY:10,190,compact?134:277,2,2,'S');
+                doc.setFont('helvetica','normal');doc.setFontSize(6.5);doc.setTextColor(100,116,139);
+                doc.text((isOffice?'Office record - internal rates and costing':'Floor copy - issue with goods; use Remark for production notes')+(compact?'':' | '+(page-firstPage+1)+'/'+(lastPage-firstPage+1)),15,compact?startY+130:283);
+                if(page>firstPage) {doc.setFont('helvetica','bold');doc.text(copyName+' - LOT '+String(lot.lotNumber||'-')+' (CONTINUED)',15,17);}
+            }
+            doc.setPage(lastPage);
+        };
+        renderCopy(true,10);
+        if(compact) {
+            doc.setDrawColor(148,163,184);doc.setLineDashPattern([2,2],0);doc.line(10,148,200,148);doc.setLineDashPattern([],0);
+            doc.setFontSize(6);doc.setTextColor(100,116,139);doc.text('CUT HERE - OFFICE COPY ABOVE / FLOOR COPY BELOW',105,147,{align:'center'});
+        } else doc.addPage();
+        renderCopy(false,compact?153:10);
+        return {doc,overflow};
+    };
+    const compact=makeDocument(true);
+    return compact.overflow ? makeDocument(false).doc : compact.doc;
+}
+
 function downloadDualLotSlipPdf(lot) {
     if (!lot) return;
-    if (!window.jspdf) {
-        showToast('PDF library not ready', 'error');
-        return;
-    }
+    if (!window.jspdf) return showToast('PDF library not ready', 'error');
     try {
-        const { jsPDF } = window.jspdf;
-        const doc = new jsPDF({
-            orientation: 'portrait',
-            unit: 'mm',
-            format: 'a4'
-        });
-
-        const companyName = getBillBrandTitle(lot.companyId || AppState.currentCompany);
-        const totalMeters = (parseFloat(lot.totalMetersGiven) || 0).toFixed(2);
-        const stdRate = (parseFloat(lot.standardMetersPerPc) || 0).toFixed(2);
-        const cost = resolveLotCostDetails(lot);
-
-        // Helper to render one copy on the page
-        const renderSingleCopy = (startY, badgeText, isOffice) => {
-            // Outer card border: X: 11 to 199 (W: 188)
-            doc.setDrawColor(30, 41, 59); // slate-800
-            doc.setLineWidth(0.5);
-            doc.roundedRect(11, startY, 188, 130, 2.5, 2.5, 'S');
-
-            // Header background banner
-            if (isOffice) {
-                doc.setFillColor(241, 245, 249); // slate-100
-            } else {
-                doc.setFillColor(240, 253, 244); // emerald-50
-            }
-            doc.roundedRect(11.2, startY + 0.2, 187.6, 20, 2.5, 2.5, 'F');
-
-            // DESIGN NUMBER FIRST AND GIANT
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(7.5);
-            doc.setTextColor(100, 116, 139);
-            doc.text('DESIGN NUMBER', 16, startY + 6);
-
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(16);
-            doc.setTextColor(15, 23, 42); // slate-900
-            doc.text(String(lot.designNo || '-'), 16, startY + 13);
-
-            if (lot.designName && lot.designName !== lot.designNo) {
-                doc.setFont('helvetica', 'normal');
-                doc.setFontSize(8);
-                doc.setTextColor(71, 85, 105);
-                doc.text(`(${lot.designName})`, 18 + doc.getTextWidth(String(lot.designNo || '-')) + 2, startY + 13);
-            }
-
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(7.5);
-            doc.setTextColor(100, 116, 139);
-            doc.text(`${companyName.toUpperCase()} · DATE: ${formatLotDateTime(lot) || lot.date || '-'}`, 16, startY + 18);
-
-            // Copy Badge (Top-Right)
-            if (isOffice) {
-                doc.setFillColor(15, 23, 42); // slate-900
-            } else {
-                doc.setFillColor(5, 150, 105); // emerald-600
-            }
-            doc.roundedRect(118, startY + 4, 76, 7.5, 2, 2, 'F');
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(6.8);
-            doc.setTextColor(255, 255, 255);
-            doc.text(badgeText, 156, startY + 9, { align: 'center' });
-
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(8);
-            doc.setTextColor(71, 85, 105);
-            doc.text(`LOT: ${lot.lotNumber || '-'}`, 194, startY + 17, { align: 'right' });
-
-            // Statistics Boxes
-            const boxY = startY + 23;
-            let curX = 15;
-
-            if (isOffice) {
-                // 5 Boxes for Office Copy (Includes Cost/Pc)
-                const officeBoxes = [
-                    { label: 'DESIGN NO', val: String(lot.designNo || '-'), w: 32, highlight: true },
-                    { label: 'LOT NUMBER', val: String(lot.lotNumber || '-'), w: 50 },
-                    { label: 'TARGET PCS', val: `${lot.targetPcs || 0} Pcs`, w: 28 },
-                    { label: 'TOTAL KAPAD', val: `${totalMeters} Mtr`, w: 32, highlight: true },
-                    { label: 'EST. COST/PC', val: `₹${cost.costPerPc.toFixed(2)}`, w: 34, highlight: true }
-                ];
-                officeBoxes.forEach(b => {
-                    doc.setFillColor(248, 250, 252);
-                    doc.setDrawColor(226, 232, 240);
-                    doc.roundedRect(curX, boxY, b.w, 13.5, 1.5, 1.5, 'FD');
-
-                    doc.setFont('helvetica', 'bold');
-                    doc.setFontSize(6.5);
-                    doc.setTextColor(100, 116, 139);
-                    doc.text(b.label, curX + 2.5, boxY + 4.5);
-
-                    doc.setFont('helvetica', 'bold');
-                    doc.setFontSize(b.highlight ? 9.5 : 8.5);
-                    if (b.highlight) doc.setTextColor(37, 99, 235);
-                    else doc.setTextColor(15, 23, 42);
-                    doc.text(String(b.val), curX + 2.5, boxY + 10.5);
-
-                    curX += b.w + 1.5;
-                });
-            } else {
-                // 4 Boxes for Floor Copy (Strictly no financial figures)
-                const floorBoxes = [
-                    { label: 'DESIGN NO', val: String(lot.designNo || '-'), w: 36, highlight: true },
-                    { label: 'LOT NUMBER', val: String(lot.lotNumber || '-'), w: 62 },
-                    { label: 'TARGET PCS', val: `${lot.targetPcs || 0} Pcs`, w: 38 },
-                    { label: 'TOTAL KAPAD', val: `${totalMeters} Mtr`, w: 38, highlight: true }
-                ];
-                floorBoxes.forEach(b => {
-                    doc.setFillColor(248, 250, 252);
-                    doc.setDrawColor(226, 232, 240);
-                    doc.roundedRect(curX, boxY, b.w, 13.5, 1.5, 1.5, 'FD');
-
-                    doc.setFont('helvetica', 'bold');
-                    doc.setFontSize(6.5);
-                    doc.setTextColor(100, 116, 139);
-                    doc.text(b.label, curX + 2.5, boxY + 4.5);
-
-                    doc.setFont('helvetica', 'bold');
-                    doc.setFontSize(b.highlight ? 9.5 : 8.5);
-                    if (b.highlight) doc.setTextColor(5, 150, 105);
-                    else doc.setTextColor(15, 23, 42);
-                    doc.text(String(b.val), curX + 2.5, boxY + 10.5);
-
-                    curX += b.w + 2;
-                });
-            }
-
-            // Table
-            const tableY = startY + 39;
-
-            if (isOffice) {
-                // OFFICE COPY TABLE: Includes Rate & Cost
-                const officeTableHead = [['#', 'Fabric / Material Item', 'Issued Meters', 'Actual/Pc', 'Rate (₹/m)', 'Cost (₹)']];
-                const officeTableRows = (cost.fabricDetails || []).map((f, idx) => [
-                    String(idx + 1),
-                    f.name || 'Fabric',
-                    `${f.meters.toFixed(2)} m`,
-                    lot.targetPcs ? `${f.actualMetersPerPc.toFixed(2)} m/pc` : '-',
-                    `₹${f.ratePerMeter.toFixed(2)}`,
-                    `₹${f.totalCost.toFixed(2)}`
-                ]);
-                if (officeTableRows.length === 0) {
-                    officeTableRows.push(['1', 'Main Fabric', `${totalMeters} m`, '-', '-', '-']);
-                }
-                officeTableRows.push([
-                    '',
-                    'TOTAL FABRIC ISSUED',
-                    `${totalMeters} m`,
-                    lot.targetPcs ? `For ${lot.targetPcs} pcs` : '',
-                    'SUBTOTAL:',
-                    `₹${cost.totalFabricCost.toFixed(2)}`
-                ]);
-
-                doc.autoTable({
-                    startY: tableY,
-                    margin: { left: 15, right: 15 },
-                    head: officeTableHead,
-                    body: officeTableRows,
-                    theme: 'grid',
-                    styles: {
-                        font: 'helvetica',
-                        fontSize: 7.2,
-                        cellPadding: 1.6,
-                        lineColor: [203, 213, 225],
-                        lineWidth: 0.2
-                    },
-                    headStyles: {
-                        fillColor: [15, 23, 42],
-                        textColor: [255, 255, 255],
-                        fontStyle: 'bold',
-                        halign: 'left'
-                    },
-                    columnStyles: {
-                        0: { cellWidth: 10, halign: 'center' },
-                        1: { cellWidth: 64 },
-                        2: { cellWidth: 26, fontStyle: 'bold', halign: 'right' },
-                        3: { cellWidth: 26, halign: 'right' },
-                        4: { cellWidth: 24, halign: 'right' },
-                        5: { cellWidth: 30, fontStyle: 'bold', halign: 'right' }
-                    },
-                    didParseCell: (data) => {
-                        if (data.row.index === officeTableRows.length - 1) {
-                            data.cell.styles.fontStyle = 'bold';
-                            data.cell.styles.fillColor = [226, 232, 240];
-                        }
-                    }
-                });
-
-                // OFFICE JOB WORK & LABOUR CHARGES TABLE (INCLUDES OTHER JOB WORK)
-                const jobTableHead = [['#', 'Job Work & Labour Charges (Other Processes)', 'Rate / Pc', `Total For ${lot.targetPcs || 0} Pcs`]];
-                const jobTableRows = [];
-                let jIdx = 1;
-                if (cost.silaiPrice > 0) {
-                    const silaiBatch = (lot.targetPcs || 0) * cost.silaiPrice;
-                    jobTableRows.push([
-                        String(jIdx++),
-                        'Silai (Karigar Stitching Rate)',
-                        `₹${cost.silaiPrice.toFixed(2)}/pc`,
-                        `₹${silaiBatch.toFixed(2)}`
-                    ]);
-                }
-                (cost.jobCosts || []).forEach(j => {
-                    const jAmt = parseFloat(j.amountPerPc) || 0;
-                    const jBatch = (lot.targetPcs || 0) * jAmt;
-                    jobTableRows.push([
-                        String(jIdx++),
-                        `${String(j.name || 'Job Work')} (Other Job Work)`,
-                        `₹${jAmt.toFixed(2)}/pc`,
-                        `₹${jBatch.toFixed(2)}`
-                    ]);
-                });
-                const totalJobRate = (cost.silaiPrice || 0) + (cost.jobCostsPerPc || 0);
-                const totalJobBatch = (lot.targetPcs || 0) * totalJobRate;
-                if (jobTableRows.length === 0) {
-                    jobTableRows.push(['-', 'No job work charges recorded', '-', '-']);
-                } else {
-                    jobTableRows.push([
-                        '',
-                        'TOTAL LABOUR & JOB WORK',
-                        `₹${totalJobRate.toFixed(2)}/pc`,
-                        `₹${totalJobBatch.toFixed(2)}`
-                    ]);
-                }
-
-                doc.autoTable({
-                    startY: doc.lastAutoTable.finalY + 2.5,
-                    margin: { left: 15, right: 15 },
-                    head: jobTableHead,
-                    body: jobTableRows,
-                    theme: 'grid',
-                    styles: {
-                        font: 'helvetica',
-                        fontSize: 6.8,
-                        cellPadding: 1.3,
-                        lineColor: [203, 213, 225],
-                        lineWidth: 0.2
-                    },
-                    headStyles: {
-                        fillColor: [30, 41, 59],
-                        textColor: [255, 255, 255],
-                        fontStyle: 'bold',
-                        halign: 'left'
-                    },
-                    columnStyles: {
-                        0: { cellWidth: 10, halign: 'center' },
-                        1: { cellWidth: 90 },
-                        2: { cellWidth: 38, fontStyle: 'bold', halign: 'right' },
-                        3: { cellWidth: 42, fontStyle: 'bold', halign: 'right' }
-                    },
-                    didParseCell: (data) => {
-                        if (data.row.index === jobTableRows.length - 1 && jobTableRows.length > 1) {
-                            data.cell.styles.fontStyle = 'bold';
-                            data.cell.styles.fillColor = [226, 232, 240];
-                        }
-                    }
-                });
-
-                // Office Cost Breakdown Card below table
-                const finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) ? doc.lastAutoTable.finalY + 2.5 : tableY + 50;
-                doc.setFillColor(248, 250, 252);
-                doc.setDrawColor(203, 213, 225);
-                doc.roundedRect(15, finalY, 180, 12, 1.5, 1.5, 'FD');
-
-                // Row 1 of breakdown
-                doc.setFont('helvetica', 'normal');
-                doc.setFontSize(6.8);
-                doc.setTextColor(71, 85, 105);
-                doc.text(`Fabric: ₹${cost.fabricCostPerPc.toFixed(2)}/pc (₹${cost.totalFabricCost.toFixed(2)})`, 18, finalY + 4.5);
-                doc.text(`Silai Stitching: ₹${cost.silaiPrice.toFixed(2)}/pc`, 78, finalY + 4.5);
-                if (cost.jobCostsPerPc > 0) {
-                    const jobNames = (cost.jobCosts || []).map(j => `${j.name}: ₹${(parseFloat(j.amountPerPc)||0).toFixed(0)}`).join(', ');
-                    doc.text(`Other Work: ₹${cost.jobCostsPerPc.toFixed(2)}/pc (${jobNames})`, 128, finalY + 4.5);
-                }
-
-                // Row 2: Totals
-                doc.setFont('helvetica', 'bold');
-                doc.setFontSize(7.5);
-                doc.setTextColor(37, 99, 235); // primary blue
-                doc.text(`EST. COST / PC: ₹${cost.costPerPc.toFixed(2)}`, 18, finalY + 9.5);
-
-                doc.setTextColor(5, 150, 105); // emerald green
-                doc.text(`TOTAL LOT EXPENSE: ₹${Math.round(cost.totalLotCost).toLocaleString('en-IN')}`, 105, finalY + 9.5);
-            } else {
-                // FLOOR COPY TABLE: Strictly quantities and pieces with empty Remark column
-                const floorTableHead = [['#', 'Fabric / Material Item', 'Issued Meters', 'Actual/Pc', 'Remark']];
-                const floorTableRows = (lot.fabricGiven || []).map((f, idx) => [
-                    String(idx + 1),
-                    f.name || 'Fabric',
-                    `${(parseFloat(f.meters) || 0).toFixed(2)} m`,
-                    lot.targetPcs ? `${Math.round(((parseFloat(f.meters) || 0) / lot.targetPcs) * 100) / 100} m/pc` : '-',
-                    ''
-                ]);
-                if (floorTableRows.length === 0) {
-                    floorTableRows.push(['1', 'Main Fabric', `${totalMeters} m`, '-', '']);
-                }
-                floorTableRows.push([
-                    '',
-                    'TOTAL FABRIC ISSUED',
-                    `${totalMeters} m`,
-                    lot.targetPcs ? `${(parseFloat(totalMeters)/lot.targetPcs).toFixed(2)} m/pc` : '',
-                    `For ${lot.targetPcs || 0} pcs`
-                ]);
-
-                doc.autoTable({
-                    startY: tableY,
-                    margin: { left: 15, right: 15 },
-                    head: floorTableHead,
-                    body: floorTableRows,
-                    theme: 'grid',
-                    styles: {
-                        font: 'helvetica',
-                        fontSize: 7.5,
-                        cellPadding: 2.2,
-                        lineColor: [203, 213, 225],
-                        lineWidth: 0.2
-                    },
-                    headStyles: {
-                        fillColor: [15, 23, 42],
-                        textColor: [255, 255, 255],
-                        fontStyle: 'bold',
-                        halign: 'left'
-                    },
-                    columnStyles: {
-                        0: { cellWidth: 10, halign: 'center' },
-                        1: { cellWidth: 64 },
-                        2: { cellWidth: 28, fontStyle: 'bold', halign: 'right' },
-                        3: { cellWidth: 28, halign: 'right' },
-                        4: { cellWidth: 50, halign: 'left' }
-                    },
-                    didParseCell: (data) => {
-                        if (data.row.index === floorTableRows.length - 1) {
-                            data.cell.styles.fontStyle = 'bold';
-                            data.cell.styles.fillColor = [226, 232, 240];
-                        }
-                    }
-                });
-            }
-
-            // Footer note
-            doc.setFont('helvetica', 'normal');
-            doc.setFontSize(6.5);
-            doc.setTextColor(148, 163, 184);
-            const footerNote = isOffice ? 'Office Copy — Keep in production issue register · Confidentially contains internal rates & costing' : 'Floor Copy — Give along with issued cutting fabric to karigar';
-            doc.text(footerNote, 16, startY + 125);
-            doc.text(`Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}`, 194, startY + 125, { align: 'right' });
-        };
-
-        // Render Top Half: OFFICE COPY (With Full Pricing & Costing)
-        renderSingleCopy(10, 'OFFICE COPY (FOR RECORD & COSTING)', true);
-
-        // Center Dotted Cut Line (Y = 146)
-        doc.setDrawColor(100, 116, 139);
-        doc.setLineWidth(0.3);
-        doc.setLineDashPattern([2, 2], 0);
-        doc.line(11, 146, 199, 146);
-        doc.setLineDashPattern([], 0);
-
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(7);
-        doc.setTextColor(100, 116, 139);
-        doc.text('✂ - - - - - - - - - - CUT HERE (TOP: OFFICE COPY  |  BOTTOM: FLOOR / MAAL COPY) - - - - - - - - - - ✂', 105, 146.5, { align: 'center' });
-
-        // Render Bottom Half: FLOOR / MAAL COPY (Zero Pricing / Production Only)
-        renderSingleCopy(152, 'FLOOR / MAAL COPY (WITH GOODS)', false);
-
-        const safeLotNo = String(lot.lotNumber || 'LOT').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const doc=createDualLotSlipPdf(lot);
+        const safeLotNo=String(lot.lotNumber||'LOT').replace(/[^a-zA-Z0-9_-]/g,'_');
         doc.save(`${safeLotNo}_Dual_Slip.pdf`);
-        showToast(`Lot slip for ${lot.lotNumber} downloaded!`, 'success');
-    } catch (e) {
-        console.error('[PDF] Dual Lot Slip generation error:', e);
-        showToast('Error generating PDF slip: ' + e.message, 'error');
-    }
+        showToast(`Lot slip for ${lot.lotNumber} downloaded!`,'success');
+    } catch(error) { console.error('[PDF] Lot slip generation error:',error);showToast('Error generating PDF slip: '+error.message,'error'); }
 }
 
 // ── Main page render ───────────────────────────────────────────────────
@@ -12213,6 +11666,7 @@ async function saveCreateLotAction(downloadOnly = false) {
         }
         fabricGiven.push({
             name: matName,
+            type: matType === 'embroidery' ? 'embroidery' : 'material',
             meters: parseFloat(inp.value) || 0,
             ratePerMeter: matObj ? (parseFloat(matObj.ratePerMeter) || 0) : 0
         });
@@ -12272,6 +11726,7 @@ async function saveCreateLotAction(downloadOnly = false) {
             standardMetersPerPc: recipe.totalMetersPerPc || 0,
             silaiPrice: recipe.silaiPrice || 0,
             fabricGiven,
+            embroidery: recipe.embroidery || [],
             jobCosts: recipe.jobCosts || [],
             estimatedCostPerPc: recipe.estimatedCostPerPc || 0,
             totalMetersGiven: fabricGiven.reduce((s, f) => s + (parseFloat(f.meters) || 0), 0),
@@ -12441,38 +11896,8 @@ async function deleteLotAction(lotId, lotNumber) {
 
 // ── Print Lot Slip ────────────────────────────────────────────────────────
 function printLotSlip() {
-    const lotId = KapadState._currentLotId;
-    const lot = KapadState.lots.find(l => l.id === lotId);
-    if (!lot) return;
-
-    const slipHtml = `
-        <div class="lot-slip-print" style="font-family:monospace;padding:20px;font-size:13px;">
-            <h2 style="text-align:center;margin-bottom:4px;">KRIMAA — LOT SLIP</h2>
-            <div style="text-align:center;color:#555;margin-bottom:12px;">Production Floor Issue Slip</div>
-            <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
-                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Lot Number</td><td style="padding:4px 8px;border:1px solid #000;">${lot.lotNumber}</td></tr>
-                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Design No</td><td style="padding:4px 8px;border:1px solid #000;">${lot.designNo} — ${lot.designName}</td></tr>
-                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Date</td><td style="padding:4px 8px;border:1px solid #000;">${lot.date}</td></tr>
-                <tr><td style="padding:4px 8px;border:1px solid #000;font-weight:bold;">Target Pcs</td><td style="padding:4px 8px;border:1px solid #000;">${lot.targetPcs}</td></tr>
-            </table>
-            <div style="font-weight:bold;margin:8px 0 4px;">Fabric Issued:</div>
-            <table style="width:100%;border-collapse:collapse;">
-                <thead><tr><th style="border:1px solid #000;padding:4px 8px;text-align:left;">Material</th><th style="border:1px solid #000;padding:4px 8px;text-align:right;">Meters</th></tr></thead>
-                <tbody>
-                    ${(lot.fabricGiven || []).map(f => `<tr><td style="border:1px solid #000;padding:4px 8px;">${f.name}</td><td style="border:1px solid #000;padding:4px 8px;text-align:right;">${(parseFloat(f.meters)||0).toFixed(2)} m</td></tr>`).join('')}
-                    <tr><td style="border:1px solid #000;padding:4px 8px;font-weight:bold;">TOTAL</td><td style="border:1px solid #000;padding:4px 8px;text-align:right;font-weight:bold;">${(parseFloat(lot.totalMetersGiven)||0).toFixed(2)} m</td></tr>
-                </tbody>
-            </table>
-            <div style="margin-top:16px;">Issued by: _____________ &nbsp;&nbsp; Date: _____________</div>
-            <div style="margin-top:8px;">Received by: _____________ &nbsp;&nbsp; Sign: _____________</div>
-        </div>`;
-
-    const printWin = window.open('', '_blank', 'width=600,height=800');
-    printWin.document.write(`<html><head><title>Lot Slip ${lot.lotNumber}</title></head><body>${slipHtml}</body></html>`);
-    printWin.document.close();
-    printWin.focus();
-    printWin.print();
-    printWin.close();
+    const lot = KapadState.lots.find(item => item.id === KapadState._currentLotId);
+    if (lot) printDirectDualLotSlip(lot);
 }
 
 // ── Open Submit Karigar Modal ─────────────────────────────────────────────
