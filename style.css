@@ -2524,3 +2524,10 @@ body.lan-read-only .sheet-cell-input {
     .lot-slip-print table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     .lot-slip-print td, .lot-slip-print th { border: 1px solid #000; padding: 4px 8px; }
 }
+
+/* Purva's standalone deployment uses its own visual identity. */
+.tenant-purva #login-screen { background: radial-gradient(ellipse at top, #ccfbf1 0%, #f0fdfa 45%, #f8fafc 100%); }
+.tenant-purva .login-card { border-top: 5px solid #0f766e; }
+.tenant-purva .login-header h2 { color: #115e59; }
+.tenant-purva .sidebar-header { color: #0f766e; font-size: 1.15rem; }
+.tenant-purva .nav-btn.active { color: #0f766e; background: #ccfbf1; }

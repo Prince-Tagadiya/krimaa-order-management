@@ -277,12 +277,12 @@ function getRechargeText(rawDate) {
 }
 
 function getCompanyDisplayName(companyId = AppState.currentCompany) {
-    return companyId === 'company1' || companyId === 'company2' ? 'SHREE SAI' : companyId;
+    return companyId === 'company1' || companyId === 'company2' ? TenantAccess.companyName() : companyId;
 }
 
 function isSingleCompanyMode() { return true; }
 
-function getSingleCompanyName() { return 'SHREE SAI'; }
+function getSingleCompanyName() { return TenantAccess.companyName(); }
 
 function applyClientModeUI() {
     const singleMode = isSingleCompanyMode();
@@ -339,7 +339,7 @@ function canAccessKarigar() {
     const role = String(AppState.currentUser?.role || localStorage.getItem('userRole') || '').trim().toLowerCase();
     const username = String(AppState.currentUser?.username || localStorage.getItem('userUsername') || '').trim().toLowerCase();
     // Strictly allowed only for krimaa username (or dev)
-    return username === 'krimaa' || role === 'dev';
+    return (TenantAccess.isPurva() && role === 'admin') || username === 'krimaa' || role === 'dev';
 }
 
 function canManageAccounts() {
@@ -713,6 +713,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function initApp() {
+ TenantAccess.applyBrand();
+ try { await TenantAccess.ready(); } catch (error) { showLoginScreen(); showToast(error.message, 'error'); return; }
  refreshUsersFromEnv(); applyClientModeUI(); restoreFirestoreQuotaCooldown();
  attachEventListeners(); initSyncIndicator();
  document.getElementById('backup-btn')?.addEventListener('click', refreshAppDataManually);
@@ -788,7 +790,7 @@ function showLoginScreen() {
         if (loginTitle) loginTitle.textContent = 'Dhyan Login';
         if (loginSubtitle) loginSubtitle.textContent = 'Sign in with your Dhyan credentials';
     } else {
-        if (loginTitle) loginTitle.textContent = 'Krimaa Admin';
+        if (loginTitle) loginTitle.textContent = TenantAccess.isPurva() ? 'Purva Fashion' : 'Krimaa Admin';
         if (loginSubtitle) loginSubtitle.textContent = 'Sign in to manage daily orders';
     }
 }
@@ -1847,8 +1849,22 @@ function attachEventListeners() {
     });
 
     // ──── Login Form ────
-    document.getElementById('login-form')?.addEventListener('submit', (e) => {
+    document.getElementById('login-form')?.addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (TenantAccess.isPurva()) {
+            const button = e.currentTarget.querySelector('button[type="submit"]');
+            if (button?.disabled) return;
+            if (button) button.disabled = true;
+            try {
+                AppState.currentUser = await TenantAccess.login(document.getElementById('username').value, document.getElementById('password').value);
+                document.getElementById('password').value = '';
+                checkAuth();
+                showToast('Welcome to Purva Fashion!', 'success');
+            } catch (error) {
+                showToast(error.code === 'auth/too-many-requests' ? 'Too many attempts. Please try again later.' : 'Unable to sign in. Check your email, password and connection.', 'error');
+            } finally { if (button) button.disabled = false; }
+            return;
+        }
         refreshUsersFromEnv();
         if (!USERS.length) {
             showToast("No dashboard users configured. Set AUTH_USERS_JSON in hosting environment variables.", "error");
@@ -1924,6 +1940,7 @@ function attachEventListeners() {
                 e.preventDefault();
                 document.activeElement?.blur();
                 try { await FirebaseService.flushWrites(); } catch(error) { showToast('Save failed. Keep this tab open and retry before logging out.', 'error'); return; }
+                await TenantAccess.logout();
                 localStorage.removeItem('isLogged');
                 localStorage.removeItem('userRole');
                 localStorage.removeItem('userName');
@@ -2129,7 +2146,7 @@ window.addEventListener('appinstalled', (evt) => {
     const pwaInstallBtn = document.getElementById('pwa-install-btn');
     if (folderSetupInstallBtn) folderSetupInstallBtn.classList.add('hidden');
     if (pwaInstallBtn) pwaInstallBtn.classList.add('hidden');
-    showToast('🎉 Krimaa installed successfully!', 'success');
+    showToast(TenantAccess.isPurva() ? 'Purva Fashion installed successfully!' : '🎉 Krimaa installed successfully!', 'success');
 });
 
 function navigateTo(sectionId) {
@@ -6736,7 +6753,7 @@ function renderKarigarGrid() {
                     <path id="stamp-arc-top-${idx}" d="M 17,50 A 33,33 0 1,1 83,50" fill="none" />
                     <text font-size="8" font-weight="900" fill="#15803d" letter-spacing="1.2">
                         <textPath href="#stamp-arc-top-${idx}" startOffset="50%" text-anchor="middle">
-                            ★ KRIMAA FACTORY ★
+                            ★ ${TenantAccess.isPurva() ? 'PURVA FASHION' : 'KRIMAA FACTORY'} ★
                         </textPath>
                     </text>
                     <line x1="20" y1="42" x2="80" y2="42" stroke="#15803d" stroke-width="1.2" />
@@ -9171,7 +9188,7 @@ function generateKarigarSalarySlipPDF(karigar, txs, options = {}) {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7.5);
         doc.setTextColor(110, 110, 110);
-        doc.text('Krimaa Enterprise Management System', 10, 292);
+        doc.text(TenantAccess.isPurva() ? 'Purva Fashion Management System' : 'Krimaa Enterprise Management System', 10, 292);
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
@@ -9461,7 +9478,7 @@ async function exportKarigarMasterSummaryPayrollPDF(options = {}) {
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(7.5);
             doc.setTextColor(110, 110, 110);
-            doc.text('Krimaa Enterprise Management System', 10, 292);
+            doc.text(TenantAccess.isPurva() ? 'Purva Fashion Management System' : 'Krimaa Enterprise Management System', 10, 292);
 
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(8);
@@ -9740,7 +9757,7 @@ async function exportBulkKarigarSalarySlipsPDF(options = {}) {
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(7.5);
             doc.setTextColor(110, 110, 110);
-            doc.text('Krimaa Enterprise Management System', 10, 292);
+            doc.text(TenantAccess.isPurva() ? 'Purva Fashion Management System' : 'Krimaa Enterprise Management System', 10, 292);
 
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(8);
@@ -10179,7 +10196,7 @@ function generateCompanyMonthlyReportPDF(companyId, rawTxs, options = {}) {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7.5);
         doc.setTextColor(110, 110, 110);
-        doc.text('Krimaa Enterprise Management System | Production & Financial Audit', 14, 292);
+        doc.text(TenantAccess.isPurva() ? 'Purva Fashion | Production & Financial Audit' : 'Krimaa Enterprise Management System | Production & Financial Audit', 14, 292);
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
@@ -10307,7 +10324,7 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
         const doc = new jsPDF();
 
         doc.setFontSize(20);
-        doc.text('Krimaa Global Report', 14, 20);
+        doc.text(TenantAccess.isPurva() ? 'Purva Fashion Global Report' : 'Krimaa Global Report', 14, 20);
         doc.setFontSize(10);
         doc.text(`Report Period: ${fromDate} to ${toDate}`, 14, 28);
         doc.text(`Generated exactly at: ${new Date().toLocaleString()}`, 14, 34);
@@ -10334,7 +10351,7 @@ document.getElementById('confirm-global-export')?.addEventListener('click', asyn
             headStyles: { fillColor: [19, 91, 236] }
         });
 
-        doc.save(`Krimaa_Global_Report_${fromDate}_to_${toDate}.pdf`);
+        doc.save(`${TenantAccess.isPurva() ? 'Purva_Fashion' : 'Krimaa'}_Global_Report_${fromDate}_to_${toDate}.pdf`);
         showToast('Global Report downloaded!', 'success');
 
     } catch(e) {
@@ -10469,6 +10486,7 @@ function renderDesignMasterTab(recipes) {
 
 // ── Bill & Slip Brand Name Helper (Guarantees KRIMAA on every bill and copy) ──
 function getBillBrandTitle(companyId = AppState.currentCompany) {
+    if (TenantAccess.isPurva()) return 'PURVA FASHION';
     const raw = typeof getCompanyDisplayName === 'function' ? getCompanyDisplayName(companyId) : '';
     const clean = String(raw || '').trim().toUpperCase();
     if (!clean || clean === 'KRIMAA') return 'KRIMAA APPARELS';

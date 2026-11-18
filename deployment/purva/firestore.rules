@@ -1,0 +1,11 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{collection}/{document=**} {
+      allow read, write: if collection != '_reset_backups'
+        && request.auth != null
+        && request.auth.token.tenant == 'purva'
+        && request.auth.token.role == 'admin';
+    }
+  }
+}

@@ -16,7 +16,7 @@
         };
     }
 
-    const endpoints = [
+    const endpoints = location.hostname === 'purvafashion.netlify.app' ? ['/.netlify/functions/env'] : [
         '/.netlify/functions/env',
         '/api/env.js',
         '/env.js'
