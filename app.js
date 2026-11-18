@@ -1861,7 +1861,7 @@ function attachEventListeners() {
                 checkAuth();
                 showToast('Welcome to Purva Fashion!', 'success');
             } catch (error) {
-                showToast(error.code === 'auth/too-many-requests' ? 'Too many attempts. Please try again later.' : 'Unable to sign in. Check your email, password and connection.', 'error');
+                showToast(error.code === 'auth/too-many-requests' ? 'Too many attempts. Please try again later.' : 'Unable to sign in. Check your ID, password and connection.', 'error');
             } finally { if (button) button.disabled = false; }
             return;
         }

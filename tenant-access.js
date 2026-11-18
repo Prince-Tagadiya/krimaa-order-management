@@ -35,7 +35,9 @@ const TenantAccess = (() => {
     }
     async function login(email, password) {
         if (!auth) throw new Error('Secure sign-in is unavailable. Please reload while online.');
-        const result = await auth.signInWithEmailAndPassword(email.trim(), password);
+        const loginId = email.trim();
+        const authEmail = loginId.toLowerCase() === 'purva' ? 'princetagadiya11@gmail.com' : loginId;
+        const result = await auth.signInWithEmailAndPassword(authEmail, password);
         return setSession(result.user);
     }
     async function logout() {
@@ -51,9 +53,9 @@ const TenantAccess = (() => {
         const logo = document.querySelector('.sidebar-header span');
         if (logo) logo.textContent = 'Purva Fashion';
         const username = document.getElementById('username');
-        if (username) { username.type = 'email'; username.placeholder = 'Enter your email'; username.autocomplete = 'username'; }
+        if (username) { username.type = 'text'; username.placeholder = 'Enter your ID'; username.autocomplete = 'username'; }
         const label = document.getElementById('username')?.previousElementSibling;
-        if (label) label.textContent = 'Email';
+        if (label) label.textContent = 'Login ID';
         const password = document.getElementById('password');
         if (password) password.autocomplete = 'current-password';
         const manifest = document.querySelector('link[rel="manifest"]');
